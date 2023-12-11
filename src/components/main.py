@@ -8,7 +8,7 @@ import time
 
 ssh = paramiko.SSHClient()
 ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-# ssh.connect(hostname='164.107.120.231', username='yli', password='30d5f21a21fca0cb18b8626f')
+
 
 # ssh.exec_command('python3 /home/yli/lyx/getdata.py')
 ssh.exec_command('exec bash')
