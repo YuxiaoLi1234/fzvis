@@ -5,7 +5,7 @@ import requests
 import numpy as np
 import paramiko
 import time
-import libpressio
+# import libpressio
 from pathlib import Path
 from pprint import pprint
 
@@ -111,7 +111,8 @@ def indexlist():
     else:
         return 'configuration is illegal'
 
-
+def runcompressor(compressor_id, early_config, compressor_config, input_data):
+    return 0
 
 if __name__ == '__main__':
    app.run(debug=True)
