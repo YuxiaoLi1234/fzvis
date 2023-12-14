@@ -27,7 +27,7 @@ The dashboard should look like this figure.
   Upload the data you are going to compress in the bottom left view.
 ```
   <img width="425" alt="image" src="https://github.com/YuxiaoLi1234/fzvis/assets/143280350/42e2a6d0-9a52-4e7c-88a8-4e39e349e957">
-```
+
 ## run compressor:
   enter the configuration and also the absolute path of your input file. After you have configured all the options, press the Enter key
   <img width="434" alt="image" src="https://github.com/YuxiaoLi1234/fzvis/assets/143280350/118e1975-5c44-4e41-9665-404b73f382c9">
