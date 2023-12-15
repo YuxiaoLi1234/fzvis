@@ -59,7 +59,8 @@ export default {
             // const that = this
             this.loading = true
 
-            axios.post('http://localhost:5000/indexlist',{
+            // axios.post('http://localhost:5000/indexlist',{
+            axios.post('/indexlist',{
                 
             'compressor_id':this.compressor_id,
             'early_config':this.early_config,
