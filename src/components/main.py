@@ -117,6 +117,8 @@ def indexlist():
             
             input_data = input_data.reshape(width, height, depth)
 
+            input_data = np.nan_to_num(input_data, nan=0)
+
             configurations = json.loads(request.form.get('configurations'))
             print(configurations)
             result = {}

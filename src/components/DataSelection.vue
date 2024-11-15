@@ -66,7 +66,7 @@ data(){
       compressorOptions: [
       { label: 'SZ', value: 'sz' },
       { label: 'ZFP', value: 'zfp' },
-      { label: 'MGARD', value: 'mgard' },
+      //{ label: 'MGARD', value: 'mgard' },
       ],
       selectedMetrics: [],
       savedConfigurations: {
@@ -213,7 +213,7 @@ methods: {
                 this.compare_data['compressor_id'].push(key);
                 this.compare_data['bound'].push(element['bound']);
                 if (element['metrics']) {
-                  this.compare_data['metrics'].push(element['metrics']);
+                   this.compare_data['metrics'].push(element['metrics']);
                 } else {
                     console.warn("Metrics returned from the backend are null or undefined.");
                 }
