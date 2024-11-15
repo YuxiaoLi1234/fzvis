@@ -133,9 +133,11 @@ export default {
     data_vis:function(){        
         const that = this
         console.log(this.input_data)
-        const min1 = d3.min(that.input_data.flat())
-        const max1 = d3.max(that.input_data.flat())
-        this.input_data = this.input_data.map((d)=>d.map(i=>(i-min1)/(max1-min1))) 
+	this.draw_data = that.input_data.flat().flat().slice(this.slice_id * this.width * this.height, (this.slice_id + 1) * this.width * this.height)
+        const min1 = d3.min(this.draw_data)
+        const max1 = d3.max(this.draw_data)
+        //this.input_data = this.input_data.map((d)=>d.map(i=>(i-min1)/(max1-min1))) 
+        this.draw_data = this.draw_data.map(i=>(i-min1)/(max1-min1))
     },
     draw:function(){
         function calculatePercentile(array, percentile) {
@@ -146,13 +148,13 @@ export default {
         const that = this
         const canvas = that.canvas
         const context = that.context
-        const data = that.input_data;
+        const data = that.draw_data;
 
-        const min = d3.min(that.input_data.flat())
-        const max = d3.max(that.input_data.flat())
-        const q1 = calculatePercentile(that.input_data.flat(), 25);
-        const q2 = calculatePercentile(that.input_data.flat(), 50);
-        const q3 = calculatePercentile(that.input_data.flat(), 75);
+        const min = d3.min(data)
+        const max = d3.max(data)
+        const q1 = calculatePercentile(data, 25);
+        const q2 = calculatePercentile(data, 50);
+        const q3 = calculatePercentile(data, 75);
 
         function hexToRgb(hex) {
             hex = hex.replace(/^#/, '');
@@ -214,19 +216,18 @@ export default {
         }
 
         function mapDataToColor(data) {
-            return data.map(row => row.map(value => interpolateColor(value)));
+            return data.map(value => interpolateColor(value));
         }
 
         function drawData(data) {
             const colorData = mapDataToColor(data);
-            var blockSize = canvas.width/(colorData[0].length)
-            var blockSize1 = canvas.height/(colorData.length)
+            var blockSize = canvas.width/(that.width)
+            var blockSize1 = canvas.height/(that.height)
             context.clearRect(0, 0, canvas.width, canvas.height);
 
-            // 绘制新的数据映射
-            for (let i = 0; i < colorData.length; i++) {
-                for (let j = 0; j < colorData[i].length; j++) {
-                    const color = colorData[i][j];
+            for (let i = 0; i < that.height; i++) {
+                for (let j = 0; j < that.width; j++) {
+                    const color = colorData[i * that.width + j];
                     context.fillStyle = `rgb(${color.r}, ${color.g}, ${color.b})`;
                     context.fillRect(j*blockSize, i*blockSize1, blockSize, blockSize1);
                 }
@@ -243,7 +244,6 @@ export default {
         function drawColorbar() {
             const gradient = colorbarContext.createLinearGradient(0, 0, colorbarWidth, 0);
             for (const point of colorControlPoints) {
-                console.log(point.value)
                 gradient.addColorStop(point.value/255, `rgb(${point.color.r}, ${point.color.g}, ${point.color.b})`);
             }
             colorbarContext.fillStyle = gradient;
@@ -262,7 +262,7 @@ export default {
         }
 
         function onCanvasDblClick(e) {
-        console.log('dianji')
+        //console.log('dianji')
         
         var bbox = colorbarCanvas.getBoundingClientRect();
         const clickX = (e.clientX - colorbarCanvas.getBoundingClientRect().left)* (colorbarCanvas.width / bbox.width)
@@ -379,13 +379,13 @@ export default {
             const colorData = mapDataToColor(data);
 
             
-            var blockSize = canvas.width/(colorData[0].length)
-            var blockSize1 = canvas.height/(colorData.length)
+            var blockSize = canvas.width/(that.width)
+            var blockSize1 = canvas.height/(that.height)
             context.clearRect(0, 0, canvas.width, canvas.height);
 
-            for (let i = 0; i < colorData.length; i++) {
-                for (let j = 0; j < colorData[i].length; j++) {
-                    const color = colorData[i][j];
+            for (let i = 0; i < that.height; i++) {
+                for (let j = 0; j < that.width; j++) {
+                    const color = colorData[i * that.width + j];
                     context.fillStyle = `rgb(${color.r}, ${color.g}, ${color.b})`;
                     context.fillRect(j*blockSize, i*blockSize1, blockSize, blockSize1);
                 }

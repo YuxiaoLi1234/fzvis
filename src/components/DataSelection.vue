@@ -232,12 +232,6 @@ methods: {
             alert('An error occurred. Please check the console for details.');
             });
 
-            //.catch((error) => {
-             //this.loading = false;
-              //alert('illegal input');
-              // console.log(error);
-            //});
-
         }
         console.log('FormData after submission:', [...this.formData]);
       }
@@ -248,6 +242,11 @@ methods: {
       emitter.on('file-selected', (data) => {
             console.log("datamounted", data);
             this.formData.append('file', data["file"]);
+
+            this.width = data["width"]
+            this.height = data["height"]
+            this.depth = data["depth"]
+
             this.formData.append('width', data["width"]);
             this.formData.append('height', data["height"]);
             this.formData.append('depth', data["depth"]);

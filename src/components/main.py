@@ -109,9 +109,14 @@ def indexlist():
             precision = request.form.get('precision')
             print(precision)
             if precision=='d': 
-                input_data = np.fromfile(file, dtype=np.float64).reshape(width, height, depth)
+                input_data = np.fromfile(file, dtype=np.float64)
             elif precision=='f': 
-                input_data = np.fromfile(file, dtype=np.float32).reshape(width, height, depth)
+                input_data = np.fromfile(file, dtype=np.float32)
+
+            if len(input_data)>width*height*depth: input_data = input_data[len(input_data)- width*height*depth:]
+            
+            input_data = input_data.reshape(width, height, depth)
+
             configurations = json.loads(request.form.get('configurations'))
             print(configurations)
             result = {}
