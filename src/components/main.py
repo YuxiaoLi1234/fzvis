@@ -1,3 +1,5 @@
+#!/usr/bin/env python
+
 import os
 from flask import Flask, request, jsonify, send_from_directory
 from flask_cors import CORS
@@ -8,22 +10,9 @@ import libpressio
 from argparse import ArgumentParser
 import math
 
-project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
-dist_dir = None
+dist_dir = Path(__file__).parent.parent / "usr/libexec/fzvis/ui"
 
-# Search for 'dist' directory up to a few levels above
-for i in range(4):
-    potential_dist = os.path.join(project_root, *(['..'] * i), 'dist')
-    if os.path.exists(potential_dist):
-        dist_dir = os.path.abspath(potential_dist)
-        break
-
-if dist_dir is None:
-    print("'dist' directory not found.")
-else:
-    print(f"'dist' directory located at: {dist_dir}")
-
-app = Flask(__name__, static_folder=dist_dir, static_url_path='')
+app = Flask(__name__)
 
 @app.route('/indexlist', methods=["GET", "POST"])
 
@@ -147,12 +136,13 @@ def indexlist():
 @app.route('/<path:path>')
 def serve_frontend(path):
     print(f"Requested path: {path}")
-    full_path = os.path.join(app.static_folder, path)
+    print(f"dist_dir: {dist_dir}")
+    full_path = os.path.join(dist_dir, path)
     print(f"Full path: {full_path}")
     if os.path.isfile(full_path):
-        return send_from_directory(app.static_folder, path)
+        return send_from_directory(dist_dir, path)
     else:
-        return send_from_directory(app.static_folder, 'index.html')
+        return send_from_directory(dist_dir, 'index.html')
 
 
 parser = ArgumentParser(description="enter your HOST/POST.", usage="path/to/main.py [OPTIONAL ARGUMENTS] <HOST> <PORT> <configfile>")
