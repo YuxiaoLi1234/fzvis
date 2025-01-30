@@ -1,11 +1,10 @@
 #!/usr/bin/env python
-
+import numpy as np
 import os
 from flask import Flask, request, jsonify, send_from_directory
 from flask_cors import CORS
 from pathlib import Path
 import json
-import numpy as np
 import libpressio
 from argparse import ArgumentParser
 import math
@@ -13,7 +12,7 @@ import math
 dist_dir = Path(__file__).parent.parent / "usr/libexec/fzvis/ui"
 
 app = Flask(__name__)
-
+CORS(app)
 @app.route('/indexlist', methods=["GET", "POST"])
 
 def indexlist():
@@ -61,7 +60,7 @@ def indexlist():
         def run_compressor(args):
             global input_data, width, height, depth
 
-            print("Received early_config:", args['early_config'])
+            
             compressor = libpressio.PressioCompressor.from_config({
                 "compressor_id": args['compressor_id'],
                 "early_config": args['early_config'],
@@ -71,61 +70,58 @@ def indexlist():
             comp_data = compressor.encode(input_data)
             decomp_data = compressor.decode(comp_data, decomp_data)
             metrics = compressor.get_metrics()
-            print("Received early_config 2nd time:", args['early_config'])
-            print("Metrics returned by compressor:", metrics)
+            
             metrics1 = replace_unsupported_values(metrics)
-            print("Sanitized metrics:", metrics1)
+            
             return {
                 "compressor_id": args['compressor_id'],
                 "bound": args["bound"],
-                "metrics": metrics1
+                "metrics": metrics1,
+                "decp_data": decomp_data.tolist()
             }
         result = run_compressor(configs)
-        print(result)
+        
         return result
-    print('yes')
+    
     if request.method == 'POST':
-        if request.form:
-            loaddata = eval(request.form['loaddata'])
-        else:
-            loaddata = 1
-        print(loaddata)
-        if loaddata==0:
-            file = request.files['file']
-            width = int(request.form['width'])
-            height = int(request.form['height'])
-            depth = int(request.form['depth'])
-            precision = request.form.get('precision')
-            print(precision)
-            if precision=='d': 
-                input_data = np.fromfile(file, dtype=np.float64)
-            elif precision=='f': 
-                input_data = np.fromfile(file, dtype=np.float32)
+        
+        
+        file = request.files['file']
+        width = int(request.form['width'])
+        height = int(request.form['height'])
+        depth = int(request.form['depth'])
+        precision = request.form.get('precision')
+        print(precision)
+        if precision=='d': 
+            input_data = np.fromfile(file, dtype=np.float64)
+        elif precision=='f': 
+            input_data = np.fromfile(file, dtype=np.float32)
 
-            if len(input_data)>width*height*depth: input_data = input_data[len(input_data)- width*height*depth:]
+        if len(input_data)>width*height*depth: input_data = input_data[len(input_data)- width*height*depth:]
+        
+        input_data = input_data.reshape(width, height, depth)
+        input_data = np.nan_to_num(input_data, nan=0)
+        configurations = json.loads(request.form.get('configurations'))
+        print(configurations)
+        result = {}
+        decp_data = []
+        for key in configurations:
+            print(key)
+            if(key['compressor_id']!=''):
             
-            input_data = input_data.reshape(width, height, depth)
-
-            input_data = np.nan_to_num(input_data, nan=0)
-
-            configurations = json.loads(request.form.get('configurations'))
-            print(configurations)
-            result = {}
-            for key in configurations:
-                if(configurations[key]['compressor_id']!=''):
-                
-                    print(key)
-                    output = comparing_compressor(configurations[key])
-                    result_tmp = {"output": output, "input_data":input_data.tolist()}
-                    result["compressor_" + key] = output
-                    print(result)
-            result['input_data'] = input_data.tolist()
-            
-            #return json.loads(json.dumps(output,indent=2))
-            return jsonify(result)
-        else: 
-            #return 0
-            return jsonify({"message": "No data loaded"})
+                print(key)
+                output = comparing_compressor(key)
+                result["compressor_" + key['compressor_id']] = {"compressor_id": output['compressor_id'],
+                                                "bound": output["bound"],
+                                                "metrics": output['metrics'],
+                                            }
+                decp_data.append(output['decp_data'])
+        print(result)
+        result['input_data'] = input_data.tolist()
+        result['decp_data'] = decp_data
+        #return json.loads(json.dumps(output,indent=2))
+        return jsonify(result)
+        
             # print(slice_number,sliced_id,slice_width,slice_height,type(input_data),len(input_data))
             
     else:
@@ -147,7 +143,7 @@ def serve_frontend(path):
 
 parser = ArgumentParser(description="enter your HOST/POST.", usage="path/to/main.py [OPTIONAL ARGUMENTS] <HOST> <PORT> <configfile>")
 parser.add_argument('--HOST', nargs='?', help='HOST_address', default="0.0.0.0")
-parser.add_argument('--PORT', nargs='?', help='PORT_address', default="5001")
+parser.add_argument('--PORT', nargs='?', help='PORT_address', default="5002")
 parser.add_argument('--configfile', nargs='?', help='your_config_file', default=None)   
 
 if __name__ == '__main__':

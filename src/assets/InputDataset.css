@@ -1,13 +1,14 @@
 #input-dataset {
-  border: 2px solid lightseagreen;
+  border: 2px solid #00acc1; /* 使用一致的浅蓝色边框 */
   border-radius: 10px;
   position: absolute;
-  top: 28%;
-  left: .7%;
-  padding: 9px;
-  width: 28.25%;
+  top: 1%;
+  left: 0.3%;
+  padding: 15px;
+  width: 28.5%;
   height: 19.5%;
-  text-align: left;
+  background: linear-gradient(to bottom, #e0f7fa, #ffffff); /* 淡蓝到白的渐变背景 */
+  box-shadow: 0px 4px 8px rgba(0, 0, 0, 0.1); /* 柔和的阴影 */
   display: flex;
   flex-direction: column;
   box-sizing: border-box;
@@ -15,47 +16,106 @@
 
 #input-dataset-container {
   display: flex;
-  align-items: center; 
-  justify-content: space-between; 
+  align-items: center;
+  /* justify-content: space-between; */
+  justify-content: center; /* 水平居中整个容器 */
+  margin-bottom: 10px; /* 增加下方间距 */
+  gap: 20px;
 }
 
 #fileloader {
-  margin-left: 10px; 
-  flex-shrink: 0; 
+  margin-left: 10px;
+  /* flex-shrink: 0; */
+  width:50%;
+  padding: 5px 10px;
+  border: 1px solid #00acc1;
+  border-radius: 5px;
+  background-color: #ffffff;
+  box-shadow: 0px 3px 6px rgba(0, 0, 0, 0.1);
+  transition: all 0.3s ease;
+}
+
+#fileloader:hover {
+  background-color: #e0f7fa;
+  border-color: #00838f;
 }
 
 h3 {
-  margin: 0; 
-  font-size: 21.5px; 
+  margin: 0;
+  font-size: 21.5px;
+  color: #006064;
+  font-weight: bold;
 }
 
 .input-section {
   margin-top: 140px;
-  gap: 7px; /* Add space between the textboxes */
+  gap: 3px; /* 增加输入框之间的间距 */
   display: flex;
+  
+  flex-direction: row; /* 水平排列输入框 */
   position: absolute;
 }
 
 .input-field {
-    max-width: 95px;
+  max-width: 100px;
+  padding: 8px;
+  border: 1px solid #00acc1;
+  border-radius: 5px;
+  background: #ffffff;
+  
+  box-shadow: 0px 2px 4px rgba(0, 0, 0, 0.1);
+  font-size: 14px;
+}
+
+
+.input-field:focus {
+  outline: none;
+  border-color: #00838f;
+  background: #e0f7fa;
 }
 
 .input-fielddepth {
-  max-width: 80px;
+  max-width: 85px;
+  padding: 8px;
+  border: 1px solid #00acc1;
+  border-radius: 5px;
+  background: #ffffff;
+  box-shadow: 0px 2px 4px rgba(0, 0, 0, 0.1);
+  font-size: 14px;
 }
 
-.submit-button {
-  background-color: blue; 
-  color: white; 
-  padding: 4px 15px; 
-  font-size: 14px; 
-  border-radius: 3px; 
-  border: none; 
-  margin-top: 60px; 
-  display: block; 
-  width: 100%; 
-  max-width: 75px; 
-  margin-left: -100px; 
+.input-fielddepth:focus {
+  outline: none;
+  border-color: #00838f;
+  background: #e0f7fa;
+  
+}
+
+.submit-button-input {
+  background: linear-gradient(to right, #29b6f6, #0288d1); /* 渐变蓝色按钮 */
+  color: white;
+  padding: 5px 15px;
+  font-size: 14px;
+  font-weight: bold;
+  border-radius: 5px;
+  border: none;
+  margin-top: 0px;
+  display: inline-flex; /* 使用 flex 布局 */
+  align-items: center; /* 垂直居中 */
+  /* justify-content: center; 水平居中 */
+  max-width: 100px; /* 保持宽度一致 */
+  text-align: center;
   cursor: pointer;
+  box-shadow: 0px 4px 6px rgba(0, 0, 0, 0.2); /* 按钮阴影 */
+  transition: all 0.3s ease;
 }
 
+.submit-button-input:hover {
+  background: linear-gradient(to right, #0288d1, #01579b);
+  box-shadow: 0px 6px 12px rgba(0, 0, 0, 0.3);
+}
+
+.submit-button-input:active {
+  transform: scale(0.98); /* 点击时略微缩小 */
+  box-shadow: 0px 2px 4px rgba(0, 0, 0, 0.2);
+}

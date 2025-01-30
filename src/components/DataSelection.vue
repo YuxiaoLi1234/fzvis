@@ -64,7 +64,7 @@ data(){
       closed: false,
       compare_data:{'compressor_id':[],'bound':[],'metrics':[],'input_data':''},
       compressorOptions: [
-      { label: 'SZ', value: 'sz' },
+      { label: 'SZ', value: 'sz3' },
       { label: 'ZFP', value: 'zfp' },
       //{ label: 'MGARD', value: 'mgard' },
       ],
@@ -199,9 +199,9 @@ methods: {
           console.log('FormData before submission:', [...this.formData]);
           //const backendProtocol = window.location.protocol;
           //const backendHost = window.location.hostname;
-          //const backendPort = '5001';       
+          //const backendPort = '5002';       
           //const baseURL = `${backendProtocol}//${backendHost}:${backendPort}`;
-          axios.post(`/indexlist`, this.formData)
+          axios.post(`http://localhost:5002/indexlist`, this.formData)
             .then(response => {
               console.log('Response from server:', response.data);
               
@@ -210,6 +210,7 @@ methods: {
                 let element = response.data[key]
                 
                 if(key=='input_data') continue;
+                if(key=='decp_data') continue;
                 this.compare_data['compressor_id'].push(key);
                 this.compare_data['bound'].push(element['bound']);
                 if (element['metrics']) {
@@ -223,7 +224,7 @@ methods: {
               
               document.getElementById('temp1').innerHTML = JSON.stringify(this.compare_data);
               emitter.emit('myEvent', this.compare_data);
-              emitter.emit('inputdata', {"input_data":this.input_data, "width": this.width, "height":this.height, "depth":this.depth});
+              emitter.emit('inputdata', {"input_data":this.input_data, "width": this.width, "height":this.height, "depth":this.depth, "decp_data": response.data['decp_data']});
               
               this.loading = false;
             })

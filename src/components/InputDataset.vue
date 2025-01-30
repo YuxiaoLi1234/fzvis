@@ -15,9 +15,9 @@
       </div>
 
       <!-- Add a button for emitting the data -->
-      <t-button class= "submit-button" @click="emitFileData" :disabled="!isFormValid">Submit</t-button>
+      <t-button class= "submit-button-input" @click="emitFileData" :disabled="!isFormValid">Submit</t-button>
 
-      <h6 v-if="fileContent" style="margin-left: -20px;">File Loaded: {{ fileContent }}</h6>
+      
       </div>
   </div>
 </template>

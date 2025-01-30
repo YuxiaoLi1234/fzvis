@@ -1,0 +1,51 @@
+#parameter {
+    border: 2px solid #00acc1; /* 浅蓝色边框 */
+    border-radius: 10px;
+    position: absolute;
+    top: 1%;
+    left: 29.3%;
+    width: 70%;
+    height: 26%;
+    background: linear-gradient(to bottom, #e0f7fa, #ffffff); /* 渐变背景 */
+    box-shadow: 0px 4px 8px rgba(0, 0, 0, 0.1); /* 柔和阴影 */
+    padding: 15px; /* 内边距 */
+    box-sizing: border-box;
+  }
+  
+  #check {
+    position: absolute;
+    left: 10%;
+    top: 30%;
+    width: 70%;
+    display: flex;
+    align-items: center;
+    justify-content: space-between; /* 内容均匀分布 */
+    gap: 10px; /* 增加子项间距 */
+  }
+  
+  #button {
+    position: absolute;
+    left: 60%;
+    top: 55%;
+    padding: 10px 20px;
+    border: none;
+    border-radius: 8px;
+    background: linear-gradient(to right, #29b6f6, #0288d1); /* 渐变蓝色 */
+    color: white;
+    font-size: 14px;
+    font-weight: bold;
+    cursor: pointer;
+    box-shadow: 0px 4px 8px rgba(0, 0, 0, 0.1); /* 按钮阴影 */
+    transition: all 0.3s ease;
+  }
+  
+  #button:hover {
+    background: linear-gradient(to right, #0288d1, #01579b); /* 悬停变深 */
+    box-shadow: 0px 6px 12px rgba(0, 0, 0, 0.2);
+  }
+  
+  #button:active {
+    transform: scale(0.98); /* 点击缩小 */
+    box-shadow: 0px 2px 4px rgba(0, 0, 0, 0.15);
+  }
+  
