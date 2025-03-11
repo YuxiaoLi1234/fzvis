@@ -5,7 +5,7 @@
     top: 45%;
     left: 29.3%;
     width: 70%;
-    height: 50%;
+    height: 52%;
     background: linear-gradient(to bottom, #e0f7fa, #ffffff); /* 渐变背景 */
     box-shadow: 0px 4px 8px rgba(0, 0, 0, 0.1); /* 柔和阴影 */
     padding: 15px; /* 内边距 */
@@ -59,6 +59,18 @@
     cursor: not-allowed;
     box-shadow: none;
 }
+
+.tooltip {
+    position: absolute;
+    background: rgba(0, 0, 0, 0.75);
+    color: #ffffff;
+    padding: 8px 12px;
+    border-radius: 8px;
+    font-size: 12px;
+    pointer-events: none;
+    opacity: 0; /* 默认隐藏 */
+    transition: opacity 0.2s ease-in-out;
+  }
 
   
 
