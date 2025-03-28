@@ -41,7 +41,7 @@
       <p id="temp1" ></p>
   </div>
 </template>
-<style scoped src="@/assets/DataSelection.css"></style>
+//<style scoped src="@/assets/DataSelection.css"></style>
 <script>
 import axios from 'axios'
 import emitter from './eventBus.js';
@@ -64,9 +64,9 @@ data(){
       closed: false,
       compare_data:{'compressor_id':[],'bound':[],'metrics':[],'input_data':''},
       compressorOptions: [
-      { label: 'SZ', value: 'sz' },
+      { label: 'SZ', value: 'sz3' },
       { label: 'ZFP', value: 'zfp' },
-      { label: 'MGARD', value: 'mgard' },
+      //{ label: 'MGARD', value: 'mgard' },
       ],
       selectedMetrics: [],
       savedConfigurations: {
@@ -197,10 +197,12 @@ methods: {
           this.formData.append("configurations",JSON.stringify(this.savedConfigurations));
           console.log('FormData Entries before submission2:', [...this.formData.entries()]);
           console.log('FormData before submission:', [...this.formData]);
-         axios.post('http://192.5.86.216:5001/indexlist', this.formData)
-         //axios.post(`http://${this.host}:${this.port}/indexlist`, this.formData)
+          //const backendProtocol = window.location.protocol;
+          //const backendHost = window.location.hostname;
+          //const backendPort = '5003';       
+          //const baseURL = `${backendProtocol}//${backendHost}:${backendPort}`;
+          axios.post(`http://localhost:5003/indexlist`, this.formData)
             .then(response => {
-              //let need1 = response.data;
               console.log('Response from server:', response.data);
               
               for(const key in response.data)
@@ -208,10 +210,11 @@ methods: {
                 let element = response.data[key]
                 
                 if(key=='input_data') continue;
+                if(key=='decp_data') continue;
                 this.compare_data['compressor_id'].push(key);
                 this.compare_data['bound'].push(element['bound']);
                 if (element['metrics']) {
-                  this.compare_data['metrics'].push(element['metrics']);
+                   this.compare_data['metrics'].push(element['metrics']);
                 } else {
                     console.warn("Metrics returned from the backend are null or undefined.");
                 }
@@ -221,7 +224,7 @@ methods: {
               
               document.getElementById('temp1').innerHTML = JSON.stringify(this.compare_data);
               emitter.emit('myEvent', this.compare_data);
-              emitter.emit('inputdata', {"input_data":this.input_data, "width": this.width, "height":this.height, "depth":this.depth});
+              emitter.emit('inputdata', {"input_data":this.input_data, "width": this.width, "height":this.height, "depth":this.depth, "decp_data": response.data['decp_data']});
               
               this.loading = false;
             })
@@ -230,45 +233,21 @@ methods: {
             alert('An error occurred. Please check the console for details.');
             });
 
-            //.catch((error) => {
-             //this.loading = false;
-              //alert('illegal input');
-              // console.log(error);
-            //});
-
         }
         console.log('FormData after submission:', [...this.formData]);
       }
       
     },
     mounted() {
-      const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-      //Replace the Floating IP here...
-      const wsURL = `${wsProtocol}//192.5.86.216:8080/ws`;
 
-      console.log("Constructed WebSocket URL:", wsURL);
-
-      this.socket = new WebSocket(wsURL);
-
-      this.socket.onopen = () => {
-            console.log('WebSocket connection established');
-            this.socket.send('Hello from DataSelection component!');
-      };
-
-      this.socket.onmessage = (event) => {
-            console.log('Message from server:', event.data);
-      };
-
-      this.socket.onclose = () => {
-            console.log('WebSocket connection closed');
-      };
-
-      this.socket.onerror = (error) => {
-            console.error('WebSocket error:', error);
-      };
       emitter.on('file-selected', (data) => {
             console.log("datamounted", data);
             this.formData.append('file', data["file"]);
+
+            this.width = data["width"]
+            this.height = data["height"]
+            this.depth = data["depth"]
+
             this.formData.append('width', data["width"]);
             this.formData.append('height', data["height"]);
             this.formData.append('depth', data["depth"]);
@@ -277,3 +256,6 @@ methods: {
     },
   };
 </script>
+<style scoped>
+@import "@/assets/DataSelection.css";
+</style>

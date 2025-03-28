@@ -9,7 +9,9 @@
         <t-button id="button" v-on:click="update">Redraw</t-button>
     </div>
 </template>
-
+<style scoped>
+@import "@/assets/ParaMeter.css";
+</style>
 <script>
 import { ref } from 'vue';
 import * as d3 from 'd3';
@@ -47,34 +49,24 @@ export default {
     },
     mounted(){
         emitter.on('checkevent',(data)=>{
+            console.log("data is:", data)
             this.name = data['checked_c']
             this.checked_c = data['checked_c']
             this.parameters = data['parameter']
-            console.log('knltynlktn,mnn',this.name)
             this.get_value()
         })
-        // this.get_value()
+        
         
     },
     methods:{    
-            // get value from the data
         get_value:function(){
-            // const that = this
-            
-            // d3.csv('./data/result.csv').then((d)=>{
-                // set_selection bounding for compressor_id
-                
-                // this.name = document.getElementById('temp').innerHTML.split(',')
-                
-                let name = this.name
+              let name = this.name
                 let temp = []
                 name.forEach((i)=>{
-
                     temp.push({
-                                                label:i,
-                                                value:i,
-                                                })
-
+                                label:i,
+                                value:i,
+                                })
                 })
                 this.options[0].children = temp
                 temp = []
@@ -91,7 +83,7 @@ export default {
                                             })
                 })
                 this.options1[0].children = temp
-                // if(this.redraw == false){
+                
                     this.parameters.map(i=>Object.keys(i))[0].filter(item=>item!='compressor_id').forEach((item)=>{
                     let key = item.split(':')[0]
                     let value = item.split(':')[1]
@@ -103,27 +95,15 @@ export default {
 
                                                     })
                     })
-                    
-                
-                
-                //console.log(new Set(d.map(i=>Object.keys(i))[0].slice(1).map(j=>j.split(':')[0])))
-                
-            
-            // })
+
             console.log(this.parameters)
-            // this.options1 = options2
+
         },
         // click fucntion
         update:function(){
-            // filter compressor
-            // this.get_value()
-            
-            
+
             let data = this.value1[0]=='compressor'?this.parameters:this.parameters.filter(item=>this.value1.indexOf(item['compressor_id'])!=-1)
-            // console.log(data)
-            // get all the type of parameters
-            // let labels = new Set(d.map(i=>Object.keys(i))[0].slice(1).map(j=>j.split(':')[0]))
-            // filter the parameter
+            
             
             let data1 = this.value2=='stat_selection'?data:data.map((item)=>{
                 let temp = {'compressor_id':item['compressor_id']}
@@ -134,19 +114,15 @@ export default {
                 })
                 return temp
                 })
-                // for(var key in this.value2){
-                //     console.log(key)
-                //     temp[key] = item[key]
-                // }
-            console.log('选中的canshu',data1)
+                
             if(data1.length==0){
                 this.msg = this.$message.info({
                     content: 'No parameter is selected',
                     theme:"warning",
                     duration: 1000,
-                    // 层级控制：非当前场景自由控制开关的关键代码，仅用于测试 API 是否运行正常
+                    
                     zIndex: 1001,
-                    // 挂载元素控制：非当前场景自由控制开关的关键代码，仅用于测试 API 是否运行正常
+                    
                     attach: document.body,
                 });
             }
@@ -155,8 +131,6 @@ export default {
             
                 this.draw_parallel_c(data1)
             }
-            
-            
             
         },
         getRandomColor:function() {
@@ -366,7 +340,7 @@ export default {
             let legend = svg.append("g");
 
             let dimensions = Object.keys(data1[0]).filter(item=>item!='compressor_id' && typeof(data1[0][item])!='string' && data1[0][item]!=null)
-            console.log('画图的shihou',dimensions)
+            
             
             // console.log(data.map(d=>d['compressor_id']))
             // build colorscale
@@ -517,26 +491,3 @@ export default {
     
 }
 </script>
-
-<style scoped>
-#parameter{
-    border: 2px solid lightseagreen;
-    border-radius: 10px;
-    position:absolute;
-    top:1%;
-    left:29.3%;
-    width: 70%;
-    height: 26%;
-    background-color:'lightgrey'
-}
-#check{
-    position:absolute;
-    left:10%;
-    top:30%;
-    width:70%
-}
-#button{
-    left:60%;
-    top:55%
-}
-</style>

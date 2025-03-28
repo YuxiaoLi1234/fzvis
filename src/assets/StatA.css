@@ -1,0 +1,77 @@
+#stat {
+    border: 2px solid #00acc1; /* 浅蓝色边框 */
+    border-radius: 10px;
+    position: absolute;
+    top: 45%;
+    left: 29.3%;
+    width: 70%;
+    height: 52%;
+    background: linear-gradient(to bottom, #e0f7fa, #ffffff); /* 渐变背景 */
+    box-shadow: 0px 4px 8px rgba(0, 0, 0, 0.1); /* 柔和阴影 */
+    padding: 15px; /* 内边距 */
+    box-sizing: border-box;
+    display: flex;
+    flex-wrap: wrap; /* 自动换行 */
+    gap: 20px; /* 面板之间的间距 */
+    justify-content: center;
+    margin-top: 20px;
+    overflow: auto;
+    max-height: 800px; /* 防止过长 */
+    
+}
+
+#radar-controls {
+    display: flex; /* 使用flex布局 */
+    justify-content: center; /* 水平居中 */
+    gap: 10px; /* 按钮之间的间距 */
+    position: absolute; /* 根据需要调整位置 */
+    top: 28%; /* 距离底部 */
+    right: 5%; /* 水平居中 */
+    transform: translateX(-50%); /* 修正水平居中 */
+    z-index:101
+  }
+
+#radar-control-button {
+    position: absolute;
+    top: 180px; /* 距离顶部 */
+    right: 20px; /* 距离右侧 */
+    padding: 10px 20px;
+    font-size: 14px;
+    font-weight: bold;
+    background: linear-gradient(to right, #80deea, #26c6da); /* 渐变背景 */
+    color: white;
+    border: none;
+    border-radius: 25px;
+    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.2); /* 添加阴影 */
+    cursor: pointer;
+    transition: all 0.3s ease;
+}
+
+#radar-control-button:hover {
+    background: linear-gradient(to right, #26c6da, #00acc1); /* 悬停时的颜色 */
+    box-shadow: 0 6px 12px rgba(0, 0, 0, 0.3); /* 悬停时的阴影 */
+}
+
+
+#radar-control-button:disabled {
+    background: #bdbdbd; /* 禁用状态背景 */
+    color: #757575; /* 禁用状态文字颜色 */
+    cursor: not-allowed;
+    box-shadow: none;
+}
+
+.tooltip {
+    position: absolute;
+    background: rgba(0, 0, 0, 0.75);
+    color: #ffffff;
+    padding: 8px 12px;
+    border-radius: 8px;
+    font-size: 12px;
+    pointer-events: none;
+    opacity: 0; /* 默认隐藏 */
+    transition: opacity 0.2s ease-in-out;
+  }
+
+  
+
+  
