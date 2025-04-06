@@ -4,8 +4,16 @@ name: FZ-VIS Front End Build
 on: 
     push:
         branches: ["main", "ghactions", "dev"]
+        paths: 
+          - .github/workflows/**
+          - src/**
+          - '*.json'
     pull_request:
         branches: ["main", "dev"]
+        paths:
+          - .github/workflows/**
+          - src/**
+          - '*.json'
 
 jobs: 
     build:
