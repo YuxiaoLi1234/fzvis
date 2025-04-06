@@ -1,3 +1,6 @@
+#!/usr/bin/env python
+# This file can be used later for standalone unit tests.
+ 
 import libpressio
 
 compressor = libpressio.PressioCompressor.from_config({
