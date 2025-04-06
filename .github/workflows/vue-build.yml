@@ -1,0 +1,37 @@
+name: FZ-VIS Front End Build
+
+# only enabled on specific branches and events
+on: 
+    push:
+        branches: ["main", "ghactions", "dev"]
+    pull_request:
+        branches: ["main", "dev"]
+
+jobs: 
+    build:
+        name: "Build Vue app"
+        # Use self-hosted workstation
+        runs-on: self-hosted
+
+        strategy:
+            matrix: 
+                node-version: [18.x, 20.x]
+        
+        steps:
+            - name: Set up Git repository
+              uses: actions/checkout@v3
+            - name: Use Node.js ${{ matrix.node-version }}
+              uses: actions/setup-node@v3
+              with: 
+                node-version: ${{ matrix.node-version }}
+            - name: Build with npm
+              run: |
+                npm ci
+                npm run build --if-present
+
+    # to be updated when deployed in production
+    # deploy:
+    #     name: "Deploy Vue app"
+    #     needs: [build]
+    #     runs-on: self-hosted
+    #     steps: 
