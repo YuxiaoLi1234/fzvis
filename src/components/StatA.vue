@@ -14,9 +14,9 @@
         <div id="stat"></div>
     </div>
 </template>
-<style scoped>
+<!-- <style scoped>
     @import "@/assets/StatA.css";
-</style>
+</style> -->
 <script>
 
 import * as d3 from "d3";

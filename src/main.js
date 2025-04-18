@@ -1,13 +1,30 @@
 import { createApp } from 'vue'
-import TDesign from 'tdesign-vue-next';
-import App from './App.vue'
+import App from './App.vue';
+import bootstrap from 'bootstrap/dist/js/bootstrap.bundle.min.js'
 // import axios from 'axios'
 
-import 'tdesign-vue-next/es/style/index.css';
+import 'bootstrap/dist/css/bootstrap.min.css';
 
-const app = createApp(App)
-app.use(TDesign)
-app.mount('#app')
+createApp(App).mount('#app')
+
 
 // axios.defaults.headers.common['Content-Type'] = 'application/x-www-form-urlencoded'
 // axios.defaults.headers.common['Access-Control-Allow-Origin'] = '*';
+
+// // Initialize all tooltips
+document.querySelectorAll('[data-bs-toggle="tooltip"]')
+.forEach(tooltip => {
+  new bootstrap.Tooltip(tooltip)
+})
+
+// // Initialize all popovers
+// document.querySelectorAll('[data-bs-toggle="popover"]')
+//   .forEach(popover => {
+//     new Popover(popover)
+// })
+
+// // Initialize all dropdowns
+// document.querySelectorAll('[data-bs-toggle="dropdown"]')
+//   .forEach(dropdown => {
+//     new Dropdown(dropdown)
+// })

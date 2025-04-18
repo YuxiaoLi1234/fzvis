@@ -10,14 +10,40 @@ import libpressio
 from argparse import ArgumentParser
 import math
 
+project_root = Path(__file__).parent.parent.parent
 dist_dir = Path(__file__).parent.parent / "usr/libexec/fzvis/ui"
+
+# Create necessary folders for the backend
+root_dir = Path.home() / ".fzvis"
+upload_dir = root_dir / "uploads"
+work_dir = root_dir / "data"
+work_dir.mkdir(parents=True, exist_ok=True)
+upload_dir.mkdir(parents=True, exist_ok=True)
 
 app = Flask(__name__)
 CORS(app)
-@app.route('/indexlist', methods=["GET", "POST"])
 
 
+@app.route("/upload", methods=["POST"])
+def upload_file():
+    try:
+        if "file" not in request.files:
+            return jsonify({"error" : "No file part"}), 400
+        
+        file = request.files["file"]
+        if file.filename == "":
+            return jsonify({"error" : "No file selected"}), 400
 
+        # Save file
+        filename = os.path.join(upload_dir, file.filename)
+        file.save(filename)
+        return jsonify({"message" : "File uploaded successfully"}), 200
+        
+    except Exception as e:
+        return jsonify({"error" : str(e)}), 500
+
+
+@app.route("/indexlist", methods=["GET", "POST"])
 def indexlist():
     global input_data, depth, height, depth
     def replace_unsupported_values(obj):
@@ -108,8 +134,7 @@ def indexlist():
                     print(key)
                     output = comparing_compressor(key)
                     result[output['compressor_name']] = {"compressor_id": output['compressor_id'],
-                                                    "metrics": output['metrics'],
-                                                }
+                    "metrics": output['metrics'],}
                     decp_data.append(output['decp_data'])
             print(result)
             result['input_data'] = input_data.tolist()
@@ -123,13 +148,14 @@ def indexlist():
             c = libpressio.PressioCompressor("pressio", {"pressio:compressor": compressor_id}, name="pressio")
             top_level = c. get_configuration()["pressio"]
             children = top_level["pressio:children"] # you'll see pressio/noop and pressio/sz3
-            options = top_level[compressor_id] #we determined that "sz3" is the right string here by stripping out "pressio/" from the entries in children
+            print(children)
+            options = top_level[compressor_id] # we determined that "sz3" is the right string here by stripping out "pressio/" from the entries in children
             module_slots = {k: options[k] for k in options if k.startswith(compressor_id)}
             
             return module_slots
     else:
         return jsonify({"error": "configuration is illegal"}), 400
-    
+
 
 # Catch-all route to serve the Vue frontend's index.html
 @app.route('/', defaults={'path': ''})
@@ -144,18 +170,22 @@ def serve_frontend(path):
     else:
         return send_from_directory(dist_dir, 'index.html')
 
-
-parser = ArgumentParser(description="enter your HOST/POST.", usage="path/to/main.py [OPTIONAL ARGUMENTS] <HOST> <PORT> <configfile>")
-parser.add_argument('--HOST', nargs='?', help='HOST_address', default="0.0.0.0")
-parser.add_argument('--PORT', nargs='?', help='PORT_address', default="5003")
-parser.add_argument('--configfile', nargs='?', help='your_config_file', default=None)   
-
+# Main entry of the server program
 if __name__ == '__main__':
+
+    # Initialize necessary data
     input_data = None
     width = -1
     height = -1
     depth = -1
+
+    # Parsing command line arguments
+    parser = ArgumentParser(description="enter your HOST/POST.", usage="path/to/main.py [OPTIONAL ARGUMENTS] <HOST> <PORT> <configfile>")
+    parser.add_argument('--HOST', nargs='?', help='HOST_address', default="0.0.0.0")
+    parser.add_argument('--PORT', nargs='?', help='PORT_address', default="5003")
+    parser.add_argument('--configfile', nargs='?', help='your_config_file', default=None)
     input = parser.parse_args()
+
     if not any(vars(input).values()):
         parser.print_help()
     api_host = input.HOST
@@ -164,6 +194,6 @@ if __name__ == '__main__':
         "API_HOST": api_host,
         "API_PORT": api_port
     }
-    with open('./config.json', 'w') as json_file:
+    with open((project_root / "serverConfig.json"), 'w') as json_file:
         json.dump(config, json_file, indent=4)
-    app.run(host=api_host, port = api_port, debug=True)
+    app.run(host=api_host, port=api_port, debug=True)
