@@ -9,9 +9,10 @@ import libpressio
 from argparse import ArgumentParser
 import math
 
-#dist_dir = Path(__file__).parent.parent / "usr/libexec/fzvis/ui"
+dist_dir = Path(__file__).parent.parent / "usr/libexec/fzvis/ui"
 
-dist_dir = Path(__file__).parent.parent.parent / "dist"
+#for my local setup
+#dist_dir = Path(__file__).parent.parent.parent / "dist"
 
 app = Flask(__name__)
 
