@@ -16,18 +16,31 @@
         <button id="error-button" class="control-button" @click="vis_error">Error Map</button>
         <button id="reset-button" class="control-button" @click="resetView">Reset</button>
         <button id="undo-button" class="control-button" @click="undoZoom" :disabled="historyStack.length === 0">Undo</button>
+        <!-- New 3D visualization button -->
+        <button id="3d-vis-button" class="control-button" @click="vis_3d">3D Vis</button>
       </div>
       
-      
-
       <div class="visualization-area">
-        <div id="svgCanvasContainer">
-          <svg id="svgCanvas"></svg>
+        <div v-if="mode !== '3d'">
+
+        <div id="floating-window" v-show="showFloatingWindow">
+          <div class="floating-header">
+            <span> 2D visualization </span>
+            <button class="close-button" @click="closeFloatingWindow">✕</button>
+          </div>
+          
+
+          <div id="svgCanvasContainer">
+            <svg id="svgCanvas"></svg>
+          </div>
+
+          <svg id="colorbarCanvas"></svg>
         </div>
-        <svg id="colorbarCanvas"></svg>
       </div>
-
-
+        <div v-else>
+          <ThreeDVis />
+        </div>
+      </div>
   </div>
   
   
@@ -39,9 +52,14 @@
 <script>
 import * as d3 from 'd3'
 import emitter from './eventBus.js';
+// eslint-disable-next-line no-unused-vars
+import ThreeDVis from './ThreeDVis.vue';
 
 export default {
 name:'DataVis',
+components: {
+    ThreeDVis
+  },
 data(){
     return{
       tooltip:null,
@@ -62,7 +80,7 @@ data(){
       compressor_name:[],
       historyStack: [],
       configurations: null,
-
+      showFloatingWindow: true,
     };
 },
 
@@ -122,6 +140,7 @@ watch: {
 },
 methods:{
 
+    
 
     vis_error: function () {
       if (!this.input_data || !this.decp_data.length) {
@@ -130,6 +149,7 @@ methods:{
       }
 
       this.mode = "error";
+      this.showFloatingWindow = true;
       this.drawZoom = false;
 
       let error_maps = [];
@@ -148,15 +168,22 @@ methods:{
       this.draw();
     },
 
+    
+    closeFloatingWindow() {
+      this.showFloatingWindow = false;
+    },
+
     vis_input: function () {
     
         this.mode = "input";
+        this.showFloatingWindow = true;
         this.drawZoom = false;
         this.draw_data = this.input_data
         console.log(this.draw_data)
         this.data_vis(this.input_data);
         this.defaultcolormap();
         this.draw();
+
         
     },
 
@@ -168,7 +195,7 @@ methods:{
       }
 
       this.mode = "decp";
-      
+      this.showFloatingWindow = true;
       this.drawZoom = false;
       let datasets = [this.input_data]; // 先加入 input_data
       if(this.compressor_name[0] != "Original Data") this.compressor_name.unshift("Original Data"); // 在 compressor_name 开头插入 "Original Data"
@@ -269,8 +296,15 @@ methods:{
       const svgCanvas = d3.select("#svgCanvas");
       svgCanvas.selectAll("*").remove();
 
-      const canvasWidth = document.getElementById("svgCanvasContainer").clientWidth; // 容器宽度
-      const canvasHeight = document.getElementById("svgCanvasContainer").clientHeight; // 容器高度
+      // const canvasWidth = document.getElementById("svgCanvasContainer").clientWidth; // 容器宽度
+      // const canvasHeight = document.getElementById("svgCanvasContainer").clientHeight; // 容器高度
+
+
+      const canvasWidth = document.getElementById("floating-window").clientWidth;
+      const canvasHeight = document.getElementById("floating-window").clientHeight;
+
+
+      
       const margin = { top: 10, right: 0, bottom: 10, left: 0 };
 
       const datasets = dataToDraw || this.draw_data; // 数据集
@@ -417,9 +451,12 @@ methods:{
 
             svgCanvas
               .append("text")
-              .attr("x", canvasWidth / 4) 
+              /*.attr("x", canvasWidth / 4) 
               .attr("y", canvasHeight / 2) 
-              .attr("text-anchor", "middle")
+              .attr("text-anchor", "middle")*/
+              .attr("x", 20)
+              .attr("y", 30)
+              .attr("text-anchor", "start")
               .attr("font-size", "20px")
               .attr("fill", "black")
               .text("Original Data");
@@ -749,12 +786,12 @@ methods:{
 
     onChange: function () {
       const colormapSelect = document.getElementById("colormapSelect");
-      const selectedColormap = colormapSelect.value || "Rainbow";
+      //const selectedColormap = colormapSelect.value || "Rainbow";
+      const newColormap = colormapSelect.value || "Rainbow";
 
-      if (this.defaultColormaps[selectedColormap]) {
-
+      if (this.defaultColormaps[newColormap]) {
         this.colormap = this.parseLinearGradient(
-          this.defaultColormaps[selectedColormap]
+          this.defaultColormaps[newColormap]
         );
 
         // 更新控制点
@@ -767,6 +804,7 @@ methods:{
         
         
       }
+      this.$store.commit('setSelectedColormap', newColormap);
     },
     defaultcolormap: function () {
       
@@ -782,6 +820,8 @@ methods:{
       };
 
       const colormapSelect = document.getElementById("colormapSelect");
+      //new
+      colormapSelect.innerHTML = ''; // Clear existing options.
       Object.keys(this.defaultColormaps).forEach((colormapName) => {
         const option = document.createElement("option");
         option.value = colormapName;
@@ -823,8 +863,19 @@ methods:{
       this.updateColorScale();
       this.drawColorbar(); // 重绘颜色条
     },
+
+    vis_3d() {
+      // Set mode to "3d" to trigger conditional rendering of 3D component.
+      this.mode = "3d";
+      console.log("Switched to 3D mode");
+      // Optionally, hide any 2D drawing (e.g., clear the svg canvas)
+      d3.select("#svgCanvas").selectAll("*").remove();
+    },
+
   }
 }
+
+
 </script>
 
 

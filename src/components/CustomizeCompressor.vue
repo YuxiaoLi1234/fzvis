@@ -110,6 +110,7 @@
 import axios from 'axios'
 import emitter from './eventBus.js';
 import * as d3 from 'd3';
+//import { useStore } from 'vuex';
 
 export default {
   data() {
@@ -162,7 +163,10 @@ export default {
       formattedConfigurations:null,
       formData: new FormData(),
       compressorParams:[],
-      expandedCategories: []
+      expandedCategories: [],
+      width: null,
+      height: null,
+      depth: null,
     };
   },
   computed: {
@@ -581,6 +585,8 @@ export default {
                 emitter.emit('myEvent', this.compare_data);
                 emitter.emit('inputdata', {"input_data":this.input_data, "width": this.width, "height":this.height, "depth":this.depth,"compressor_name":names, "decp_data": response.data['decp_data']});
                 emitter.emit('compressor_configuration', this.savedConfigurations);
+                // Assuming response.data.decp_data is an array of payloads and you want the first one:
+                this.$store.commit('setCompressedData', response.data.decp_data[0]);
           }).catch(error => {
               
               console.error('Error submitting configuration:', error.response ? error.response.data : error.message);

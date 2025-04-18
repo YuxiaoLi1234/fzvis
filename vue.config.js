@@ -11,7 +11,13 @@
 
 const { defineConfig } = require('@vue/cli-service')
 module.exports = defineConfig({
-  transpileDependencies: true,
   transpileDependencies: ["@kitware/vtk.js"],
+  chainWebpack: config => {
+    config.module
+      .rule('glsl')
+      .test(/\.(glsl|vs|fs)$/)
+      .use('raw-loader')
+      .loader('raw-loader')
+      .end();
+  }
 })
-

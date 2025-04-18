@@ -1,0 +1,57 @@
+#threed-vis {
+  position: relative;
+  width: 11000%;
+  height: 6400%;
+  left: -550px;
+  border: 2px solid lightseagreen;
+  border-radius: 2px;
+  background-color: rgba(204, 206, 206, 0.733);
+  z-index: 100;
+}
+
+.vtk-viewport {
+  width: 100%;
+  height: 100%;
+}
+
+.threed-controls {
+  position: absolute;
+  bottom: 100px;
+  left: 475px;
+  display: flex;
+  flex-direction: column;
+  display: flex;
+  gap: 50px;
+  z-index: 101;
+  background: rgba(255, 255, 255, 0.8);
+  padding: 8px;
+  border-radius: 4px;
+}
+
+.threed-controls .button-group {
+  display: flex;
+  gap: 5px;
+}
+
+.threed-controls .slider-group {
+  margin-top: 2px;
+}
+
+.threed-controls button {
+  padding: 10px 15px;
+  font-size: 16px;
+  border: 1px solid #ccc;
+  border-radius: 4px;
+  background: #007BFF;
+  color: white;
+  cursor: pointer;
+  transition: background 0.3s ease;
+}
+
+.threed-controls button:hover {
+  background: #0056b3;
+}
+
+.t-slider {
+  width: 200px;
+}

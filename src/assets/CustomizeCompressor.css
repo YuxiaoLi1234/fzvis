@@ -28,7 +28,8 @@
   flex-direction: column;
   overflow-y: auto;
   max-height: 190px;
-  border: 2px dashed #00acc1;
+  border: 2px solid #00acc1;
+  /*border: 2px dashed #00acc1;*/
   border-radius: 15px;
   padding: 20px;
   width: 41%;

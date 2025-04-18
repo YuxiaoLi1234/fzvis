@@ -68,6 +68,11 @@ export default {
       }
     },
     emitFileData() {
+      this.$store.commit("setFileData", { 
+        file: this.file, 
+        dimensions: [Number(this.width), Number(this.height), Number(this.depth)], 
+        precision: this.precision 
+      });
       const dataset ={
         file: this.file,
         width: this.width,
@@ -171,4 +176,5 @@ export default {
     },
 };
 </script>
+
  

@@ -9,16 +9,22 @@ import libpressio
 from argparse import ArgumentParser
 import math
 
-dist_dir = Path(__file__).parent.parent / "usr/libexec/fzvis/ui"
+#dist_dir = Path(__file__).parent.parent / "usr/libexec/fzvis/ui"
+
+dist_dir = Path(__file__).parent.parent.parent / "dist"
 
 app = Flask(__name__)
-CORS(app)
+
+three_d_data = {
+    'data': None,
+    'dims': [0, 0, 0],
+    'range': [0.0, 1.0]
+}
+
 @app.route('/indexlist', methods=["GET", "POST"])
 
-
-
 def indexlist():
-    global input_data, depth, height, depth
+    global input_data, width, height, depth
     def replace_unsupported_values(obj):
         if isinstance(obj, dict):
             return {k: replace_unsupported_values(v) for k, v in obj.items()}
@@ -33,7 +39,7 @@ def indexlist():
         else:
             return obj
     def comparing_compressor(arguments):
-        global  input_data, width, depth, height
+        global  input_data, width, height, depth
         print("arguments: ", arguments)
         def get_metrics_configuration(metrics):
             if 'composite' in metrics:
@@ -67,12 +73,19 @@ def indexlist():
             decomp_data = compressor.decode(comp_data, decomp_data)
             metrics = compressor.get_metrics()
             metrics1 = replace_unsupported_values(metrics)
+            #new testing
+            payload = {
+                "dimensions": [width, height, depth],
+                "range": [float(np.min(decomp_data)), float(np.max(decomp_data))],
+                "data": decomp_data.flatten().tolist()
+            }
             
             return {
                 "compressor_name": args['compressor_name'],
                 "compressor_id": args['compressor_id'],
                 "metrics": metrics1,
-                "decp_data": decomp_data.tolist()
+                #"decp_data": decomp_data.tolist()
+                "decp_data": payload
             }
         result = run_compressor(configs)
         
@@ -87,10 +100,15 @@ def indexlist():
             depth = int(request.form['depth'])
             precision = request.form.get('precision')
             print(precision)
+
+            file.seek(0)
+
             if precision=='d': 
-                input_data = np.fromfile(file, dtype=np.float64)
+                input_data = np.frombuffer(file.read(), dtype=np.float64)
+                #input_data = np.fromfile(file, dtype=np.float64)
             elif precision=='f': 
-                input_data = np.fromfile(file, dtype=np.float32)
+                input_data = np.frombuffer(file.read(), dtype=np.float32)
+                #input_data = np.fromfile(file, dtype=np.float32)
 
             if len(input_data)>width*height*depth: input_data = input_data[len(input_data)- width*height*depth:]
             
@@ -106,6 +124,8 @@ def indexlist():
                 
                     print(key)
                     output = comparing_compressor(key)
+                    # Debug: print the length of the decompressed data
+                    print(f"Decompressed data length for {output['compressor_name']}: {(output['decp_data'])}")
                     result[output['compressor_name']] = {"compressor_id": output['compressor_id'],
                                                     "metrics": output['metrics'],
                                                 }
@@ -113,10 +133,7 @@ def indexlist():
             print(result)
             result['input_data'] = input_data.tolist()
             result['decp_data'] = decp_data
-            #return json.loads(json.dumps(output,indent=2))
             return jsonify(result)
-        
-            # print(slice_number,sliced_id,slice_width,slice_height,type(input_data),len(input_data))
         else:
             compressor_id = request.form["compressor_id"]
             c = libpressio.PressioCompressor("pressio", {"pressio:compressor": compressor_id}, name="pressio")
@@ -129,7 +146,6 @@ def indexlist():
     else:
         return jsonify({"error": "configuration is illegal"}), 400
     
-
 # Catch-all route to serve the Vue frontend's index.html
 @app.route('/', defaults={'path': ''})
 @app.route('/<path:path>')
@@ -142,7 +158,6 @@ def serve_frontend(path):
         return send_from_directory(dist_dir, path)
     else:
         return send_from_directory(dist_dir, 'index.html')
-
 
 parser = ArgumentParser(description="enter your HOST/POST.", usage="path/to/main.py [OPTIONAL ARGUMENTS] <HOST> <PORT> <configfile>")
 parser.add_argument('--HOST', nargs='?', help='HOST_address', default="0.0.0.0")

@@ -4,6 +4,7 @@
   <DataVis />
   <!-- <DataSelection /> -->
   <CustomizeCompressor />
+  <ThreeDVis />
 </template>
 
 <script>
@@ -13,6 +14,7 @@ import DataVis from './components/DataVis.vue'
 // import DataSelection from './components/DataSelection.vue'
 import InputDataset from './components/InputDataset.vue'
 import CustomizeCompressor from './components/CustomizeCompressor.vue'
+import ThreeDVis from './components/ThreeDVis.vue'
 export default {
   name: 'App',
   
@@ -21,7 +23,8 @@ export default {
     StatA,
     DataVis,
     // DataSelection
-    CustomizeCompressor
+    CustomizeCompressor,
+    ThreeDVis
   },
   
 }
