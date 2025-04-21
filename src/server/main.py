@@ -9,7 +9,7 @@ import math
 import numpy as np
 import os
 from pathlib import Path
-import time
+import threading 
 
 project_root = Path(__file__).parent.parent.parent
 dist_dir = Path(__file__).parent.parent / "usr/libexec/fzvis/ui"
@@ -25,6 +25,12 @@ saved_datasets = {}
 
 app = Flask(__name__)
 CORS(app)
+
+# Save metadata to the disk
+def save_metadata_to_file(filekey, metadata):
+    saved_datasets[filekey] = metadata
+    with open(metadata_file, 'w') as f:
+        json.dump(saved_datasets, f, indent=4)
 
 # Route to get the list of uploaded datasets
 @app.route("/listDatasets", methods=["GET", "POST"])
@@ -43,8 +49,8 @@ def upload_file():
             return jsonify({"error" : "No file selected"}), 400
 
         # Save file
-        filename = os.path.join(upload_dir, file.filename)
-        file.save(filename)
+        filepath = os.path.join(upload_dir, file.filename)
+        file.save(filepath)
 
         # Use the filename as the key as we don't allow two duplicate files
         dataset_metadata = {
@@ -54,9 +60,8 @@ def upload_file():
             "depth" : request.form.get("depth"),
             "precision" : request.form.get("precision"),
         }
-        saved_datasets[file.filename] = dataset_metadata
-        with open(metadata_file, 'w') as f:
-            json.dump(saved_datasets, f, indent=4)
+        threading.Thread(target=save_metadata_to_file, args=(file.filename, dataset_metadata)).start()
+        
         return jsonify({"dataset" : dataset_metadata}), 200
         
     except Exception as e:

@@ -38,9 +38,15 @@
       <strong >{{ currentDataset.name }}</strong>
     </div>
 
+    <!-- Progress bar -->
+    <div v-show="showProgressBar" class="progress my-2">
+      <div id="progressBar" class="progress-bar progress-bar-striped progress-bar-animated" role="progressbar" aria-valuenow="75" aria-valuemin="0" aria-valuemax="100" style="width: 0%">0%</div>
+    </div>
+
+    <!-- Alert message box -->
     <div id="uploadAlert" class="alert alert-dismissible fade" role="alert" tabindex="-1">
       <span id="uploadAlertMessage">Placeholder</span>
-      <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+      <!-- <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button> -->
     </div>
 
     <!-- Dataset modal -->
@@ -98,6 +104,7 @@ export default {
       datasetToChange: null,
       uploadedDatasets: [],
       datasetsToDelete:[],
+      showProgressBar: false,
     }
   },
 
@@ -154,25 +161,53 @@ export default {
       formData.append("depth", this.depth);
       formData.append("precision", this.precision);
       
+      this.showProgressBar = true;
       const baseURL = process.env.VUE_APP_API_BASE;
       const alertBox = document.getElementById("uploadAlert");
       const alertMessage = document.getElementById("uploadAlertMessage");
-
-      axios.post(`${baseURL}/upload`, formData).then(response => {
+      const progressBar = document.getElementById("progressBar");
+      
+      axios.post(`${baseURL}/upload`, formData, {
+        onUploadProgress: function(eventData) {
+          if (eventData.lengthComputable) {
+            const percentComplete = Math.round((eventData.loaded / eventData.total) * 90);
+            progressBar.style.width = percentComplete + '%';
+            progressBar.setAttribute("aria-valuenow", percentComplete);
+            progressBar.textContent = percentComplete + '%';
+          }
+          if (alertBox && alertMessage) {
+            alertBox.classList.remove("alert-danger");
+            alertBox.classList.remove("alert-success");
+            alertBox.classList.add("alert-secondary", "show");
+            alertMessage.textContent = "Processing...";
+          }
+        }
+      })
+      .then(response => {
         this.currentDataset = response.data.dataset;
+        progressBar.style.width = "100%";
+        progressBar.setAttribute("aria-valuenow", 100);
+        progressBar.textContent = "100%";
+        setTimeout(() => {
+          this.showProgressBar = false;
+          progressBar.style.width = "0%";
+        }, 3000);
+
         if (alertBox && alertMessage) {
           alertBox.classList.remove("alert-danger");
+          alertBox.classList.remove("alert-secondary");
           alertBox.classList.add("alert-success", "show");
           alertMessage.textContent = "File uploaded successfully!";
           // Auto dismiss
           setTimeout(() => {
             alertBox.classList.remove("show");
-          }, 4000);
+          }, 5000);
         }
       })
       .catch (error => {
         if (alertBox && alertMessage) {
           alertBox.classList.remove("alert-success");
+          alertBox.classList.remove("alert-secondary");
           alertBox.classList.add("alert-danger", "show");
           alertMessage.textContent = `Upload failed. ${error}`;
           // Auto dismiss
