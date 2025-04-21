@@ -27,7 +27,7 @@
               <small class="d-block mb-2 text-muted">
                 {{ isConfigValid ? 'Click submit to record configuration.' : 'Please fill all fields to submit.' }}
               </small>
-              <button type="button" class="btn btn-primary me-2" :disabled="!isConfigValid" data-bs-toggle="modal" data-bs-target="#saveConfigModal">Submit</button>
+              <button type="button" class="btn btn-primary me-2" :disabled="!isConfigValid" data-bs-toggle="modal" data-bs-target="#saveConfigModal" @click="currentConfigName = selectedCompressor + '_' + configuredValues['Algorithm'].label">Submit</button>
               <button type="reset" class="btn btn-secondary" @click="resetConfiguredValues">Reset</button>
             </div>
           </div>
@@ -88,6 +88,12 @@
         </div>
       </div>
 
+      <!-- Alert message box -->
+      <div id="compressorAlert" class="alert alert-dismissible fade" role="alert" tabindex="-1">
+        <span id="compressorAlertMessage">Placeholder</span>
+        <!-- <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button> -->
+      </div>
+
       <!-- Show saved configuration modal -->
       <div id="showConfigModal" class="modal fade" tabindex="-1" aria-labelledby="showConfigModalLabel" data-bs-backdrop="static" data-bs-keyboard="false" aria-hidden="true">
         <div class="modal-dialog modal-dialog-centered">
@@ -98,7 +104,7 @@
             </div>
             <div class="modal-body">
               <div v-for="(config, name) in savedConfigurations" :key="name" class="config-card">
-                <h4>{{ name }}</h4>
+                <h5>{{ name }}</h5>
                 <ul v-if="editingConfig !== name">
                   <li><strong>Compressor:</strong> {{ config.compressor_id.toUpperCase() }}</li>
                   <li v-for="(value, key) in formatConfig(config.compressor_config)" :key="key">
@@ -126,7 +132,7 @@
 
 
       <!-- 📌 已保存的配置 -->
-      <div v-if="showModal" class="modal">
+      <!-- <div v-if="showModal" class="modal">
         <div class="modal-content">
           <h3>Saved Configurations</h3>
           
@@ -149,7 +155,6 @@
             </ul>
 
             <div class="button-group">
-              <!-- 🚀 编辑和保存按钮 -->
               <button class="edit-button" v-if="editingConfig !== name" @click="startEditing(name)">Edit</button>
               <button class="save-button" v-else @click="saveEdit(name)">Save</button>
               <button class="cancel-button" @click="cancelEdit()">Cancel</button>
@@ -159,6 +164,7 @@
           <button class="close-button" @click="closeModal">Close</button>
         </div>
       </div>
+       -->
     </div>
 </template>
 
@@ -270,7 +276,9 @@ export default {
         let formData = new FormData();
         formData.append("get_options", 1);
         formData.append("compressor_id", this.selectedCompressor);
-        axios.post(`http://localhost:5003/indexlist`, formData)
+
+        const baseURL = process.env.VUE_APP_API_BASE;
+        axios.post(`${baseURL}/indexlist`, formData)
         .then(response => {
           const rawOptions = response.data;
           const filteredOptions = {...Object.fromEntries(Object.entries(rawOptions).filter(([key]) => key.startsWith(this.selectedCompressor)))};
@@ -323,7 +331,7 @@ export default {
       config.compressor_id = this.selectedCompressor;
       // 遍历 droppedItems，分类存入不同配置项
       Object.values(this.configuredValues).forEach((item) => {
-          console.log(item.label, item.id)
+          // console.log(item.label, item.id)
           if (item.label.startsWith("Error Bound:")) {
               if(item.id.split(":")[0] != this.selectedCompressor){
                 config["compressor_config"][item.id] = item.value
@@ -358,11 +366,11 @@ export default {
 
       const formattedConfig = {};
       Object.entries(compressorConfig).forEach(([key, value]) => {
-        let formattedKey = key.replace(/^.*?:/, ""); // 移除 `sz3:` 或 `pressio:`
-        formattedKey = formattedKey.replace(/_str$/, ""); // 移除 `_str` 后缀
-        formattedKey = formattedKey.replace(/_mode$/, ""); // 移除 `_mode` 后缀
-        formattedKey = formattedKey.replace(/_algo$/, ""); // 移除 `_algo` 后缀
-        formattedKey = formattedKey.replace("_error_bound", " Error Bound"); // 处理 error bound 特殊格式
+        let formattedKey = key.replace(/^.*?:/, ""); // remove `sz3:` or `pressio:`
+        formattedKey = formattedKey.replace(/_str$/, ""); // remove `_str` suffix
+        formattedKey = formattedKey.replace(/_mode$/, ""); // remove `_mode` suffix
+        formattedKey = formattedKey.replace(/_algo$/, ""); // remove `_algo` suffix
+        formattedKey = formattedKey.replace("_error_bound", " Error Bound"); // deal with error bound format
         formattedKey = formattedKey.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase());
 
         formattedConfig[formattedKey] = value;
@@ -372,13 +380,12 @@ export default {
     },
 
     get_formatkey(key){
-      let formattedKey = key.replace(/^.*?:/, ""); // 移除 `sz3:` 或 `pressio:`
-      formattedKey = formattedKey.replace(/_str$/, ""); // 移除 `_str` 后缀
-      formattedKey = formattedKey.replace(/_mode$/, ""); // 移除 `_mode` 后缀
-      formattedKey = formattedKey.replace(/_algo$/, ""); // 移除 `_algo` 后缀
-      formattedKey = formattedKey.replace("_error_bound", " Error Bound"); // 处理 error bound 特殊格式
+      let formattedKey = key.replace(/^.*?:/, ""); // remove `sz3:` or `pressio:`
+      formattedKey = formattedKey.replace(/_str$/, ""); // remove `_str` suffix
+      formattedKey = formattedKey.replace(/_mode$/, ""); // remove `_mode` suffix
+      formattedKey = formattedKey.replace(/_algo$/, ""); // remove `_algo` suffix
+      formattedKey = formattedKey.replace("_error_bound", " Error Bound"); // deal with error bound format
       formattedKey = formattedKey.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase());
-
 
       return formattedKey;
     },
@@ -460,7 +467,18 @@ export default {
       }
       this.formData.append("configurations", JSON.stringify(formattedConfigurations));
       
-      axios.post(`http://localhost:5003/indexlist`, this.formData).then(response => {
+      const baseURL = process.env.VUE_APP_API_BASE;
+      const alertBox = document.getElementById("compressorAlert");
+      const alertMessage = document.getElementById("compressorAlertMessage");
+
+      if (alertBox && alertMessage) {
+        alertBox.classList.remove("alert-danger");
+        alertBox.classList.remove("alert-success");
+        alertBox.classList.add("alert-secondary", "show");
+        alertMessage.textContent = "Processing...";
+      }
+
+      axios.post(`${baseURL}/indexlist`, this.formData).then(response => {
         const names = Object.values(formattedConfigurations).map((d)=>d.compressor_name);
         const configs = Object.values(formattedConfigurations).map((d)=>d.compressor_config);
         console.log("response: ", response.data)
@@ -468,8 +486,8 @@ export default {
           let element = response.data[key]
           console.log(element,key)
 
-          if(key=='input_data') continue;
-          if(key=='decp_data') continue;
+          if(key == 'input_data') continue;
+          if(key == 'decp_data') continue;
           
           this.compare_data['compressor_id'].push(response.data[key]['compressor_id']);
           this.compare_data['bound'].push(element['bound']);
@@ -479,17 +497,42 @@ export default {
             console.warn("Metrics returned from the backend are null or undefined.");
           }
         }
-          
-        this.input_data = response.data['input_data']
+
+        if (alertBox && alertMessage) {
+          alertBox.classList.remove("alert-danger");
+          alertBox.classList.remove("alert-secondary");
+          alertBox.classList.add("alert-success", "show");
+          alertMessage.textContent = "Compression executed successfully!";
+          // Auto dismiss
+          setTimeout(() => {
+            alertBox.classList.remove("show");
+          }, 5000);
+        }
+        // this.input_data = response.data['input_data']
+
         this.compare_data['compressor_name'] = names
         this.compare_data['compressor_config'] = configs
         // document.getElementById('temp1').innerHTML = JSON.stringify(this.compare_data);
         emitter.emit('myEvent', this.compare_data);
-        emitter.emit('inputdata', {"input_data":this.input_data, "width": this.width, "height":this.height, "depth":this.depth,"compressor_name":names, "decp_data": response.data['decp_data']});
-        emitter.emit('compressor_configuration', this.savedConfigurations);
+        // emitter.emit('inputdata', {"input_data":this.input_data, "width": this.width, "height":this.height, "depth":this.depth,"compressor_name":names, "decp_data": response.data['decp_data']});
+        // emitter.emit('compressor_configuration', this.savedConfigurations);
       }).catch(error => {
+        if (alertBox && alertMessage) {
+          alertBox.classList.remove("alert-success");
+          alertBox.classList.remove("alert-secondary");
+          alertBox.classList.add("alert-danger", "show");
+          if (error.response) {
+            alertMessage.textContent = `Compression failed. ${error.response.data.error}`;
+          } else {
+            alertMessage.textContent = `Compression failed. ${error}`;
+          }
+          // Auto dismiss
+          setTimeout(() => {
+            alertBox.classList.remove("show");
+          }, 6000);
+        }
         console.error('Error submitting configuration:', error.response ? error.response.data : error.message);
-        alert('An error occurred. Please check the console for details.');
+        // alert('An error occurred. Please check the console for details.');
       });
       
       return formattedConfigurations;
@@ -512,20 +555,6 @@ export default {
   mounted() {
     // this.resetAvailableOptions();
     // this.availableOptions = [...this.initialCompressorOptions];
-    emitter.on('file-selected', (data) => {
-          console.log("datamounted", data);
-          this.formData = new FormData();
-          this.formData.append('file', data["file"]);
-
-          this.width = data["width"]
-          this.height = data["height"]
-          this.depth = data["depth"]
-
-          this.formData.append('width', data["width"]);
-          this.formData.append('height', data["height"]);
-          this.formData.append('depth', data["depth"]);
-          this.formData.append('precision', data["precision"]);
-        });
   },
 };
 </script>

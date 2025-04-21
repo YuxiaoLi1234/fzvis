@@ -26,6 +26,24 @@ saved_datasets = {}
 app = Flask(__name__)
 CORS(app)
 
+# Read input data from the file
+def read_input_data(dataset):
+    global input_data
+    filepath = upload_dir / dataset["name"]
+    width = int(dataset["width"])
+    height = int(dataset["height"])
+    depth = int(dataset["depth"])
+    if dataset["precision"] == 'd': 
+        input_data = np.fromfile(filepath, dtype=np.float64)
+    elif dataset["precision"] == 'f': 
+        input_data = np.fromfile(filepath, dtype=np.float32)
+
+    if len(input_data) > width*height*depth: 
+        input_data = input_data[len(input_data)- width*height*depth:]
+    
+    input_data = input_data.reshape(width, height, depth)
+    input_data = np.nan_to_num(input_data, nan=0)
+
 # Save metadata to the disk
 def save_metadata_to_file(filekey, metadata):
     saved_datasets[filekey] = metadata
@@ -60,24 +78,40 @@ def upload_file():
             "depth" : request.form.get("depth"),
             "precision" : request.form.get("precision"),
         }
-        threading.Thread(target=save_metadata_to_file, args=(file.filename, dataset_metadata)).start()
+        threading.Thread(target=read_input_data, args=(dataset_metadata,)).start()
+
+        saved_datasets[file.filename] = dataset_metadata
+        with open(metadata_file, 'w') as f:
+            json.dump(saved_datasets, f, indent=4)
         
         return jsonify({"dataset" : dataset_metadata}), 200
         
     except Exception as e:
-        print(e)
+        print("Error in upload_file():", e)
         return jsonify({"error" : str(e)}), 500
 
-# Route to handle file deletion
-@app.route("/deleteDatasets", methods=["POST"])
-def delete_files():
+# Route to handle datasets update
+@app.route("/updateDatasets", methods=["POST"])
+def update_datasets():
     try:
-        datasets = request.form.get("datasets")
-        for d in datasets:
-            filepath = upload_dir / saved_datasets[d].name
-            if os.path.isfile(filepath):
-                os.remove(filepath)
-            saved_datasets.pop(d)
+        # Update the currently working dataset
+        if request.form.get("currentDataset"):
+            currentDataset = json.loads(request.form["currentDataset"])
+            print("currentDataset:", currentDataset)
+            threading.Thread(target=read_input_data, args=(currentDataset,)).start()
+
+        # Remove the files if deleted datasets are provided
+        if request.form.get("deletedDatasets"):
+            deletedDatasets = json.loads(request.form["deletedDatasets"])
+            print("deletedDatasets: ", deletedDatasets)
+            for d in deletedDatasets:
+                filepath = upload_dir / saved_datasets[d].get("name")
+                if os.path.isfile(filepath):
+                    os.remove(filepath)
+                saved_datasets.pop(d)
+            # Update the metadata file
+            with open(metadata_file, 'w') as f:
+                json.dump(saved_datasets, f, indent=4)
         return jsonify({"datasets" : saved_datasets}), 200
 
     except Exception as e:
@@ -87,7 +121,7 @@ def delete_files():
 
 @app.route("/indexlist", methods=["GET", "POST"])
 def indexlist():
-    global input_data, depth, height, depth
+    global input_data
     def replace_unsupported_values(obj):
         if isinstance(obj, dict):
             return {k: replace_unsupported_values(v) for k, v in obj.items()}
@@ -102,7 +136,7 @@ def indexlist():
         else:
             return obj
     def comparing_compressor(arguments):
-        global  input_data, width, depth, height
+        global input_data
         print("arguments: ", arguments)
         def get_metrics_configuration(metrics):
             if 'composite' in metrics:
@@ -125,7 +159,7 @@ def indexlist():
             "compressor_config": arguments["compressor_config"],
         }
         def run_compressor(args):
-            global input_data, width, height, depth
+            global input_data
             compressor = libpressio.PressioCompressor.from_config({
                 "compressor_id": args['compressor_id'],
                 "early_config": args['early_config'],
@@ -148,41 +182,29 @@ def indexlist():
         return result
     
     if request.method == 'POST':
-        print(request.form['get_options'])
         if(int(request.form['get_options']) == 0):
-            file = request.files['file']
-            width = int(request.form['width'])
-            height = int(request.form['height'])
-            depth = int(request.form['depth'])
-            precision = request.form.get('precision')
-            print(precision)
-            if precision=='d': 
-                input_data = np.fromfile(file, dtype=np.float64)
-            elif precision=='f': 
-                input_data = np.fromfile(file, dtype=np.float32)
-
-            if len(input_data)>width*height*depth: input_data = input_data[len(input_data)- width*height*depth:]
-            
-            input_data = input_data.reshape(width, height, depth)
-            input_data = np.nan_to_num(input_data, nan=0)
+            if input_data is None:
+                return jsonify({"error": "No input dataset!"}), 400
             configurations = json.loads(request.form.get('configurations'))
-            print(configurations)
-            result = {}
-            decp_data = []
-            for key in configurations:
-                print(key)
-                if(key['compressor_id']!=''):
-                
-                    print(key)
-                    output = comparing_compressor(key)
-                    result[output['compressor_name']] = {"compressor_id": output['compressor_id'],
-                    "metrics": output['metrics'],}
-                    decp_data.append(output['decp_data'])
-            print(result)
-            result['input_data'] = input_data.tolist()
-            result['decp_data'] = decp_data
-            #return json.loads(json.dumps(output,indent=2))
-            return jsonify(result)
+            # print("configurations:", configurations)
+            try :
+                result = {}
+                decp_data = []
+                for config in configurations:
+                    if(config['compressor_id'] != ''):
+                        print("config:", config)
+                        output = comparing_compressor(config)
+                        result[output['compressor_name']] = {"compressor_id": output['compressor_id'],
+                        "metrics": output['metrics'],}
+                        decp_data.append(output['decp_data'])
+                print("result:", result)
+                # result['input_data'] = input_data.tolist()
+                # result['decp_data'] = decp_data
+                #return json.loads(json.dumps(output,indent=2))
+                return jsonify(result), 200
+            except Exception as e:
+                print("Error in indexlist():", e)
+                return jsonify({"error": str(e)}), 500
         
             # print(slice_number,sliced_id,slice_width,slice_height,type(input_data),len(input_data))
         else:
@@ -190,7 +212,7 @@ def indexlist():
             c = libpressio.PressioCompressor("pressio", {"pressio:compressor": compressor_id}, name="pressio")
             top_level = c. get_configuration()["pressio"]
             children = top_level["pressio:children"] # you'll see pressio/noop and pressio/sz3
-            print(children)
+            print("children:", children)
             options = top_level[compressor_id] # we determined that "sz3" is the right string here by stripping out "pressio/" from the entries in children
             module_slots = {k: options[k] for k in options if k.startswith(compressor_id)}
             

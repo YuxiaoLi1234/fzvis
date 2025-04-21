@@ -59,15 +59,15 @@
           </div>
           <div class="modal-body overflow-auto">
             <ul v-if="hasDatasets">
-              <li v-for="(dataset, key) in uploadedDatasets" :key="dataset.id">
+              <li v-for="(dataset, key) in uploadedDatasets" :key="dataset.id" class="my-2">
                 <span v-if="datasetsToDelete.includes(key)" class="pe-2 text-decoration-line-through">{{ dataset.name }}</span>
                 <span v-else class="pe-2">{{ dataset.name }}</span>
                 <!-- highlight the currently selected dataset -->
-                <button v-if="datasetToChange?.name == dataset.name" class="btn btn-primary ms-1" aria-label="Select" title="Select the dataset"><i class="bi bi-check2-circle"></i></button>
-                <button v-else @click="restoreDataset(dataset)" class="btn btn-outline-primary ms-1" aria-label="Select" :disabled="datasetsToDelete.includes(key)" title="Select the dataset"><i class="bi bi-check2-circle"></i></button>
+                <button v-if="dataset.name == datasetToChange?.name" class="btn btn-primary ms-1" aria-label="Select" title="Select the dataset"><i class="bi bi-check2-circle"></i></button>
+                <button v-else @click="datasetToChange = dataset" class="btn btn-outline-primary ms-1" aria-label="Select" :disabled="datasetsToDelete.includes(key)" title="Select the dataset"><i class="bi bi-check2-circle"></i></button>
 
                 <button v-if="datasetsToDelete.includes(key)" class="btn btn-danger ms-1" aria-label="Delete" title="Delete the dataset"><i class="bi bi-trash"></i></button>
-                <button v-else @click="deleteDataset(key)" class="btn btn-outline-danger ms-1" aria-label="Delete" :disabled="datasetToChange?.name == dataset.name" title="Delete the dataset"><i class="bi bi-trash"></i></button>
+                <button v-else @click="datasetsToDelete.push(key)" class="btn btn-outline-danger ms-1" aria-label="Delete" :disabled="datasetToChange?.name == dataset.name" title="Delete the dataset"><i class="bi bi-trash"></i></button>
               </li>
             </ul>
             <div v-else class="text-warning py-2">
@@ -86,7 +86,7 @@
 
 <script>
 
-// import emitter from './eventBus.js';
+import emitter from './eventBus.js';
 import axios from 'axios'
 import {Modal} from 'bootstrap';
 export default {
@@ -217,7 +217,7 @@ export default {
         }
       });
 
-      // emitter.emit('file-selected', dataset);
+      emitter.emit('file-selected', this.currentDataset);
       // emitter.emit('file-input', this.uploadedDatasets[0]);
       // alert('Dataset emitted successfully!');
     },
@@ -228,25 +228,31 @@ export default {
     },
 
     processChanges() {
-      this.currentDataset = this.datasetToChange;
-      this.width = this.currentDataset.width;
-      this.height = this.currentDataset.height;
-      this.depth = this.currentDataset.depth;
-      this.precision = this.currentDataset.precision;
-      // this.file = dataset.file;
-      // console.log("Restored dataset:", dataset);
+      const formData = new FormData();
+      
+      if (this.currentDataset != this.datasetToChange) {
+        this.currentDataset = this.datasetToChange;
+        this.width = this.currentDataset.width;
+        this.height = this.currentDataset.height;
+        this.depth = this.currentDataset.depth;
+        this.precision = this.currentDataset.precision;
+        formData.append("currentDataset", JSON.stringify(this.currentDataset));
+      }
 
-      // delete datasets on the server side
+      // delete datasets
       if (this.datasetsToDelete.length > 0) {
-        const formData = new FormData();
-        formData.append("datasets", this.datasetsToDelete);
+        formData.append("deletedDatasets", JSON.stringify(this.datasetsToDelete));
+      }
+
+      // check if there are any changes made 
+      if (!formData.entries().next().done) {
         const baseURL = process.env.VUE_APP_API_BASE;
-        axios.post(`${baseURL}/deleteDatasets`, formData).then(response => {
+        axios.post(`${baseURL}/updateDatasets`, formData).then(response => {
           this.uploadedDatasets = response.data.datasets;
           console.log("uploadedDatasets:", JSON.stringify(this.uploadedDatasets));
         })
         .catch (error => {
-          console.log("Delete datasets failed.", error);
+          console.log("Update datasets failed.", error);
         });
       }
     },
@@ -283,13 +289,6 @@ export default {
       });
     },
 
-    restoreDataset(selectedDataset) {
-      this.datasetToChange = selectedDataset;
-    },
-
-    deleteDataset(datasetKey) {
-      this.datasetsToDelete.push(datasetKey);
-    },
   },
   computed: {
     hasDatasets() {
