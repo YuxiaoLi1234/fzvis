@@ -1,14 +1,15 @@
 #!/usr/bin/env python
 
-import numpy as np
-import os
+from argparse import ArgumentParser
 from flask import Flask, request, jsonify, send_from_directory
 from flask_cors import CORS
-from pathlib import Path
 import json
 import libpressio
-from argparse import ArgumentParser
 import math
+import numpy as np
+import os
+from pathlib import Path
+import time
 
 project_root = Path(__file__).parent.parent.parent
 dist_dir = Path(__file__).parent.parent / "usr/libexec/fzvis/ui"
@@ -19,11 +20,18 @@ upload_dir = root_dir / "uploads"
 work_dir = root_dir / "data"
 work_dir.mkdir(parents=True, exist_ok=True)
 upload_dir.mkdir(parents=True, exist_ok=True)
+metadata_file = upload_dir / "metadata.json"
+saved_datasets = {}
 
 app = Flask(__name__)
 CORS(app)
 
+# Route to get the list of uploaded datasets
+@app.route("/listDatasets", methods=["GET", "POST"])
+def get_uploaded_datasets():
+    return jsonify({"datasets" : saved_datasets}), 200
 
+# Route to handle file upload
 @app.route("/upload", methods=["POST"])
 def upload_file():
     try:
@@ -37,9 +45,38 @@ def upload_file():
         # Save file
         filename = os.path.join(upload_dir, file.filename)
         file.save(filename)
-        return jsonify({"message" : "File uploaded successfully"}), 200
+
+        # Use the filename as the key as we don't allow two duplicate files
+        dataset_metadata = {
+            "name" : file.filename,
+            "width" : request.form.get("width"),
+            "height" : request.form.get("height"),
+            "depth" : request.form.get("depth"),
+            "precision" : request.form.get("precision"),
+        }
+        saved_datasets[file.filename] = dataset_metadata
+        with open(metadata_file, 'w') as f:
+            json.dump(saved_datasets, f, indent=4)
+        return jsonify({"dataset" : dataset_metadata}), 200
         
     except Exception as e:
+        print(e)
+        return jsonify({"error" : str(e)}), 500
+
+# Route to handle file deletion
+@app.route("/deleteDatasets", methods=["POST"])
+def delete_files():
+    try:
+        datasets = request.form.get("datasets")
+        for d in datasets:
+            filepath = upload_dir / saved_datasets[d].name
+            if os.path.isfile(filepath):
+                os.remove(filepath)
+            saved_datasets.pop(d)
+        return jsonify({"datasets" : saved_datasets}), 200
+
+    except Exception as e:
+        print(e)
         return jsonify({"error" : str(e)}), 500
 
 
@@ -196,4 +233,10 @@ if __name__ == '__main__':
     }
     with open((project_root / "serverConfig.json"), 'w') as json_file:
         json.dump(config, json_file, indent=4)
+    
+    # Read uploaded datasets from the metadata file
+    if metadata_file.exists():
+        with open(metadata_file, 'r') as f:
+            saved_datasets = json.load(f)
+
     app.run(host=api_host, port=api_port, debug=True)

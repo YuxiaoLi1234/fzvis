@@ -5,22 +5,21 @@
     <input type="file" class="form-control" id="fileloader" @change="handleFileChange">
 
     <div id="whd" class="row g-3 py-2">
-      <div class="col-md-4">
+      <div class="col-md-4 py-1">
         <label for="width" class="form-label mx-1 mb-0">Width:</label>
         <input class="form-control" type="number" min="1" id="width" label="width:" v-model="width" placeholder="500" />
       </div>
-      <div class="col-md-4">
+      <div class="col-md-4 py-1">
         <label for="height" class="form-label mx-1 mb-0">Height:</label>
         <input class="form-control" type="number" min="1" id="height" label="height:" v-model="height" placeholder="500" />
       </div>
-      <div class="col-md-4">
+      <div class="col-md-4 py-1">
         <label for="depth" class="form-label mx-1 mb-0">Depth:</label>
         <input class="form-control" type="number" min="1" id="depth" label="depth:" v-model="depth" placeholder="500" />
       </div>
-      <label for="precision" class="form-label col-md-3 pt-2 mt-1 ms-1">Precision:</label>
-      <div class="col-md-6 pt-1 mt-0 pb-0">
+      <div class="col-md-6 mt-1 py-1">
         <select id="precision" class="form-select m-1 w-auto" aria-label="precision" v-model="precision">
-          <option value="" disabled selected>select value</option>
+          <option value="" disabled selected>select precision</option>
           <option value="f">single (f)</option>
           <option value="d">double (d)</option>
         </select>
@@ -28,30 +27,41 @@
       <small v-if="isFormValid" class="py-0 mt-0 text-muted">Click submit button to upload the dataset.</small>
       <small v-else class="py-0 mt-0 text-muted">Please fill all fields to submit.</small>
     </div>
-    <button type="button" class="btn btn-success me-2 mb-2" @click="emitFileData" :disabled="!isFormValid">Submit</button>
+    <button type="button" class="btn btn-success me-2 my-1" @click="uploadFile" :disabled="!isFormValid">Submit</button>
     <!-- Button trigger modal -->
-    <button type="button" class="btn btn-info mb-2" data-bs-toggle="modal" data-bs-target="#datasetModal">View datasets</button>
-    <div v-if="this.curDatasetIndex < 0" class="text-warning">
-      No dataset selected for compression/visualization.
+    <button type="button" class="btn btn-info my-1" @click="fetchDatasets" title="View all uploaded datasets">View datasets</button>
+    <div v-if="currentDataset == null" class="text-danger mt-1">
+      No dataset selected for processing.
     </div>
-    <div v-else-if="hasDatasets">
-      Currently selected dataset: 
-      <strong >{{ this.uploadedDatasets[this.curDatasetIndex].name }}</strong>
+    <div v-else class="text-success mt-1">
+      Current dataset: 
+      <strong >{{ currentDataset.name }}</strong>
+    </div>
+
+    <div id="uploadAlert" class="alert alert-dismissible fade" role="alert" tabindex="-1">
+      <span id="uploadAlertMessage">Placeholder</span>
+      <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
     </div>
 
     <!-- Dataset modal -->
-    <div id="datasetModal" class="modal fade" tabindex="-1" aria-labelledby="datasetModalLabel" aria-hidden="true">
-      <div class="modal-dialog">
+    <div id="datasetModal" class="modal fade" data-bs-backdrop="static" tabindex="-1" aria-labelledby="datasetModalLabel" aria-hidden="true">
+      <div class="modal-dialog modal-dialog-scrollable">
         <div class="modal-content">
           <div class="modal-header">
             <h1 class="modal-title fs-5" id="datasetModalLabel">Saved datasets</h1>
-            <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            <!-- <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button> -->
           </div>
-          <div class="modal-body">
+          <div class="modal-body overflow-auto">
             <ul v-if="hasDatasets">
-              <li v-for="(dataset, index) in uploadedDatasets" :key="dataset.id">
-                <span @click="restoreDataset(dataset)" class="dataset-item">{{ dataset.name }}</span>
-                <button @click="deleteDataset(index)" class="btn-close" aria-label="Delete"></button>
+              <li v-for="(dataset, key) in uploadedDatasets" :key="dataset.id">
+                <span v-if="datasetsToDelete.includes(key)" class="pe-2 text-decoration-line-through">{{ dataset.name }}</span>
+                <span v-else class="pe-2">{{ dataset.name }}</span>
+                <!-- highlight the currently selected dataset -->
+                <button v-if="datasetToChange?.name == dataset.name" class="btn btn-primary ms-1" aria-label="Select" title="Select the dataset"><i class="bi bi-check2-circle"></i></button>
+                <button v-else @click="restoreDataset(dataset)" class="btn btn-outline-primary ms-1" aria-label="Select" :disabled="datasetsToDelete.includes(key)" title="Select the dataset"><i class="bi bi-check2-circle"></i></button>
+
+                <button v-if="datasetsToDelete.includes(key)" class="btn btn-danger ms-1" aria-label="Delete" title="Delete the dataset"><i class="bi bi-trash"></i></button>
+                <button v-else @click="deleteDataset(key)" class="btn btn-outline-danger ms-1" aria-label="Delete" :disabled="datasetToChange?.name == dataset.name" title="Delete the dataset"><i class="bi bi-trash"></i></button>
               </li>
             </ul>
             <div v-else class="text-warning py-2">
@@ -59,8 +69,8 @@
             </div>
           </div>
           <div class="modal-footer">
-            <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
-            <button type="button" class="btn btn-primary">Save changes</button>
+            <button type="button" class="btn btn-secondary" data-bs-dismiss="modal" @click="rollbackData">Close</button>
+            <button type="button" class="btn btn-primary" data-bs-dismiss="modal" @click="processChanges">Save changes</button>
           </div>
         </div>
       </div>
@@ -71,6 +81,8 @@
 <script>
 
 // import emitter from './eventBus.js';
+import axios from 'axios'
+import {Modal} from 'bootstrap';
 export default {
   name: 'InputDataset',
   data() {
@@ -82,11 +94,41 @@ export default {
       fileContent: "",
       files: [],
       file: '',
+      currentDataset: null,
+      datasetToChange: null,
       uploadedDatasets: [],
-      curDatasetIndex: -1,
-    };
+      datasetsToDelete:[],
+    }
   },
+
   methods:{
+    fetchDatasets() {
+      const baseURL = process.env.VUE_APP_API_BASE;
+      axios.get(`${baseURL}/listDatasets`).then(response => {
+        this.uploadedDatasets = response.data.datasets;
+        this.datasetToChange = this.currentDataset;
+        const modalElement = document.getElementById("datasetModal");
+        if (modalElement) {
+          var modal = new Modal(modalElement);
+          modal.show();
+        }
+        // console.log("uploaded datasets:", JSON.stringify(this.uploadedDatasets));
+      })
+      .catch(error => {
+        const alertBox = document.getElementById("uploadAlert");
+        const alertMessage = document.getElementById("uploadAlertMessage");
+        if (alertBox && alertMessage) {
+          alertBox.classList.remove("alert-success");
+          alertBox.classList.add("alert-danger", "show");
+          alertMessage.textContent = `Fetch saved datasets failed. ${error}`;
+          // Auto dismiss
+          setTimeout(() => {
+            alertBox.classList.remove("show");
+          }, 6000);
+        }
+      });
+    },
+
     handleFileChange(event) {
       const newFile = event.target.files[0];
       if (newFile) {
@@ -101,55 +143,77 @@ export default {
       }
     },
 
-    async emitFileData() {
+    uploadFile() {
       // Generate form data
       const formData = new FormData();
+      
+      // Generate a unique ID for the dataset
       formData.append("file", this.file);
       formData.append("width", this.width);
       formData.append("height", this.height);
       formData.append("depth", this.depth);
       formData.append("precision", this.precision);
+      
+      const baseURL = process.env.VUE_APP_API_BASE;
+      const alertBox = document.getElementById("uploadAlert");
+      const alertMessage = document.getElementById("uploadAlertMessage");
 
-      try {
-        const baseURL = process.env.VUE_APP_API_BASE;
-        const response = await fetch(`${baseURL}/upload`, {
-          method: "POST",
-          body: formData
-        });
-
-        const result = await response.json();
-        if (response.ok) {
-          alert("File uploaded successfully!");
-          console.log("Server response:", result);
-        } else {
-          throw new Error(result.error || "Upload failed");
+      axios.post(`${baseURL}/upload`, formData).then(response => {
+        this.currentDataset = response.data.dataset;
+        if (alertBox && alertMessage) {
+          alertBox.classList.remove("alert-danger");
+          alertBox.classList.add("alert-success", "show");
+          alertMessage.textContent = "File uploaded successfully!";
+          // Auto dismiss
+          setTimeout(() => {
+            alertBox.classList.remove("show");
+          }, 4000);
         }
-      } catch (error) {
-        console.error("Upload error:", error);
-        alert(`Upload failed: ${error.message}`);
-      }
-      
-      // Generate a unique ID for the dataset
-      const datasetId = `${this.file.name}-${Date.now()}`;
-
-      // Record the dataset information in the panel
-      this.uploadedDatasets.unshift({
-        id: datasetId,
-        name: this.file.name,
-        width: this.width,
-        height: this.height,
-        depth: this.depth,
-        precision: this.precision,
-        file: this.file,
-        content: this.fileContent
+      })
+      .catch (error => {
+        if (alertBox && alertMessage) {
+          alertBox.classList.remove("alert-success");
+          alertBox.classList.add("alert-danger", "show");
+          alertMessage.textContent = `Upload failed. ${error}`;
+          // Auto dismiss
+          setTimeout(() => {
+            alertBox.classList.remove("show");
+          }, 6000);
+        }
       });
-      
-      this.curDatasetIndex = 0;
-      // console.log("Uploaded Datasets:", this.uploadedDatasets);
-      // console.log("Emitting file data:", dataset);
+
       // emitter.emit('file-selected', dataset);
       // emitter.emit('file-input', this.uploadedDatasets[0]);
       // alert('Dataset emitted successfully!');
+    },
+
+    rollbackData() {
+      this.datasetToChange = this.currentDataset;
+      this.datasetsToDelete = [];
+    },
+
+    processChanges() {
+      this.currentDataset = this.datasetToChange;
+      this.width = this.currentDataset.width;
+      this.height = this.currentDataset.height;
+      this.depth = this.currentDataset.depth;
+      this.precision = this.currentDataset.precision;
+      // this.file = dataset.file;
+      // console.log("Restored dataset:", dataset);
+
+      // delete datasets on the server side
+      if (this.datasetsToDelete.length > 0) {
+        const formData = new FormData();
+        formData.append("datasets", this.datasetsToDelete);
+        const baseURL = process.env.VUE_APP_API_BASE;
+        axios.post(`${baseURL}/deleteDatasets`, formData).then(response => {
+          this.uploadedDatasets = response.data.datasets;
+          console.log("uploadedDatasets:", JSON.stringify(this.uploadedDatasets));
+        })
+        .catch (error => {
+          console.log("Delete datasets failed.", error);
+        });
+      }
     },
 
     requestSuccessMethod(file /* UploadFile */) {
@@ -184,25 +248,17 @@ export default {
       });
     },
 
-    restoreDataset(dataset) {
-      this.file = dataset.file;
-      this.fileContent = dataset.name;
-      this.width = dataset.width;
-      this.height = dataset.height;
-      this.depth = dataset.depth;
-      this.precision = dataset.precision;
-      console.log("Restored dataset:", dataset);
+    restoreDataset(selectedDataset) {
+      this.datasetToChange = selectedDataset;
     },
 
-    deleteDataset(index) {
-      this.uploadedDatasets.splice(index, 1);
-      if (this.curDatasetIndex == index) this.curDatasetIndex = -1;
-      console.log("Deleted dataset index:", index);
+    deleteDataset(datasetKey) {
+      this.datasetsToDelete.push(datasetKey);
     },
   },
   computed: {
     hasDatasets() {
-      return this.uploadedDatasets.length > 0;
+      return Object.keys(this.uploadedDatasets).length > 0;
     },
 
     requestMethod() {
