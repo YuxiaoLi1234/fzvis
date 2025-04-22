@@ -214,6 +214,7 @@ def indexlist():
             children = top_level["pressio:children"] # you'll see pressio/noop and pressio/sz3
             print("children:", children)
             options = top_level[compressor_id] # we determined that "sz3" is the right string here by stripping out "pressio/" from the entries in children
+            print("options:", options)
             module_slots = {k: options[k] for k in options if k.startswith(compressor_id)}
             
             return module_slots

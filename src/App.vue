@@ -30,11 +30,11 @@ export default {
         <ul class="nav nav-tabs" role="tablist">
           <li class="nav-item" role="presentation">
             <button class="nav-link active" id="dataset-tab" data-bs-toggle="tab" data-bs-target="#dataset" type="button" role="tab" aria-selected="true">
-              <i class="bi bi-file-earmark me-1"></i>Dataset</button>
+              <i class="bi bi-file-arrow-up me-1"></i>Dataset</button>
           </li>
           <li class="nav-item" role="presentation">
             <button class="nav-link" id="compressor-tab" data-bs-toggle="tab" data-bs-target="#compressor" type="button" role="tab" aria-selected="true">
-              <i class="bi bi-file-earmark-zip me-1"></i>Compressor</button>
+              <i class="bi bi-file-zip me-1"></i>Compressor</button>
           </li>
         </ul>
         

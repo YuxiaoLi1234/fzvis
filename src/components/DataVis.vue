@@ -11,11 +11,12 @@
           <option value="Inferno">Inferno</option>
         </select>
         <input type="number" id="slice_id" class="form-control" style="max-width: 120px" placeholder="Slice ID" v-model="slice_id"/>
-        <button id="input-button" class="btn btn-outline-primary" @click="vis_input">Input Mode</button>
-        <button id="output-button" class="btn btn-outline-primary" @click="vis_output">Output Mode</button>
-        <button id="error-button" class="btn btn-outline-primary" @click="vis_error">Error Map</button>
-        <button id="reset-button" class="btn btn-outline-primary" @click="resetView">Reset</button>
-        <button id="undo-button" class="btn btn-outline-dark" @click="undoZoom" :disabled="historyStack.length === 0">Undo</button>
+        <button id="input-button" class="btn btn-outline-primary" @click="vis_input">Input Mode<i class="bi bi-box-arrow-in-left ms-1"></i></button>
+        <button id="output-button" class="btn btn-outline-primary" @click="vis_output">Output Mode<i class="bi bi-box-arrow-in-right ms-1"></i></button>
+        <button id="error-button" class="btn btn-outline-primary" @click="vis_error">Error Map<i class="bi bi-bug ms-1"></i>
+        </button>
+        <button id="reset-button" class="btn btn-outline-primary" @click="resetView">Reset<i class="bi bi-arrow-clockwise ms-1"></i></button>
+        <button id="undo-button" class="btn btn-outline-dark" @click="undoZoom" :disabled="historyStack.length === 0">Undo<i class="bi bi-arrow-counterclockwise"></i></button>
       </div>
 
       <div class="visualization-area">
@@ -24,7 +25,6 @@
         </div>
         <svg id="colorbarCanvas"></svg>
       </div>
-
 
   </div>
   
@@ -40,53 +40,56 @@ import emitter from './eventBus.js';
 
 export default {
   name:'DataVis',
-  data(){
-      return{
-        tooltip:null,
-        colormap:'',
-        slice_id:null,
-        mode:"input",
-        width:null,
-        height:null,
-        depth:null,
-        controlPoints: [], 
-        globalMin: null, 
-        globalMax: null, 
-        normalize: true,
-        original_data: null,
-        decp_data:[],
-        zoomData:null,
-        drawZoom:false,
-        compressor_name:[],
-        historyStack: [],
-        configurations: null,
-      };
+  data() {
+    return {
+      tooltip:null,
+      colormap:'',
+      slice_id:null,
+      mode:"input",
+      width:null,
+      height:null,
+      depth:null,
+      controlPoints: [], 
+      globalMin: null, 
+      globalMax: null, 
+      normalize: true,
+      original_data: null,
+      decp_data:[],
+      zoomData:null,
+      drawZoom:false,
+      compressor_name:[],
+      historyStack: [],
+      configurations: null,
+    };
   },
 
 
   async mounted(){
     
-    await emitter.on('file-input',async (data) => {
-        this.width = data['width'];
-        this.height = data['height'];
-        this.depth = data['depth'];
+    await emitter.on("file-input", async (data) => {
+        const { metadata, content } = data;
 
-        // 确保 content 是 ArrayBuffer
-        if (!data.content || !(data.content instanceof ArrayBuffer)) {
+        this.width = metadata['width'];
+        this.height = metadata['height'];
+        this.depth = metadata['depth'];
+
+        // Check if content is ArrayBuffer
+        console.log("content:", content);
+        console.log(content instanceof ArrayBuffer);
+        if (!content || !(content instanceof ArrayBuffer)) {
             console.error("Invalid data content!");
             return;
         }
 
-        // 解析二进制数据
-        if (data.precision === "f") {
-            this.input_data = Array.from(new Float32Array(data.content));
-        } else if (data.precision === "d") {
-            this.input_data = Array.from(new Float64Array(data.content));
+        // Parse the binary data
+        if (metadata.precision === 'f') {
+            this.input_data = Array.from(new Float32Array(content));
+        } else if (metadata.precision === 'd') {
+            this.input_data = Array.from(new Float64Array(content));
         } else {
             console.error("Unsupported precision type!");
             return;
         }
-
 
         this.mode = "input";
         this.drawZoom = false;
@@ -94,7 +97,6 @@ export default {
         this.data_vis(this.input_data);
         this.defaultcolormap();
         this.draw();
-        
     });
 
     await emitter.on('inputdata', (data) => {
@@ -113,13 +115,7 @@ export default {
     })
 
   },
-  computed: {
-  },
-  watch: {
-  },
   methods:{
-
-
       vis_error: function () {
         if (!this.input_data || !this.decp_data.length) {
           console.error("Input data or decompressed data is missing.");
@@ -192,7 +188,6 @@ export default {
             let flatData;
             
             flatData = this.input_data.flat().flat();
-            
             
             const slice = flatData.slice(
               this.slice_id * this.width * this.height,

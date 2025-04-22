@@ -1,8 +1,10 @@
 <template>
-    <div>
+    <div class="container py-3">
         <!-- 控件区 -->
         <div id="radar-controls">
             <button 
+                class="btn btn-primary"
+                type="button"
                 id="radar-control-button" 
                 :disabled="!dataReceived" 
                 @click="drawBarCharts">

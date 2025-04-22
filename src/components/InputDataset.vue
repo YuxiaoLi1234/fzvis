@@ -19,13 +19,13 @@
       </div>
       <div class="col-md-6 mt-1 py-1">
         <select id="precision" class="form-select m-1 w-auto" aria-label="precision" v-model="precision">
-          <option value="" disabled selected>select precision</option>
+          <option value="" disabled selected>Select precision</option>
           <option value="f">single (f)</option>
           <option value="d">double (d)</option>
         </select>
       </div>
       <small v-if="isFormValid" class="py-0 mt-0 text-muted">Click submit button to upload the dataset.</small>
-      <small v-else class="py-0 mt-0 text-muted">Please fill all fields to submit.</small>
+      <small v-else class="py-0 mt-0 text-muted">Please fill all fields to submit the file.</small>
     </div>
     <button type="button" class="btn btn-success me-2 my-1" @click="uploadFile" :disabled="!isFormValid">Submit</button>
     <!-- Button trigger modal -->
@@ -63,8 +63,8 @@
                 <span v-if="datasetsToDelete.includes(key)" class="pe-2 text-decoration-line-through">{{ dataset.name }}</span>
                 <span v-else class="pe-2">{{ dataset.name }}</span>
                 <!-- highlight the currently selected dataset -->
-                <button v-if="dataset.name == datasetToChange?.name" class="btn btn-primary ms-1" aria-label="Select" title="Select the dataset"><i class="bi bi-check2-circle"></i></button>
-                <button v-else @click="datasetToChange = dataset" class="btn btn-outline-primary ms-1" aria-label="Select" :disabled="datasetsToDelete.includes(key)" title="Select the dataset"><i class="bi bi-check2-circle"></i></button>
+                <button v-if="dataset.name == datasetToChange?.name" class="btn btn-primary ms-1" aria-label="Select" title="Select the dataset"><i class="bi bi-check-circle"></i></button>
+                <button v-else @click="datasetToChange = dataset" class="btn btn-outline-primary ms-1" aria-label="Select" :disabled="datasetsToDelete.includes(key)" title="Select the dataset"><i class="bi bi-check-circle"></i></button>
 
                 <button v-if="datasetsToDelete.includes(key)" class="btn btn-danger ms-1" aria-label="Delete" title="Delete the dataset"><i class="bi bi-trash"></i></button>
                 <button v-else @click="datasetsToDelete.push(key)" class="btn btn-outline-danger ms-1" aria-label="Delete" :disabled="datasetToChange?.name == dataset.name" title="Delete the dataset"><i class="bi bi-trash"></i></button>
@@ -144,6 +144,7 @@ export default {
         const reader = new FileReader();
         reader.onload = (e) => {
           this.fileContent = e.target.result; // save file content
+          // emitter.emit('file-input', this.currentDataset, this.fileContent);
         };
 
         reader.readAsArrayBuffer(newFile); // read binary data
@@ -185,6 +186,7 @@ export default {
       })
       .then(response => {
         this.currentDataset = response.data.dataset;
+        // emitter.emit("file-input", {metadata: this.currentDataset, content: this.fileContent});
         progressBar.style.width = "100%";
         progressBar.setAttribute("aria-valuenow", 100);
         progressBar.textContent = "100%";
@@ -217,8 +219,7 @@ export default {
         }
       });
 
-      emitter.emit('file-selected', this.currentDataset);
-      // emitter.emit('file-input', this.uploadedDatasets[0]);
+      emitter.emit("file-selected", this.currentDataset);
       // alert('Dataset emitted successfully!');
     },
 
@@ -256,57 +257,15 @@ export default {
         });
       }
     },
-
-    requestSuccessMethod(file /* UploadFile */) {
-      console.log(file, file.raw);
-      return new Promise((resolve) => {
-        let percent = 0;
-        const percentTimer = setInterval(() => {
-          if (percent + 10 < 99) {
-            percent += 10;
-            this.$refs.uploadRef.uploadFilePercent({ file, percent });
-            
-          } else {
-            clearInterval(percentTimer);
-          }
-        }, 100);
-
-        const timer = setTimeout(() => {
-          resolve({ status: 'success', response: { url: 'https://tdesign.gtimg.com/site/avatar.jpg' } });
-
-          clearTimeout(timer);
-          clearInterval(percentTimer);
-        }, 800);
-        console.log(resolve)
-        
-      });
-    },
-
-    requestFailMethod(file) {
-      console.log(file);
-      return new Promise((resolve) => {
-        resolve({ status: 'fail', error: 'Upload failed, please double check the file!' });
-      });
-    },
-
   },
   computed: {
     hasDatasets() {
       return Object.keys(this.uploadedDatasets).length > 0;
     },
 
-    requestMethod() {
-      return this[this.uploadMethod];
-    },
-
     // Check if all form fields are filled before allowing emission
     isFormValid() {
       return this.file && this.width && this.height && this.depth && this.precision;
-    },
-  },
-  watch: {
-    uploadMethod() {
-        this.files = [];
     },
   },
 };
