@@ -22,7 +22,9 @@
     "mitt": "^3.0.1",
     "npyjs": "^0.6.0",
     "tdesign-vue-next": "^1.7.1",
-    "vue": "^3.2.13"
+    "vtk.js": "32.12",
+    "vue": "^3.2.13",
+    "vuex": "^4.1.0"
   },
   "devDependencies": {
     "@babel/core": "^7.12.16",

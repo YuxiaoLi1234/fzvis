@@ -1,31 +1,16 @@
 import { createApp } from 'vue'
-import App from './App.vue';
+import App from './App.vue'
+import store from './store'
 import bootstrap from 'bootstrap/dist/js/bootstrap.bundle.min.js'
-// import axios from 'axios'
 
+// CSS files
 import 'bootstrap/dist/css/bootstrap.min.css';
 import 'bootstrap-icons/font/bootstrap-icons.css';
 
-createApp(App).mount('#app')
+createApp(App).use(store).mount('#app')
 
-
-// axios.defaults.headers.common['Content-Type'] = 'application/x-www-form-urlencoded'
-// axios.defaults.headers.common['Access-Control-Allow-Origin'] = '*';
-
-// // Initialize all tooltips
+// Initialize all tooltips
 document.querySelectorAll('[data-bs-toggle="tooltip"]')
 .forEach(tooltip => {
   new bootstrap.Tooltip(tooltip)
 })
-
-// // Initialize all popovers
-// document.querySelectorAll('[data-bs-toggle="popover"]')
-//   .forEach(popover => {
-//     new Popover(popover)
-// })
-
-// // Initialize all dropdowns
-// document.querySelectorAll('[data-bs-toggle="dropdown"]')
-//   .forEach(dropdown => {
-//     new Dropdown(dropdown)
-// })

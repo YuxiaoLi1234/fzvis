@@ -1,11 +1,10 @@
 <script>
-
 import Header from './components/AppHeader.vue'
 import InputDataset from './components/InputDataset.vue'
 import CustomizeCompressor from './components/CustomizeCompressor.vue'
 import StatA from './components/StatA.vue'
-import DataVis from './components/DataVis.vue'
-// import DataSelection from './components/DataSelection.vue'
+import HelloVtk from './components/HelloVtk.vue'
+
 export default {
   name: 'App',
   
@@ -14,8 +13,7 @@ export default {
     InputDataset,
     CustomizeCompressor,
     StatA,
-    DataVis,
-    // DataSelection
+    HelloVtk,
   },
   
 }
@@ -60,7 +58,8 @@ export default {
         
         <div class="tab-content">
           <div id="datavis" class="tab-pane fade show active" role="tabpanel" aria-labelledby="datavis-tab">
-            <DataVis />
+            <!-- <DataVis /> -->
+            <HelloVtk />
           </div>
           <div id="metrics" class="tab-pane fade" role="tabpanel" aria-labelledby="metrics-tab">
             <StatA />
@@ -69,7 +68,6 @@ export default {
       </div>
     </div>
 
-    <!-- <DataSelection /> -->
   </div>
 
 

@@ -3,37 +3,33 @@
     <div id="zoomWarning" style="display: none; color: red; font-size: 14px; position: absolute; top: 10px; right: 10px; z-index: 1000;">
         Cannot zoom in further. Minimum zoom size reached!
     </div>
-      <div id="controls" class="d-flex flex-wrap align-items-center p-2 gap-2">
-        <select id="colormapSelect" class="form-select w-auto" aria-label="colormap">
-          <option value="Rainbow">Rainbow</option>
-          <option value="Viridis">Viridis</option>
-          <option value="Plasma">Plasma</option>
-          <option value="Inferno">Inferno</option>
-        </select>
-        <input type="number" id="slice_id" class="form-control" style="max-width: 120px" placeholder="Slice ID" v-model="slice_id"/>
-        <button id="input-button" class="btn btn-outline-primary" @click="vis_input">Input Mode<i class="bi bi-box-arrow-in-left ms-1"></i></button>
-        <button id="output-button" class="btn btn-outline-primary" @click="vis_output">Output Mode<i class="bi bi-box-arrow-in-right ms-1"></i></button>
-        <button id="error-button" class="btn btn-outline-primary" @click="vis_error">Error Map<i class="bi bi-bug ms-1"></i>
-        </button>
-        <button id="reset-button" class="btn btn-outline-primary" @click="resetView">Reset<i class="bi bi-arrow-clockwise ms-1"></i></button>
-        <button id="undo-button" class="btn btn-outline-dark" @click="undoZoom" :disabled="historyStack.length === 0">Undo<i class="bi bi-arrow-counterclockwise"></i></button>
-      </div>
 
-      <div class="visualization-area">
-        <div id="svgCanvasContainer">
-          <svg id="svgCanvas"></svg>
-        </div>
-        <svg id="colorbarCanvas"></svg>
+    <div id="controls" class="d-flex flex-wrap align-items-center p-2 gap-2">
+      <select id="colormapSelect" class="form-select w-auto" aria-label="colormap">
+        <option value="Rainbow">Rainbow</option>
+        <option value="Viridis">Viridis</option>
+        <option value="Plasma">Plasma</option>
+        <option value="Inferno">Inferno</option>
+      </select>
+      <input type="number" id="slice_id" class="form-control" style="max-width: 120px" placeholder="Slice ID" v-model="slice_id"/>
+      <button id="input-button" class="btn btn-outline-primary" @click="vis_input">Input Mode<i class="bi bi-box-arrow-in-left ms-1"></i></button>
+      <button id="output-button" class="btn btn-outline-primary" @click="vis_output">Output Mode<i class="bi bi-box-arrow-in-right ms-1"></i></button>
+      <button id="error-button" class="btn btn-outline-primary" @click="vis_error">Error Map<i class="bi bi-bug ms-1"></i>
+      </button>
+      <button id="reset-button" class="btn btn-outline-primary" @click="resetView">Reset<i class="bi bi-arrow-clockwise ms-1"></i></button>
+      <button id="undo-button" class="btn btn-outline-dark" @click="undoZoom" :disabled="historyStack.length === 0">Undo<i class="bi bi-arrow-counterclockwise"></i></button>
+    </div>
+
+    <!-- <div class="visualization-area">
+      <div id="svgCanvasContainer">
+        <svg id="svgCanvas"></svg>
       </div>
+      <svg id="colorbarCanvas"></svg>
+    </div> -->
 
   </div>
-  
-  
-
 </template>
-<!-- <style scoped>
-@import "@/assets/DataVis.css";
-</style> -->
+
 <script>
 import * as d3 from 'd3'
 import emitter from './eventBus.js';

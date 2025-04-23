@@ -86,7 +86,6 @@
 
 <script>
 
-import emitter from './eventBus.js';
 import axios from 'axios'
 import {Modal} from 'bootstrap';
 export default {
@@ -119,7 +118,6 @@ export default {
           var modal = new Modal(modalElement);
           modal.show();
         }
-        // console.log("uploaded datasets:", JSON.stringify(this.uploadedDatasets));
       })
       .catch(error => {
         const alertBox = document.getElementById("uploadAlert");
@@ -144,11 +142,18 @@ export default {
         const reader = new FileReader();
         reader.onload = (e) => {
           this.fileContent = e.target.result; // save file content
-          // emitter.emit('file-input', this.currentDataset, this.fileContent);
         };
 
         reader.readAsArrayBuffer(newFile); // read binary data
       }
+    },
+
+    emitFileData() {
+      this.$store.commit("setFileData", {
+        file: this.file,
+        dimensions: [Number(this.width), Number(this.height), Number(this.depth)],
+        precision: this.precision
+      });
     },
 
     uploadFile() {
@@ -186,7 +191,7 @@ export default {
       })
       .then(response => {
         this.currentDataset = response.data.dataset;
-        // emitter.emit("file-input", {metadata: this.currentDataset, content: this.fileContent});
+        this.emitFileData();
         progressBar.style.width = "100%";
         progressBar.setAttribute("aria-valuenow", 100);
         progressBar.textContent = "100%";
@@ -219,7 +224,6 @@ export default {
         }
       });
 
-      emitter.emit("file-selected", this.currentDataset);
       // alert('Dataset emitted successfully!');
     },
 
