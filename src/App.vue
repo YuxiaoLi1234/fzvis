@@ -12,8 +12,8 @@ export default {
     Header,
     InputDataset,
     CustomizeCompressor,
-    StatA,
     HelloVtk,
+    StatA,
   },
   
 }

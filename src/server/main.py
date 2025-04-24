@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 
 from argparse import ArgumentParser
-from flask import Flask, request, jsonify, send_from_directory
+from flask import Flask, request, jsonify, send_file, send_from_directory
 from flask_cors import CORS
 import json
 import libpressio
@@ -55,6 +55,13 @@ def save_metadata_to_file(filekey, metadata):
 def get_uploaded_datasets():
     return jsonify({"datasets" : saved_datasets}), 200
 
+# Route to send the file back to the front end
+@app.route("/download", methods=["GET", "POST"])
+def send_data_file(): 
+    filename = request.args.get("filename")
+    filepath = upload_dir / filename
+    return send_file(filepath, as_attachment=False)
+
 # Route to handle file upload
 @app.route("/upload", methods=["POST"])
 def upload_file():
@@ -97,7 +104,7 @@ def update_datasets():
         # Update the currently working dataset
         if request.form.get("currentDataset"):
             currentDataset = json.loads(request.form["currentDataset"])
-            print("currentDataset:", currentDataset)
+            # print("currentDataset:", currentDataset)
             threading.Thread(target=read_input_data, args=(currentDataset,)).start()
 
         # Remove the files if deleted datasets are provided
@@ -210,7 +217,10 @@ def indexlist():
         else:
             compressor_id = request.form["compressor_id"]
             c = libpressio.PressioCompressor("pressio", {"pressio:compressor": compressor_id}, name="pressio")
-            top_level = c. get_configuration()["pressio"]
+            top_level = c.get_configuration()["pressio"]
+            doc = c.get_documentation()
+            # print("doc:", doc)
+            # print("top_level:", top_level)
             children = top_level["pressio:children"] # you'll see pressio/noop and pressio/sz3
             print("children:", children)
             options = top_level[compressor_id] # we determined that "sz3" is the right string here by stripping out "pressio/" from the entries in children

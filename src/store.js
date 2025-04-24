@@ -10,7 +10,7 @@ export default createStore({
   },
   mutations: {
     setFileData(state, payload) {
-      state.fileData = payload.file;
+      state.fileData = payload.content;
       state.dimensions = payload.dimensions;
       state.precision = payload.precision;
     },

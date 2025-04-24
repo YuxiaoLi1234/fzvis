@@ -10,6 +10,7 @@
   },
   "dependencies": {
     "@floating-ui/vue": "^1.1.6",
+    "@kitware/vtk.js": "32.12",
     "axios": "^1.6.2",
     "bootstrap": "^5.0",
     "bootstrap-icons": "^1.11.3",
@@ -22,7 +23,6 @@
     "mitt": "^3.0.1",
     "npyjs": "^0.6.0",
     "tdesign-vue-next": "^1.7.1",
-    "vtk.js": "32.12",
     "vue": "^3.2.13",
     "vuex": "^4.1.0"
   },

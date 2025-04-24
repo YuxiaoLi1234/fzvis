@@ -102,16 +102,16 @@
               <h1 class="modal-title fs-5" id="showConfigModalLabel">Saved configuration</h1>
               <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
             </div>
-            <div class="modal-body">
+            <div class="modal-body" v-if="Object.keys(this.savedConfigurations).length > 0">
               <div v-for="(config, name) in savedConfigurations" :key="name" class="config-card">
-                <h5>{{ name }}</h5>
-                <ul v-if="editingConfig !== name">
+                <h5>{{ name }}<button class="btn btn-danger ms-1" aria-label="Delete" title="Delete the configuration" @click="delete savedConfigurations[name]"><i class="bi bi-trash"></i></button></h5> 
+                <ul>
                   <li><strong>Compressor:</strong> {{ config.compressor_id.toUpperCase() }}</li>
                   <li v-for="(value, key) in formatConfig(config.compressor_config)" :key="key">
                     <strong>{{ key }}:</strong> {{ value }}
                   </li>
                 </ul>
-                <ul v-else>
+                <!-- <ul v-else>
                   <li>
                     <strong>Compressor:</strong> {{ config.compressor_id.toUpperCase() }}
                   </li>
@@ -119,12 +119,12 @@
                     <strong>{{ get_formatkey(key) }}:</strong>
                     <input v-model="editingData.compressor_config[key]" class="edit-input" />
                   </li>
-                </ul>
+                </ul> -->
               </div>
             </div>
             <div class="modal-footer">
               <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
-              <button type="button" class="btn btn-primary">Edit configuration</button>
+              <!-- <button type="button" class="btn btn-primary">Save changes</button> -->
             </div>
           </div>
         </div>
@@ -307,6 +307,7 @@ export default {
             }];
           }
 
+          this.configuredValues = {};
           Object.keys(formattedOptions).forEach(optionName => {
             this.configuredValues[optionName] = null;
           });
@@ -352,7 +353,7 @@ export default {
       // corrected config format:
       // savedConfig {"compressor_config":{"sz3:algorithm_str":"ALGO_INTERP","sz3:abs_error_bound":0.001,"sz3:intrep_algo_str":"INTERP_ALGO_CUBIC","sz3:metric":"composite"},"compressor_id":"sz3"}
       this.savedConfigurations[this.currentConfigName] = config;
-      console.log("config", JSON.stringify(config));
+      console.log("savedConfigurations", JSON.stringify(this.savedConfigurations));
       this.currentConfigName = "";
     },
 
@@ -506,7 +507,7 @@ export default {
           // Auto dismiss
           setTimeout(() => {
             alertBox.classList.remove("show");
-          }, 5000);
+          }, 6000);
         }
         // this.input_data = response.data['input_data']
 

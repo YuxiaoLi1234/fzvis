@@ -29,7 +29,7 @@
     </div>
     <button type="button" class="btn btn-success me-2 my-1" @click="uploadFile" :disabled="!isFormValid">Submit</button>
     <!-- Button trigger modal -->
-    <button type="button" class="btn btn-info my-1" @click="fetchDatasets" title="View all uploaded datasets">View datasets</button>
+    <button ref="viewDatasetBtn" type="button" class="btn btn-info my-1" @click="viewDatasets" title="View all uploaded datasets">View datasets</button>
     <div v-if="currentDataset == null" class="text-danger mt-1">
       No dataset selected for processing.
     </div>
@@ -40,12 +40,12 @@
 
     <!-- Progress bar -->
     <div v-show="showProgressBar" class="progress my-2">
-      <div id="progressBar" class="progress-bar progress-bar-striped progress-bar-animated" role="progressbar" aria-valuenow="75" aria-valuemin="0" aria-valuemax="100" style="width: 0%">0%</div>
+      <div ref="progressBar" class="progress-bar progress-bar-striped progress-bar-animated" role="progressbar" aria-valuenow="75" aria-valuemin="0" aria-valuemax="100" style="width: 0%">0%</div>
     </div>
 
     <!-- Alert message box -->
-    <div id="uploadAlert" class="alert alert-dismissible fade" role="alert" tabindex="-1">
-      <span id="uploadAlertMessage">Placeholder</span>
+    <div ref="progressAlert" class="alert alert-dismissible fade" role="alert" tabindex="-1">
+      <span ref="progressAlertMessage">Placeholder</span>
       <!-- <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button> -->
     </div>
 
@@ -66,8 +66,8 @@
                 <button v-if="dataset.name == datasetToChange?.name" class="btn btn-primary ms-1" aria-label="Select" title="Select the dataset"><i class="bi bi-check-circle"></i></button>
                 <button v-else @click="datasetToChange = dataset" class="btn btn-outline-primary ms-1" aria-label="Select" :disabled="datasetsToDelete.includes(key)" title="Select the dataset"><i class="bi bi-check-circle"></i></button>
 
-                <button v-if="datasetsToDelete.includes(key)" class="btn btn-danger ms-1" aria-label="Delete" title="Delete the dataset"><i class="bi bi-trash"></i></button>
-                <button v-else @click="datasetsToDelete.push(key)" class="btn btn-outline-danger ms-1" aria-label="Delete" :disabled="datasetToChange?.name == dataset.name" title="Delete the dataset"><i class="bi bi-trash"></i></button>
+                <button v-if="datasetsToDelete.includes(key)" class="btn btn-danger ms-1" aria-label="Delete" title="Delete the dataset" @click="datasetsToDelete.splice(datasetsToDelete.indexOf(key), 1)"><i class="bi bi-trash"></i></button>
+                <button v-else class="btn btn-outline-danger ms-1" aria-label="Delete" :disabled="datasetToChange?.name == dataset.name" title="Delete the dataset" @click="datasetsToDelete.push(key)"><i class="bi bi-trash"></i></button>
               </li>
             </ul>
             <div v-else class="text-warning py-2">
@@ -75,7 +75,7 @@
             </div>
           </div>
           <div class="modal-footer">
-            <button type="button" class="btn btn-secondary" data-bs-dismiss="modal" @click="rollbackData">Close</button>
+            <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
             <button type="button" class="btn btn-primary" data-bs-dismiss="modal" @click="processChanges">Save changes</button>
           </div>
         </div>
@@ -87,9 +87,23 @@
 <script>
 
 import axios from 'axios'
-import {Modal} from 'bootstrap';
+import { Modal } from 'bootstrap';
+import { ref } from 'vue';
 export default {
   name: 'InputDataset',
+  
+  setup() {
+    const progressBar = ref(null);
+    const progressAlert = ref(null);
+    const progressAlertMessage = ref(null);
+
+    return {
+      progressBar,
+      progressAlert,
+      progressAlertMessage,
+    };
+  },
+
   data() {
     return {
       depth: null,
@@ -107,31 +121,53 @@ export default {
     }
   },
 
+  computed: {
+    hasDatasets() {
+      return Object.keys(this.uploadedDatasets).length > 0;
+    },
+
+    // Check if all form fields are filled before allowing emission
+    isFormValid() {
+      if (this.currentDataset) {
+        return this.width && this.height && this.depth && this.precision;
+      }
+      return this.file && this.width && this.height && this.depth && this.precision;
+    },
+  },
+  
   methods:{
-    fetchDatasets() {
-      const baseURL = process.env.VUE_APP_API_BASE;
-      axios.get(`${baseURL}/listDatasets`).then(response => {
-        this.uploadedDatasets = response.data.datasets;
-        this.datasetToChange = this.currentDataset;
-        const modalElement = document.getElementById("datasetModal");
+    viewDatasets() {
+      this.datasetToChange = this.currentDataset;
+      this.datasetsToDelete = [];
+      const modalElement = document.getElementById("datasetModal");
+
+      if (!this.hasDatasets) {
+        const baseURL = process.env.VUE_APP_API_BASE;
+        axios.get(`${baseURL}/listDatasets`).then(response => {
+          this.uploadedDatasets = response.data.datasets;
+          if (modalElement) {
+            var modal = new Modal(modalElement);
+            modal.show();
+          }
+        })
+        .catch(error => {
+          if (this.progressAlert && this.progressAlertMessage) {
+            this.progressAlert.classList.remove("alert-success");
+            this.progressAlert.classList.add("alert-danger", "show");
+            this.progressAlertMessage.textContent = `Fetch saved datasets failed. ${error}`;
+            // Auto dismiss
+            setTimeout(() => {
+              this.progressAlert.classList.remove("show");
+            }, 6000);
+          }
+        });
+      } 
+      else {
         if (modalElement) {
           var modal = new Modal(modalElement);
           modal.show();
         }
-      })
-      .catch(error => {
-        const alertBox = document.getElementById("uploadAlert");
-        const alertMessage = document.getElementById("uploadAlertMessage");
-        if (alertBox && alertMessage) {
-          alertBox.classList.remove("alert-success");
-          alertBox.classList.add("alert-danger", "show");
-          alertMessage.textContent = `Fetch saved datasets failed. ${error}`;
-          // Auto dismiss
-          setTimeout(() => {
-            alertBox.classList.remove("show");
-          }, 6000);
-        }
-      });
+      }
     },
 
     handleFileChange(event) {
@@ -150,7 +186,7 @@ export default {
 
     emitFileData() {
       this.$store.commit("setFileData", {
-        file: this.file,
+        content: this.fileContent,
         dimensions: [Number(this.width), Number(this.height), Number(this.depth)],
         precision: this.precision
       });
@@ -161,7 +197,9 @@ export default {
       const formData = new FormData();
       
       // Generate a unique ID for the dataset
-      formData.append("file", this.file);
+      if (!this.currentDataset) {
+        formData.append("file", this.file);
+      }
       formData.append("width", this.width);
       formData.append("height", this.height);
       formData.append("depth", this.depth);
@@ -169,71 +207,57 @@ export default {
       
       this.showProgressBar = true;
       const baseURL = process.env.VUE_APP_API_BASE;
-      const alertBox = document.getElementById("uploadAlert");
-      const alertMessage = document.getElementById("uploadAlertMessage");
-      const progressBar = document.getElementById("progressBar");
       
       axios.post(`${baseURL}/upload`, formData, {
-        onUploadProgress: function(eventData) {
+        onUploadProgress: (eventData) => {
           if (eventData.lengthComputable) {
             const percentComplete = Math.round((eventData.loaded / eventData.total) * 90);
-            progressBar.style.width = percentComplete + '%';
-            progressBar.setAttribute("aria-valuenow", percentComplete);
-            progressBar.textContent = percentComplete + '%';
+            this.progressBar.style.width = percentComplete + '%';
+            this.progressBar.setAttribute("aria-valuenow", percentComplete);
+            this.progressBar.textContent = percentComplete + '%';
           }
-          if (alertBox && alertMessage) {
-            alertBox.classList.remove("alert-danger");
-            alertBox.classList.remove("alert-success");
-            alertBox.classList.add("alert-secondary", "show");
-            alertMessage.textContent = "Processing...";
-          }
+          this.progressAlert.classList.remove("alert-danger");
+          this.progressAlert.classList.remove("alert-success");
+          this.progressAlert.classList.add("alert-secondary", "show");
+          this.progressAlertMessage.textContent = "Uploading the dataset file...";
         }
       })
       .then(response => {
         this.currentDataset = response.data.dataset;
         this.emitFileData();
-        progressBar.style.width = "100%";
-        progressBar.setAttribute("aria-valuenow", 100);
-        progressBar.textContent = "100%";
+        this.progressBar.style.width = "100%";
+        this.progressBar.setAttribute("aria-valuenow", 100);
+        this.progressBar.textContent = "100%";
         setTimeout(() => {
           this.showProgressBar = false;
-          progressBar.style.width = "0%";
+          this.progressBar.style.width = "0%";
         }, 3000);
 
-        if (alertBox && alertMessage) {
-          alertBox.classList.remove("alert-danger");
-          alertBox.classList.remove("alert-secondary");
-          alertBox.classList.add("alert-success", "show");
-          alertMessage.textContent = "File uploaded successfully!";
-          // Auto dismiss
-          setTimeout(() => {
-            alertBox.classList.remove("show");
-          }, 5000);
-        }
+        this.progressAlert.classList.remove("alert-danger");
+        this.progressAlert.classList.remove("alert-secondary");
+        this.progressAlert.classList.add("alert-success", "show");
+        this.progressAlertMessage.textContent = "Uploaded file successfully!";
+        // Auto dismiss
+        setTimeout(() => {
+          this.progressAlert.classList.remove("show");
+        }, 5000);
       })
-      .catch (error => {
-        if (alertBox && alertMessage) {
-          alertBox.classList.remove("alert-success");
-          alertBox.classList.remove("alert-secondary");
-          alertBox.classList.add("alert-danger", "show");
-          alertMessage.textContent = `Upload failed. ${error}`;
-          // Auto dismiss
-          setTimeout(() => {
-            alertBox.classList.remove("show");
-          }, 6000);
-        }
+      .catch(error => {
+        this.progressAlert.classList.remove("alert-success");
+        this.progressAlert.classList.remove("alert-secondary");
+        this.progressAlert.classList.add("alert-danger", "show");
+        this.progressAlertMessage.textContent = `Upload file failed. ${error}`;
+        // Auto dismiss
+        setTimeout(() => {
+          this.progressAlert.classList.remove("show");
+        }, 6000);
       });
 
-      // alert('Dataset emitted successfully!');
     },
 
-    rollbackData() {
-      this.datasetToChange = this.currentDataset;
-      this.datasetsToDelete = [];
-    },
-
-    processChanges() {
+    async processChanges() {
       const formData = new FormData();
+      const baseURL = process.env.VUE_APP_API_BASE;
       
       if (this.currentDataset != this.datasetToChange) {
         this.currentDataset = this.datasetToChange;
@@ -241,37 +265,71 @@ export default {
         this.height = this.currentDataset.height;
         this.depth = this.currentDataset.depth;
         this.precision = this.currentDataset.precision;
+        console.log("Change dataset to:", JSON.stringify(this.currentDataset));
+        // Get new file from the server
         formData.append("currentDataset", JSON.stringify(this.currentDataset));
+        await axios.get(`${baseURL}/download`, {
+          params: { filename: this.currentDataset.name },
+          responseType: "arraybuffer", 
+          onDownloadProgress: (eventData) => {
+            this.showProgressBar = true;
+            if (eventData.lengthComputable) {
+              const percentComplete = Math.round((eventData.loaded / eventData.total) * 90);
+              this.progressBar.style.width = percentComplete + '%';
+              this.progressBar.setAttribute("aria-valuenow", percentComplete);
+              this.progressBar.textContent = percentComplete + '%';
+            }
+
+            this.progressAlert.classList.remove("alert-danger");
+            this.progressAlert.classList.remove("alert-success");
+            this.progressAlert.classList.add("alert-secondary", "show");
+            this.progressAlertMessage.textContent = "Downloading the dataset file...";
+          }
+        }).then(response => {
+          this.fileContent = response.data;
+          this.emitFileData();
+
+          this.progressBar.style.width = "100%";
+          this.progressBar.setAttribute("aria-valuenow", 100);
+          this.progressBar.textContent = "100%";
+
+          this.progressAlert.classList.remove("alert-danger");
+          this.progressAlert.classList.remove("alert-secondary");
+          this.progressAlert.classList.add("alert-success", "show");
+          this.progressAlertMessage.textContent = "Downloaded file successfully!";
+          // Auto dismiss
+          setTimeout(() => {
+            this.showProgressBar = false;
+            this.progressBar.style.width = "0%";
+            this.progressAlert.classList.remove("show");
+          }, 5000);
+
+        })
+        .catch(error => {
+          console.error("Download file failed.", error);
+        });
       }
 
       // delete datasets
       if (this.datasetsToDelete.length > 0) {
         formData.append("deletedDatasets", JSON.stringify(this.datasetsToDelete));
+        this.datasetsToDelete.forEach(key => delete this.uploadedDatasets[key]);
       }
 
       // check if there are any changes made 
       if (!formData.entries().next().done) {
-        const baseURL = process.env.VUE_APP_API_BASE;
         axios.post(`${baseURL}/updateDatasets`, formData).then(response => {
-          this.uploadedDatasets = response.data.datasets;
-          console.log("uploadedDatasets:", JSON.stringify(this.uploadedDatasets));
+          if (!(JSON.stringify(this.uploadedDatasets) === JSON.stringify(response.data.datasets))) {
+            console.error("uploadedDatasets are not equal!");
+          }
         })
-        .catch (error => {
-          console.log("Update datasets failed.", error);
+        .catch(error => {
+          console.error("Update datasets failed.", error);
         });
       }
     },
   },
-  computed: {
-    hasDatasets() {
-      return Object.keys(this.uploadedDatasets).length > 0;
-    },
-
-    // Check if all form fields are filled before allowing emission
-    isFormValid() {
-      return this.file && this.width && this.height && this.depth && this.precision;
-    },
-  },
+  
 };
 </script>
  
