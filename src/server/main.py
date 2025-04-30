@@ -26,6 +26,16 @@ saved_datasets = {}
 app = Flask(__name__)
 CORS(app)
 
+# Get the file size in a human readable format
+def get_human_readable_size(filepath): 
+    if os.path.isfile(filepath):
+        file_size = os.path.getsize(filepath)
+        for unit in ['B', 'KB', 'MB', 'GB', 'TB', 'PB']:
+            if file_size < 1024.0:
+                return f"{file_size:.2f} {unit}"
+            file_size /= 1024.0
+
+
 # Read input data from the file
 def read_input_data(dataset):
     global input_data
@@ -44,16 +54,19 @@ def read_input_data(dataset):
     input_data = input_data.reshape(width, height, depth)
     input_data = np.nan_to_num(input_data, nan=0)
 
+
 # Save metadata to the disk
 def save_metadata_to_file(filekey, metadata):
     saved_datasets[filekey] = metadata
     with open(metadata_file, 'w') as f:
         json.dump(saved_datasets, f, indent=4)
 
+
 # Route to get the list of uploaded datasets
 @app.route("/listDatasets", methods=["GET", "POST"])
 def get_uploaded_datasets():
     return jsonify({"datasets" : saved_datasets}), 200
+
 
 # Route to send the file back to the front end
 @app.route("/download", methods=["GET", "POST"])
@@ -62,40 +75,51 @@ def send_data_file():
     filepath = upload_dir / filename
     return send_file(filepath, as_attachment=False)
 
+
 # Route to handle file upload
 @app.route("/upload", methods=["POST"])
 def upload_file():
     try:
-        if "file" not in request.files:
-            return jsonify({"error" : "No file part"}), 400
-        
-        file = request.files["file"]
-        if file.filename == "":
-            return jsonify({"error" : "No file selected"}), 400
+        dataset_metadata = {}
+        read_data_file = False
+        # Uploading a new dataset 
+        if "file" in request.files: 
+            file = request.files["file"]
+            if file.filename == "":
+                return jsonify({"error" : "No file selected"}), 400
 
-        # Save file
-        filepath = os.path.join(upload_dir, file.filename)
-        file.save(filepath)
+            # Save file
+            filename = file.filename
+            filepath = os.path.join(upload_dir, filename)
+            file.save(filepath)
 
-        # Use the filename as the key as we don't allow two duplicate files
-        dataset_metadata = {
-            "name" : file.filename,
-            "width" : request.form.get("width"),
-            "height" : request.form.get("height"),
-            "depth" : request.form.get("depth"),
-            "precision" : request.form.get("precision"),
-        }
-        threading.Thread(target=read_input_data, args=(dataset_metadata,)).start()
+            # Use the filename as the key for now as we don't allow two duplicate files
+            dataset_metadata["name"] = filename
+            dataset_metadata["size"] = get_human_readable_size(filepath)
+            read_data_file = True
+            
+        # Updating an existing dataset
+        elif request.form.get("filename"):
+            filename = request.form.get("filename")
+            dataset_metadata = saved_datasets[filename]
 
-        saved_datasets[file.filename] = dataset_metadata
+        dataset_metadata["width"] = request.form.get("width")
+        dataset_metadata["height"] = request.form.get("height")
+        dataset_metadata["depth"] = request.form.get("depth")
+        dataset_metadata["precision"] = request.form.get("precision")
+        if read_data_file:
+            threading.Thread(target=read_input_data, args=(dataset_metadata,)).start()
+
+        # Save metadata to a json file
+        saved_datasets[filename] = dataset_metadata
         with open(metadata_file, 'w') as f:
             json.dump(saved_datasets, f, indent=4)
-        
         return jsonify({"dataset" : dataset_metadata}), 200
         
     except Exception as e:
         print("Error in upload_file():", e)
         return jsonify({"error" : str(e)}), 500
+
 
 # Route to handle datasets update
 @app.route("/updateDatasets", methods=["POST"])
@@ -244,6 +268,7 @@ def serve_frontend(path):
         return send_from_directory(dist_dir, path)
     else:
         return send_from_directory(dist_dir, 'index.html')
+
 
 # Main entry of the server program
 if __name__ == '__main__':
