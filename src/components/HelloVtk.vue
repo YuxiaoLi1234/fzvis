@@ -48,6 +48,7 @@ import vtkColorTransferFunction from '@kitware/vtk.js/Rendering/Core/ColorTransf
 import vtkPiecewiseFunction from '@kitware/vtk.js/Common/DataModel/PiecewiseFunction';
 import vtkImageMapper from '@kitware/vtk.js/Rendering/Core/ImageMapper';
 import vtkImageSlice from '@kitware/vtk.js/Rendering/Core/ImageSlice';
+import { SlicingMode } from '@kitware/vtk.js/Rendering/Core/ImageMapper/Constants';
 
 export default {
   name: 'HelloVtk',
@@ -84,35 +85,27 @@ export default {
       const mapper = vtkVolumeMapper.newInstance();
       mapper.setInputData(imageData);
 
-      // Optimizing sampling settings
-      const dims = imageData.getDimensions();
-      const maxDim = Math.max(...dims);
-      if (maxDim > 2000) {
-        mapper.setSampleDistance(1.0);
-        mapper.setImageSampleDistance(2.0);
-        mapper.setAutoAdjustSampleDistances(true);
-      }
-      mapper.update();
-
       const actor = vtkVolume.newInstance();
       actor.setMapper(mapper);
 
       // Get the actual data range
       const dataRange = imageData.getPointData().getScalars().getRange();
+      // console.log("data range:", dataRange[0], dataRange[1]);
       
       // Set color and opacity transfer functions
-      const ctfun = vtkColorTransferFunction.newInstance();
-      const ofun = vtkPiecewiseFunction.newInstance();
+      const ctfunc = vtkColorTransferFunction.newInstance();
+      const otfunc = vtkPiecewiseFunction.newInstance();
 
       const preset = vtkColorMaps.getPresetByName(colormap.value);
-      ctfun.applyColorMap(preset);
-      ctfun.setMappingRange(dataRange[0], dataRange[1]);
+      ctfunc.applyColorMap(preset);
+      ctfunc.setMappingRange(dataRange[0], dataRange[1]);
+      ctfunc.updateRange();
 
-      ofun.addPoint(dataRange[0], 0.0);
-      ofun.addPoint(dataRange[1], 0.8);
+      otfunc.addPoint(dataRange[0], 0.0);
+      otfunc.addPoint(dataRange[1], 1.0);
 
-      actor.getProperty().setRGBTransferFunction(0, ctfun);
-      actor.getProperty().setScalarOpacity(0, ofun);
+      actor.getProperty().setRGBTransferFunction(0, ctfunc);
+      actor.getProperty().setScalarOpacity(0, otfunc);
       actor.getProperty().setScalarOpacityUnitDistance(1.0);
       actor.getProperty().setInterpolationTypeToLinear();
 
@@ -123,25 +116,39 @@ export default {
     function create2DTextureActor(imageData) {
       // Set color mapping function
       const dataRange = imageData.getPointData().getScalars().getRange();
-      const ctfun = vtkColorTransferFunction.newInstance();
+      // console.log("data range:", dataRange[0], dataRange[1]);
+
+      const ctfunc = vtkColorTransferFunction.newInstance();
       const preset = vtkColorMaps.getPresetByName(colormap.value);
-      ctfun.applyColorMap(preset);
-      ctfun.setMappingRange(dataRange[0], dataRange[1]);
+      ctfunc.applyColorMap(preset);
+      ctfunc.setMappingRange(dataRange[0], dataRange[1]);
+      ctfunc.updateRange();
+
+      const otfunc = vtkPiecewiseFunction.newInstance();
+      otfunc.addPoint(dataRange[0], 0.0);
+      otfunc.addPoint(dataRange[1], 1.0);
+      otfunc.updateRange();
 
       const mapper = vtkImageMapper.newInstance();
       mapper.setInputData(imageData);
-      mapper.setSlicingMode(vtkImageMapper.SlicingMode.K);
-      mapper.setSlice(0);
+      mapper.setSliceAtFocalPoint(true);
+      mapper.setSlicingMode(SlicingMode.Z);
 
       const actor = vtkImageSlice.newInstance();
       actor.setMapper(mapper);
-      actor.getProperty().setRGBTransferFunction(0, ctfun);
+      const window = dataRange[1] - dataRange[0];
+      const level = (dataRange[0] + dataRange[1]) / 2;
+      actor.getProperty().setColorWindow(window);
+      actor.getProperty().setColorLevel(level);
+      actor.getProperty().setRGBTransferFunction(0, ctfunc);
+      actor.getProperty().setPiecewiseFunction(0, otfunc);
       actor.getProperty().setInterpolationTypeToLinear();
 
       return actor;
     }
 
     function initializeVTK() {
+      // Only initialize the context once 
       if (!context.value && vtkContainer.value?.offsetWidth > 0) {
         const fullScreenRenderer = vtkFullScreenRenderWindow.newInstance({
           rootContainer: vtkContainer.value,
@@ -177,14 +184,16 @@ export default {
       const { renderer, renderWindow } = context.value;
       renderer.removeAllViewProps();
 
-      // Disable the 2D visualization for now
-      if (dimensions[0] == -1 || dimensions[1] == -1 || dimensions[2] == -1) {
-        console.log('Creating 2D texture...');
+      // Enable the 2D visualization if one of the dimension is 1
+      if (dimensions[0] == 1 || dimensions[1] == 1 || dimensions[2] == 1) {
+      // To disable the 2D visualization for now
+      // if (dimensions[0] == -1) {
         const actor = create2DTextureActor(cachedImageData);
         renderer.addActor(actor);
         context.value.actor = actor;
-      } else {
-        console.log('Creating volume...');
+      }
+      // Otherwise, render 3D volume
+      else {
         const actor = createVolumeActor(cachedImageData);
         renderer.addVolume(actor);
         context.value.actor = actor;
@@ -198,17 +207,16 @@ export default {
       // Delay init slightly to allow tab to become visible
       setTimeout(() => {
         initializeVTK();
-
         if (fileData.value && dimensions.value && precision.value) {
           renderData(fileData.value, dimensions.value, precision.value);
         }
       }, 200);
     });
 
-    // Rerender the volume when the file content changes
-    watch(fileData, (newVal) => {
-      if (newVal && dimensions.value && precision.value) {
-        renderData(newVal, dimensions.value, precision.value, true);
+    // Rerender the volume when the file info changes
+    watch([fileData, dimensions, precision], ([newFileData, newDimensions, newPrecision]) => {
+      if (newFileData && newDimensions && newPrecision) {
+        renderData(newFileData, newDimensions, newPrecision, true);
       }
     });
 
@@ -231,6 +239,7 @@ export default {
       vtkContainer,
       createImageData,
       create2DTextureActor,
+      renderData,
     };
   },
 };
