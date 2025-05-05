@@ -213,12 +213,12 @@ def indexlist():
         return result
     
     if request.method == 'POST':
-        if(int(request.form['get_options']) == 0):
-            if input_data is None:
-                return jsonify({"error": "No input dataset!"}), 400
-            configurations = json.loads(request.form.get('configurations'))
-            # print("configurations:", configurations)
-            try :
+        try:
+            if(int(request.form['get_options']) == 0):
+                if input_data is None:
+                    return jsonify({"error": "No input dataset!"}), 400
+                configurations = json.loads(request.form.get('configurations'))
+                # print("configurations:", configurations)
                 result = {}
                 decp_data = []
                 for config in configurations:
@@ -228,30 +228,31 @@ def indexlist():
                         result[output['compressor_name']] = {"compressor_id": output['compressor_id'],
                         "metrics": output['metrics'],}
                         decp_data.append(output['decp_data'])
-                print("result:", result)
+                result['decp_data'] = decp_data
                 # result['input_data'] = input_data.tolist()
-                # result['decp_data'] = decp_data
-                #return json.loads(json.dumps(output,indent=2))
                 return jsonify(result), 200
-            except Exception as e:
+                
+                # print(slice_number,sliced_id,slice_width,slice_height,type(input_data),len(input_data))
+            else:
+                compressor_id = request.form["compressor_id"]
+                c = libpressio.PressioCompressor("pressio", {"pressio:compressor": compressor_id}, name="pressio")
+                top_level = c.get_configuration()["pressio"]
+                doc = c.get_documentation()
+                print("doc:", json.dumps(doc, indent=4, sort_keys=True))
+                # print("top_level:", json.dumps(top_level, indent=4, sort_keys=True))
+                children = top_level["pressio:children"] # you'll see pressio/noop and pressio/sz3
+                print("children:", json.dumps(children, indent=4, sort_keys=True))
+                options = top_level[compressor_id] # we determined that "sz3" is the right string here by stripping out "pressio/" from the entries in children
+                highlevel = options["pressio:highlevel"]
+                print("options:", json.dumps(options, indent=4, sort_keys=True))
+                module_slots = {k: options[k] for k in options if k.startswith(compressor_id)}
+                
+                return jsonify({"highlevel" : highlevel, "options" : module_slots}), 200 
+        
+        except Exception as e:
                 print("Error in indexlist():", e)
                 return jsonify({"error": str(e)}), 500
         
-            # print(slice_number,sliced_id,slice_width,slice_height,type(input_data),len(input_data))
-        else:
-            compressor_id = request.form["compressor_id"]
-            c = libpressio.PressioCompressor("pressio", {"pressio:compressor": compressor_id}, name="pressio")
-            top_level = c.get_configuration()["pressio"]
-            doc = c.get_documentation()
-            # print("doc:", doc)
-            # print("top_level:", top_level)
-            children = top_level["pressio:children"] # you'll see pressio/noop and pressio/sz3
-            print("children:", children)
-            options = top_level[compressor_id] # we determined that "sz3" is the right string here by stripping out "pressio/" from the entries in children
-            print("options:", options)
-            module_slots = {k: options[k] for k in options if k.startswith(compressor_id)}
-            
-            return module_slots
     else:
         return jsonify({"error": "configuration is illegal"}), 400
 

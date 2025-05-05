@@ -6,7 +6,6 @@ export default createStore({
     compressedData: null,
     dimensions: null,
     precision: null,
-    selectedColormap: "Rainbow",
   },
   mutations: {
     setFileData(state, payload) {
@@ -16,9 +15,6 @@ export default createStore({
     },
     setCompressedData(state, compressedFile) {
       state.compressedData = compressedFile;
-    },
-    setSelectedColormap(state, colormap) {
-      state.selectedColormap = colormap;
     },
   },
   actions: {},
