@@ -475,7 +475,6 @@ export default {
           // console.log("response: ", response.data);
           for (const key in response.data) {
             let element = response.data[key]
-            console.log(element,key)
   
             if(key == 'input_data') continue;
             if(key == 'decp_data') continue;
@@ -501,9 +500,10 @@ export default {
           }
           // this.input_data = response.data['input_data']
   
-          this.compare_data['compressor_name'] = names
-          this.compare_data['compressor_config'] = configs
-          this.$store.commit("setCompressedData", response.data["decp_data"]);
+          this.compare_data['compressor_name'] = names;
+          this.compare_data['compressor_config'] = configs;
+
+          this.$store.commit("setCompressedData", response.data["decp_data"][0]);
           // document.getElementById('temp1').innerHTML = JSON.stringify(this.compare_data);
           // emitter.emit('myEvent', this.compare_data);
           // emitter.emit('inputdata', {"input_data":this.input_data, "width": this.width, "height":this.height, "depth":this.depth,"compressor_name":names, "decp_data": response.data['decp_data']});

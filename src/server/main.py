@@ -206,7 +206,7 @@ def indexlist():
                 "compressor_name": args['compressor_name'],
                 "compressor_id": args['compressor_id'],
                 "metrics": metrics1,
-                "decp_data": decomp_data.tolist()
+                "decp_data": decomp_data,
             }
         result = run_compressor(configs)
         
@@ -227,10 +227,13 @@ def indexlist():
                         output = comparing_compressor(config)
                         result[output['compressor_name']] = {"compressor_id": output['compressor_id'],
                         "metrics": output['metrics'],}
-                        decp_data.append(output['decp_data'])
+                        # flatten the decompressed data for the front end use
+                        print("decp_data.shape:", output["decp_data"].shape)
+                        print("original data:", np.count_nonzero(input_data))
+                        print("decompressed data:", np.count_nonzero(output["decp_data"]))
+                        decp_data.append(output['decp_data'].flatten().tolist())
                 result['decp_data'] = decp_data
-                # result['input_data'] = input_data.tolist()
-                return jsonify(result), 200
+                return result, 200
                 
                 # print(slice_number,sliced_id,slice_width,slice_height,type(input_data),len(input_data))
             else:
