@@ -24,6 +24,7 @@
     "npyjs": "^0.6.0",
     "tdesign-vue-next": "^1.7.1",
     "vue": "^3.2.13",
+    "vue-multiselect": "^3.2.0",
     "vuex": "^4.1.0"
   },
   "devDependencies": {

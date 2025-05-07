@@ -28,10 +28,10 @@
               </div>
               <p class="card-text">Detailed options are listed here.</p>
               <div v-for="(optionList, optionName) in filteredDetailOptions" :key="optionName">
-                <select class="form-select mb-2 me-2" :key="optionName" v-model="configuredValues['Detail'][optionName]" aria-label="optionName" @change="handleOptionsChange(optionName)">
-                  <option value=null disabled selected>Select {{ optionName }}</option>
-                  <option v-for="option in optionList" :key="option.id" :value="option">{{ option.label }}</option>
-                </select>
+                <multiselect class="mb-2 me-2" :options="optionList" v-model="configuredValues['Detail'][optionName]" :close-on-select="true" :clear-on-select="false" :placeholder="`Select ${optionName}`" label="label" track-by="id" @select="handleOptionsChange(optionName)" aria-label="optionName">
+                </multiselect>
+                <!-- <multiselect class="mb-2 me-2" :options="optionList" v-model="configuredValues['Detail'][optionName]" :multiple="optionName === 'Metric'" :close-on-select="optionName != 'Metric'" :clear-on-select="false" :placeholder="`Select ${optionName}`" label="label" track-by="id" @select="handleOptionsChange(optionName)" aria-label="optionName">
+                </multiselect> -->
                 <input v-if="optionName === 'Error Bound' && configuredValues['Detail'][optionName] && !configuredValues['Highlevel']['pressio:abs'] && !configuredValues['Highlevel']['pressio:rel']" type="number" class="form-control w-auto mb-2" placeholder="Enter value" min="0" step="0.001" v-model="configuredValues['Detail'][optionName].value">
               </div>
               <small class="d-block mb-2 text-muted">
@@ -67,24 +67,7 @@
       </div>
 
       <!-- 📌 Configuration panel -->
-      <div class="dropzone-panel p-2" @dragover.prevent @drop="onDrop">
-
-        <!-- 📌 Current configurations -->
-        <div class="dropped-item" v-for="(item, index) in droppedItems" :key="item.id">
-          <span class="item-category">{{ item.type }}</span>
-          <span>{{ item.label }}</span>
-
-          <input 
-            v-if="item.type === 'error bound'" 
-            type="number" 
-            v-model="item.value" 
-            placeholder="Enter bound value" 
-            class="error-input"
-          />
-
-          <button class="remove-button" @click="removeItem(index)">✖</button>
-        </div>
-
+      <div class="dropzone-panel p-2">
         <div v-if="Object.keys(savedConfigurations).length < 2" class="text-info pb-2">
           There is <strong>{{ Object.keys(savedConfigurations).length }}</strong> saved configuration.
         </div>
@@ -137,8 +120,12 @@
 
 <script>
 import axios from 'axios';
+import Multiselect from 'vue-multiselect';
 
 export default {
+  components: {
+    Multiselect,
+  },
   data() {
     return {
       availableOptions: {
@@ -181,17 +168,19 @@ export default {
       const options = this.compressorOptions[this.selectedCompressor.id]["Detail"];
       if (!options) return false;
 
-      return Object.keys(options).every(optionName => {
-        const config = this.configuredValues["Detail"][optionName];
-        if (!config?.id) return false;
-        if (optionName === 'Error Bound') {
-          return (
-            config.value !== undefined && // Value exists
-            config.value !== ''       // Not empty string
-          );
+      return Object.values(this.configuredValues["Detail"]).every((item) => {
+        // handle error bound: must have a value
+        if (item?.label?.startsWith("Error Bound:")) {
+          return item?.value !== undefined && item.value !== '';
         }
-        
-        return true; // Other fields only need id
+
+        // handle arrays: must be non-empty
+        if (Array.isArray(item)) {
+          return item.length > 0;
+        }
+
+        // regular options: must have an id
+        return item?.id !== undefined;
       });
     },
 
@@ -387,7 +376,7 @@ export default {
     },
 
     handleOptionsChange(optionName) {
-      console.log("optionName:", optionName);
+      // console.log("optionName:", optionName);
       if (optionName === 'Error Bound') {
         const selected = this.configuredValues["Detail"]?.["Error Bound"];
         console.log("selected:", selected);
@@ -406,7 +395,18 @@ export default {
 
       config.compressor_id = this.selectedCompressor.id;
       Object.values(this.configuredValues["Detail"]).forEach((item) => {
-        if (item.label.startsWith("Error Bound:")) {
+        // if item is an array
+        if (Array.isArray(item)) {
+          item.forEach(element => {
+            if (element?.id) {
+              const [prefix, key] = element.id.split("-");
+              config["compressor_config"][prefix] = config["compressor_config"][prefix] || [];
+              config["compressor_config"][prefix].push(key);
+            }
+          });
+        }
+        
+        else if (item.label.startsWith("Error Bound:")) {
           if(item.id.split(":")[0] != this.selectedCompressor.id){
             config["compressor_config"][item.id] = item.value
           }
@@ -417,8 +417,8 @@ export default {
         }
         
         else if(!item.label.startsWith("Compressor:")) {
-          console.log(item.id)
-          config["compressor_config"][item.id.split("-")[0]]= item.id.split("-")[1];
+          const [prefix, key] = item.id.split("-");
+          config["compressor_config"][prefix] = key;
         }
       });
 
@@ -547,3 +547,5 @@ export default {
   },
 };
 </script>
+
+<style src="vue-multiselect/dist/vue-multiselect.min.css"></style>
