@@ -6,6 +6,7 @@ export default createStore({
     compressedData: null,
     dimensions: null,
     precision: null,
+    showDecompression: false,
   },
   mutations: {
     setFileData(state, payload) {
@@ -15,6 +16,9 @@ export default createStore({
     },
     setCompressedData(state, compressedFile) {
       state.compressedData = compressedFile;
+    },
+    enableDecompressionView(state) {
+      state.showDecompression = true;
     },
   },
   actions: {},

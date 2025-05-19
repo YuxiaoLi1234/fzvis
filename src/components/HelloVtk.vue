@@ -10,6 +10,11 @@
     </div> -->
 
     <div id="options-top" class="d-flex flex-wrap justify-content-center mt-3 gap-2">
+      <!-- Toggle Button -->
+      <button @click="toggleLayout" class="btn btn-outline-primary">
+        <i class="bi bi-layout-split"></i>
+      </button>
+
       <select class="form-select w-auto" aria-label="colormap" v-model="colormap">
         <option value="rainbow">Rainbow</option>
         <option value="Viridis (matplotlib)">Viridis</option>
@@ -21,41 +26,45 @@
         <option v-for="preset in allPresets" :value="preset" :key="preset">{{ preset }}</option>
       </select> -->
       <input id="sliceID" type="number" min="0" class="form-control" style="max-width: 120px" placeholder="Slice ID" />
-      <button :class="['btn', sameCamera ? 'btn-primary' : 'btn-outline-primary']" @click="syncCamera">Sync camera<i class="bi bi-camera ms-1"></i></button>
+      <button :class="['btn', sameCamera ? 'btn-primary' : 'btn-outline-primary']" @click="syncCamera" :disabled="!showDecompression">Sync camera<i class="bi bi-camera ms-1"></i></button>
       <button id="undoBtn" class="btn btn-outline-info">Undo<i class="bi bi-arrow-counterclockwise ms-1"></i></button>
       <button id="resetBtn" class="btn btn-outline-info">Reset<i class="bi bi-arrow-clockwise ms-1"></i></button>
     </div>
 
 
     <!-- VTK visualization panel -->
-    <div class="position-relative mt-3">
-        <div class="card mb-3" style="height: 360px;">
-          <div class="card-header">
-            Original
-          </div>
-          <div class="card-body">
+    <div class="position-relative mt-3" :class="horizontalLayout ? 'd-flex gap-3' : ''">
+      <!-- Original Container -->
+      <div class="card" :style="horizontalLayout ? 'height: 360px; flex: 1;' : 'height: 360px; margin-bottom: 1rem;'">
+        <div class="card-header">
+          Original
+          <i type="button" class="bi bi-question-circle ms-1" title="Instructions" data-bs-toggle="popover" data-bs-placement="right" data-bs-html="true" data-bs-content="<ul><li>Use <b>scroll</b> to zoom.</li><li>Use <b>left click + drag</b> to move.</li><li>Use <b>ctrl + left click</b> to rotate. </li></ul>"></i>
+        </div>
+        <div class="card-body p-2">
+          <div style="width: 100%; height: 100%; position: relative;">
             <div ref="vtkContainerOriginal"></div>
           </div>
         </div>
+      </div>
 
-        <div class="card mt-3" style="height: 360px;">
-          <div class="card-header">
-            Decompressed
-          </div>
-          <div class="card-body">
+      <!-- Decompressed Container -->
+      <div class="card" :style="horizontalLayout ? 'height: 360px; flex: 1;' : 'height: 360px; margin-top: 1rem;'" v-show="showDecompression">
+        <div class="card-header">Decompressed</div>
+        <div class="card-body p-2">
+          <div style="width: 100%; height: 100%; position: relative;">
             <div ref="vtkContainerCompressed"></div>
           </div>
         </div>
+      </div>
 
       <!-- <div id="options-bottom" class="position-absolute start-50 translate-middle-x w-50 bottom-0 d-flex justify-content-center flex-wrap mb-3 z-3">
       </div> -->
     </div>
-
   </div>
 </template>
   
 <script>
-import { ref, onMounted, onBeforeUnmount, computed, watch } from 'vue';
+import { ref, onMounted, onBeforeUnmount, computed, watch, nextTick } from 'vue';
 import { useStore } from 'vuex';
 import * as d3 from 'd3-scale';
 import { formatDefaultLocale } from 'd3-format';
@@ -71,6 +80,12 @@ import vtkPiecewiseFunction from '@kitware/vtk.js/Common/DataModel/PiecewiseFunc
 import vtkImageMapper from '@kitware/vtk.js/Rendering/Core/ImageMapper';
 import vtkImageSlice from '@kitware/vtk.js/Rendering/Core/ImageSlice';
 import { SlicingMode } from '@kitware/vtk.js/Rendering/Core/ImageMapper/Constants';
+import vtkInteractorStyleManipulator from '@kitware/vtk.js/Interaction/Style/InteractorStyleManipulator';
+import vtkMouseCameraTrackballZoomManipulator from '@kitware/vtk.js/Interaction/Manipulators/MouseCameraTrackballZoomManipulator';
+import vtkGestureCameraManipulator from '@kitware/vtk.js/Interaction/Manipulators/GestureCameraManipulator';
+import vtkMouseCameraTrackballPanManipulator from '@kitware/vtk.js/Interaction/Manipulators/MouseCameraTrackballPanManipulator';
+import vtkMouseCameraTrackballRollManipulator from '@kitware/vtk.js/Interaction/Manipulators/MouseCameraTrackballRollManipulator';
+import vtkInteractorStyleTrackballCamera from '@kitware/vtk.js/Interaction/Style/InteractorStyleTrackballCamera';
 
 export default {
   name: 'HelloVtk',
@@ -80,16 +95,48 @@ export default {
     const dimensions = computed(() => store.state.dimensions);
     const precision = computed(() => store.state.precision);
     const compressedData = computed(() => store.state.compressedData);
+    const showDecompression = computed(() => store.state.showDecompression);
 
+    const horizontalLayout = ref(false);
     const vtkContainerOriginal = ref(null);
     const vtkContainerCompressed = ref(null);
     const context = ref(null);
     const colormap = ref("rainbow");
-    let sameCamera = ref(false);
     
+    let sameCamera = ref(false);
     let oldCamera = null;
-    let cachedImageData = null;
+    let cachedOriginalData = null;
     let cachedCompressedData = null;
+
+    function toggleLayout() {
+      horizontalLayout.value = !horizontalLayout.value;
+    }
+
+    function customize2DInteractorStyle() {
+      const interactorStyle = vtkInteractorStyleManipulator.newInstance();
+      interactorStyle.removeAllMouseManipulators();
+
+      // Set scroll to zoom
+      const zoomManipulator = vtkMouseCameraTrackballZoomManipulator.newInstance();
+      zoomManipulator.setScrollEnabled(true);
+      zoomManipulator.setDragEnabled(false);
+      interactorStyle.addMouseManipulator(zoomManipulator);
+
+      // Set drag to move around
+      const panManipulator = vtkMouseCameraTrackballPanManipulator.newInstance();
+      panManipulator.setButton(1);
+      panManipulator.setDragEnabled(true);
+      interactorStyle.addMouseManipulator(panManipulator);
+
+      // Set ctrl+left to roll
+      const rollManipulator = vtkMouseCameraTrackballRollManipulator.newInstance();
+      rollManipulator.setButton(1);
+      rollManipulator.setControl(true);
+      interactorStyle.addMouseManipulator(rollManipulator);
+      
+      interactorStyle.addGestureManipulator(vtkGestureCameraManipulator.newInstance());
+      return interactorStyle;
+    }
 
     function createImageData(content, dimensions, precision) {
       const imageData = vtkImageData.newInstance();
@@ -147,11 +194,6 @@ export default {
       ctfunc.setMappingRange(dataRange[0], dataRange[1]);
       ctfunc.updateRange();
 
-      const otfunc = vtkPiecewiseFunction.newInstance();
-      otfunc.addPoint(dataRange[0], 0.0);
-      otfunc.addPoint(dataRange[1], 1.0);
-      otfunc.updateRange();
-
       const mapper = vtkImageMapper.newInstance();
       mapper.setInputData(imageData);
       mapper.setSliceAtFocalPoint(true);
@@ -173,7 +215,8 @@ export default {
       imageActor.getProperty().setColorWindow(window);
       imageActor.getProperty().setColorLevel(level);
       imageActor.getProperty().setRGBTransferFunction(0, ctfunc);
-      imageActor.getProperty().setPiecewiseFunction(0, otfunc);
+      // imageActor.getProperty().setPiecewiseFunction(0, otfunc);
+      imageActor.getProperty().setOpacity(1.0);
       imageActor.getProperty().setInterpolationTypeToLinear();
 
       return imageActor;
@@ -222,8 +265,8 @@ export default {
             rootContainer: vtkContainerOriginal.value,
             containerStyle: {
               position: "absolute", 
-              width: "95%",
-              height: "80%",
+              width: "100%",
+              height: "100%",
               overflow: "hidden",
             },
           });
@@ -231,36 +274,58 @@ export default {
           const renderer = fullScreenRenderer.getRenderer();
           renderer.setBackground(0.2, 0.3, 0.4);
           const renderWindow = fullScreenRenderer.getRenderWindow();
+
+          const resizeObserver = new ResizeObserver(() => {
+            fullScreenRenderer.resize();
+            renderWindow.render();
+          });
+          resizeObserver.observe(vtkContainerOriginal.value);
+
           contextData.original = {
             fullScreenRenderer,
             renderer,
             renderWindow,
+            resizeObserver,
           };
         }
 
+        context.value = contextData;
+      }
+    }
+
+    function initializeVTKCompressed() {
+      // Only initialize the context once 
+      if (!context.value.compressed) {
         // Initialize the renderer for (de)compressed dataset
         if (vtkContainerCompressed.value?.offsetWidth > 0) {
           const fullScreenRenderer = vtkFullScreenRenderWindow.newInstance({
             rootContainer: vtkContainerCompressed.value,
             containerStyle: {
               position: "absolute", 
-              width: "95%",
-              height: "80%",
+              width: "100%",
+              height: "100%",
               overflow: "hidden",
             },
           });
-  
+          
           const renderer = fullScreenRenderer.getRenderer();
           renderer.setBackground(0.2, 0.3, 0.4);
           const renderWindow = fullScreenRenderer.getRenderWindow();
-          contextData.compressed = {
+
+          
+          const resizeObserver = new ResizeObserver(() => {
+            fullScreenRenderer.resize();
+            renderWindow.render();
+          });
+          resizeObserver.observe(vtkContainerCompressed.value);
+
+          context.value.compressed = {
             fullScreenRenderer,
             renderer,
             renderWindow,
+            resizeObserver,
           };
         }
-
-        context.value = contextData;
       }
     }
 
@@ -270,8 +335,8 @@ export default {
         return;
       }
 
-      if (!cachedImageData || forceUpdate) {
-        cachedImageData = createImageData(content, dimensions, precision);
+      if (!cachedOriginalData || forceUpdate) {
+        cachedOriginalData = createImageData(content, dimensions, precision);
       }
 
       const { renderer, renderWindow } = context.value.original;
@@ -291,7 +356,18 @@ export default {
         if (sliceInput) {
           sliceInput.disabled = true;
         }
-        actor = create2DImageActor(cachedImageData);
+        // Set camera properties for 2D visualization
+        const camera = renderer.getActiveCamera();
+        camera.setParallelProjection(true);
+        camera.setPosition(0, 0, 1);
+        camera.setFocalPoint(0, 0, 0);
+        camera.setViewUp(0, 1, 0);
+
+        // Set 2D image visualization interactor style
+        const interactorStyle = customize2DInteractorStyle();
+        renderWindow.getInteractor().setInteractorStyle(interactorStyle);
+
+        actor = create2DImageActor(cachedOriginalData);
         renderer.addActor(actor);
         context.value.original.actor = actor;
       }
@@ -300,7 +376,9 @@ export default {
         if (sliceInput) {
           sliceInput.disabled = false;
         }
-        actor = createVolumeActor(cachedImageData);
+        const interactorStyle = vtkInteractorStyleTrackballCamera.newInstance();
+        renderWindow.getInteractor().setInteractorStyle(interactorStyle);
+        actor = createVolumeActor(cachedOriginalData);
         renderer.addVolume(actor);
         context.value.original.actor = actor;
       }
@@ -326,8 +404,18 @@ export default {
       let actor;
       // Enable the 2D visualization if one of the dimension is 1
       if (dimensions[0] == 1 || dimensions[1] == 1 || dimensions[2] == 1) {
-      // To disable the 2D visualization for now
-      // if (dimensions[0] == -1) {
+         // Set camera properties for 2D visualization
+        const camera = renderer.getActiveCamera();
+        camera.setParallelProjection(true);
+        camera.setParallelProjection(true);
+        camera.setPosition(0, 0, 1);
+        camera.setFocalPoint(0, 0, 0);
+        camera.setViewUp(0, 1, 0);
+
+        // Set 2D image visualization interactor style
+        const interactorStyle = customize2DInteractorStyle();
+        renderWindow.getInteractor().setInteractorStyle(interactorStyle);
+        
         actor = create2DImageActor(cachedCompressedData);
         renderer.addActor(actor);
         context.value.compressed.actor = actor;
@@ -381,22 +469,34 @@ export default {
     // Rerender the volume when the file info changes
     watch([fileData, dimensions, precision], ([newFileData, newDimensions, newPrecision]) => {
       if (newFileData && newDimensions && newPrecision) {
-        renderOriginal(newFileData, newDimensions, newPrecision, true);
+        setTimeout(() => {
+          renderOriginal(newFileData, newDimensions, newPrecision, true);
+        }, 300);
+      }
+    });
+
+    watch(showDecompression, newVal => {
+      if (newVal) {
+        nextTick(() => {
+          initializeVTKCompressed();
+        });
       }
     });
 
     watch([compressedData, dimensions, precision], ([newFileData, newDimensions, newPrecision]) => {
       if (newFileData && newDimensions && newPrecision) {
-        renderCompressed(newFileData, newDimensions, newPrecision, true);
+        setTimeout(() => {
+          renderCompressed(newFileData, newDimensions, newPrecision, true);
+        }, 300);
       }
     });
 
     // Rerender the volume when the colormap changes
     watch(colormap, (newColormap) => {
       console.log("Colormap is changed to:", newColormap)
-      if (newColormap && cachedImageData) {
+      if (newColormap && cachedOriginalData) {
         // Create a new color transfer function
-        const dataRange = cachedImageData.getPointData().getScalars().getRange();
+        const dataRange = cachedOriginalData.getPointData().getScalars().getRange();
         const ctfunc = vtkColorTransferFunction.newInstance();
         const preset = vtkColorMaps.getPresetByName(newColormap);
         ctfunc.applyColorMap(preset);
@@ -423,6 +523,9 @@ export default {
           const { fullScreenRenderer, actor } = context.value[key];
           if (actor) actor.delete();
           fullScreenRenderer.delete();
+          if (context.value[key]?.resizeObserver) {
+            context.value[key].resizeObserver.disconnect(); 
+          }
         });
         context.value = null;
       }
@@ -430,14 +533,17 @@ export default {
 
     return {
       colormap,
-      vtkContainerOriginal,
-      vtkContainerCompressed,
       createImageData,
       create2DImageActor,
+      horizontalLayout,
       renderOriginal,
       renderCompressed,
       sameCamera,
+      showDecompression,
       syncCamera,
+      toggleLayout,
+      vtkContainerCompressed,
+      vtkContainerOriginal,
     };
   },
 

@@ -37,7 +37,7 @@
               <small class="d-block mb-2 text-muted">
                 {{ isConfigValid ? 'Click submit to record configuration.' : 'Please fill all fields to submit.' }}
               </small>
-              <button type="button" class="btn btn-primary me-2" :disabled="!isConfigValid" data-bs-toggle="modal" data-bs-target="#saveConfigModal" @click="currentConfigName = selectedCompressor.id + '_' + getFormattedTimestamp()">Submit</button>
+              <button type="button" class="btn btn-primary me-2" :disabled="!isConfigValid" data-bs-toggle="modal" data-bs-target="#saveConfigModal" @click="currentConfigName = selectedCompressor.id + '_' + getFormattedTimestamp()">Save</button>
               <button type="reset" class="btn btn-secondary" @click="resetConfiguredValues">Reset</button>
             </div>
           </div>
@@ -379,7 +379,7 @@ export default {
       // console.log("optionName:", optionName);
       if (optionName === 'Error Bound') {
         const selected = this.configuredValues["Detail"]?.["Error Bound"];
-        console.log("selected:", selected);
+        // console.log("selected:", selected);
         if (selected && selected.id.toLowerCase().includes("abs")) {
           this.configuredValues["Detail"]["Error Bound"].value = this.configuredValues["Highlevel"]["pressio:abs"];
         }
@@ -467,6 +467,7 @@ export default {
           alertBox.classList.add("alert-secondary", "show");
           alertMessage.textContent = "Processing...";
         }
+        this.$store.commit("enableDecompressionView");
 
         const baseURL = process.env.VUE_APP_API_BASE;
         axios.post(`${baseURL}/indexlist`, this.formData).then(response => {

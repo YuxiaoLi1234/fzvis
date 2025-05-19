@@ -7,10 +7,16 @@ import bootstrap from 'bootstrap/dist/js/bootstrap.bundle.min.js'
 import 'bootstrap/dist/css/bootstrap.min.css';
 import 'bootstrap-icons/font/bootstrap-icons.css';
 
-createApp(App).use(store).mount('#app')
+createApp(App).use(store).mount('#app');
 
 // Initialize all tooltips
 document.querySelectorAll('[data-bs-toggle="tooltip"]')
 .forEach(tooltip => {
   new bootstrap.Tooltip(tooltip)
-})
+});
+
+// Initialize all popovers
+document.querySelectorAll('[data-bs-toggle="popover"]')
+.forEach(popover => {
+  new bootstrap.Popover(popover)
+});
