@@ -1,35 +1,69 @@
 <template>
   <div class="container align-items-center">
-    <h1 class="h3 px-2 pt-3 pb-2">Dataset Settings</h1>
+    <h1 class="h3 px-2 mt-3">Dataset Settings
+      <i type="button" class="bi bi-info-circle ms-2 fs-5" data-bs-container="body" data-bs-toggle="popover" data-bs-placement="right" data-bs-html="true" data-bs-content="Currently support: <b>raw</b> and <b>NetCDF</b> file formats."></i>
+    </h1>
     
-    <input type="file" class="form-control" id="fileloader" @change="handleFileChange">
+    <input type="file" class="form-control my-2" id="fileloader" @change="handleFileChange">
 
-    <div class="row g-3 py-2">
-      <div class="col-md-4 py-1">
-        <label for="width" class="form-label mx-1 mb-0">Width:</label>
-        <input class="form-control" type="number" min="1" label="width:" v-model="width" placeholder="500" />
-      </div>
-      <div class="col-md-4 py-1">
-        <label for="height" class="form-label mx-1 mb-0">Height:</label>
-        <input class="form-control" type="number" min="1" label="height:" v-model="height" placeholder="500" />
-      </div>
-      <div class="col-md-4 py-1">
-        <label for="depth" class="form-label mx-1 mb-0">Depth:</label>
-        <input class="form-control" type="number" min="1" label="depth:" v-model="depth" placeholder="500" />
-      </div>
-      <div class="col-md-6 mt-1 py-1">
-        <select class="form-select m-1 w-auto" aria-label="precision" v-model="precision">
-          <option value="" disabled selected>Select precision</option>
-          <option value="f">single (f)</option>
-          <option value="d">double (d)</option>
-        </select>
-      </div>
-      <small v-if="isFormValid" class="py-0 mt-0 text-muted">Click submit button to upload the dataset.</small>
-      <small v-else class="py-0 mt-0 text-muted">Please fill all fields to submit the file.</small>
+    <div v-if="isNetCDF">
+      <small class="py-0 mt-0 text-muted">Click submit button to parse the NetCDF file.</small>
     </div>
-    <button type="button" class="btn btn-success me-2 my-1" @click="uploadFile" :disabled="!isFormValid">Submit</button>
+
+    <div v-else class="row g-3 align-items-center my-2">
+      <!-- precision -->
+      <div class="col-md-7">
+        <div class="row g-1 align-items-center">
+          <div class="col">
+            <select class="form-select" aria-label="precision" v-model="precision">
+              <option value="" disabled selected>Select precision</option>
+              <option value="f">single (f)</option>
+              <option value="d">double (d)</option>
+            </select>
+          </div>
+        </div>
+      </div>
+      <!-- depth -->
+      <div class="col-md-5">
+        <div class="row g-1 align-items-center">
+          <div class="col-auto">
+            <label for="depth" class="form-label">Depth:</label>
+          </div>
+          <div class="col">
+            <input class="form-control ms-1" type="number" min="1" label="depth:" v-model="depth" placeholder="500" />
+          </div>
+        </div>
+      </div>
+      <!-- width -->
+      <div class="col-md-6">
+        <div class="row g-1 align-items-center">
+          <div class="col-auto">
+            <label for="width" class="form-label mb-0">Width:</label>
+          </div>
+          <div class="col">
+            <input class="form-control ms-1" type="number" min="1" label="width:" v-model="width" placeholder="500" />
+          </div>
+        </div>
+      </div>
+      <!-- height -->
+      <div class="col-md-6">
+        <div class="row g-1 align-items-center">
+          <div class="col-auto">
+            <label for="height" class="form-label mb-0">Height:</label>
+          </div>
+          <div class="col">
+            <input class="form-control ms-1" type="number" min="1" label="height:" v-model="height" placeholder="500" />
+          </div>
+        </div>
+      </div>
+
+      <small v-if="isFormValid" class="pt-1 text-muted">Click submit button to upload the dataset.</small>
+      <small v-else class="pt-1 text-muted">Please fill all fields to submit the file.</small>
+    </div>
+
+    <button type="button" class="btn btn-success my-1" @click="uploadFile" :disabled="!isFormValid">Submit</button>
     <!-- Button trigger modal -->
-    <button id="viewDatasetsBtn" type="button" class="btn btn-info my-1" @click="viewDatasets" title="View all uploaded datasets">View datasets</button>
+    <button id="viewDatasetsBtn" type="button" class="btn btn-info ms-2 my-1" @click="viewDatasets" title="View all uploaded datasets">View datasets</button>
     <div v-if="currentDataset == null" class="text-danger mt-1">
       No dataset selected for processing.
     </div>
@@ -38,13 +72,87 @@
       <strong >{{ currentDataset.name }}</strong>
     </div>
 
+    <!-- NetCDF file explorer -->
+    <div v-if="isNetCDF">
+      <table class="table table-hover mt-2">
+        <thead>
+          <tr>
+            <th></th>
+            <th>name</th>
+            <th>type</th>
+            <th>dimensions</th>
+          </tr>
+        </thead>
+        <tbody v-if="currentDataset">
+          <tr v-for="(props, name) in currentDataset.vars" :key="name">
+            <td><input class="form-check-input" type="radio" name="netcdf-var-select" :value="name" v-model="ncSelectedVar"></td>
+            <td>{{ name }}</td>
+            <td>{{ props.dtype }}</td>
+            <td>{{ props.shape }}</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <!-- Slicing filter -->
+      <div v-show="ncSelectedVar" class="slice-controls-container mt-3">
+        <!-- checkbox -->
+        <div class="d-flex align-items-center gap-3">
+          <div class="form-check ms-1">
+            <input class="form-check-input" type="checkbox" id="showSliceControls" v-model="showSliceControls">
+            <label class="form-check-label mb-2" for="showSliceControls">
+              Enable slicing
+            </label>
+          </div>
+          <button class="btn btn-primary" @click="selectNetCDFVariable">Apply</button>
+        </div>
+
+        <!-- parameter settings -->
+        <div v-if="showSliceControls" class="card mt-2">
+          <div class="card-header">
+            <h5>Slice variable: {{ ncSelectedVar }}</h5>
+          </div>
+          <div class="card-body">
+            <template v-for="(dimSize, dimIndex) in currentDataset.vars[ncSelectedVar].shape">
+              <div v-if="dimSize > 1"  :key="dimIndex" class="mb-3">
+                <label class="form-label">Dimension {{ dimIndex }} (size: {{ dimSize }})</label>
+                <div class="row g-2">
+                  <div class="col">
+                    <div class="form-floating">
+                      <input type="number" class="form-control" :id="'start-'+dimIndex" :min="0" :max="dimSize-1" v-model.number="sliceParams[dimIndex].start">
+                      <label :for="'start-'+dimIndex">Start</label>
+                    </div>
+                  </div>
+                  <div class="col">
+                    <div class="form-floating">
+                      <input type="number" class="form-control" :id="'end-'+dimIndex" min="1" :max="dimSize" v-model.number="sliceParams[dimIndex].end">
+                      <label :for="'end-'+dimIndex">End</label>
+                    </div>
+                  </div>
+                  <div class="col">
+                    <div class="form-floating">
+                      <input type="number" class="form-control" :id="'step-'+dimIndex" min="1" v-model.number="sliceParams[dimIndex].step">
+                      <label :for="'step-'+dimIndex">Step</label>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </template>
+            <div v-if="!hasSlicableDimensions" class="alert alert-info">
+              This variable has no dimensions with size > 1 available for slicing.
+            </div>
+          </div>
+        </div>
+      </div>
+
+    </div>
+    
     <!-- Progress bar -->
-    <div v-show="showProgressBar" class="progress my-2">
+    <div v-show="showProgressBar" class="progress mt-2">
       <div ref="progressBar" class="progress-bar progress-bar-striped progress-bar-animated" role="progressbar" aria-valuenow="75" aria-valuemin="0" aria-valuemax="100" style="width: 0%">0%</div>
     </div>
 
     <!-- Alert message box -->
-    <div ref="progressAlert" class="alert alert-dismissible fade" role="alert" tabindex="-1">
+    <div ref="progressAlert" class="alert alert-dismissible fade mt-2" role="alert" tabindex="-1">
       <span ref="progressAlertMessage">Placeholder</span>
       <!-- <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button> -->
     </div>
@@ -65,11 +173,19 @@
                 <div class="ms-2 me-auto">
                   <div :class="['fw-bold', { 'text-decoration-line-through': datasetsToDelete.includes(key) }]">
                     {{ dataset.name }}
-                    <span class="badge bg-secondary" v-if="dataset.precision === 'f'">float32</span>
-                    <span class="badge bg-secondary" v-else-if="dataset.precision === 'd'">float64</span>
+                    <span class="badge bg-secondary" v-if="dataset.type === 'plain' && dataset.precision === 'f'">float32</span>
+                    <span class="badge bg-secondary" v-if="dataset.type === 'plain' && dataset.precision === 'd'">float64</span>
                     <span class="badge bg-info ms-1">{{ dataset.size }}</span>
                   </div>
-                  dimensions: ({{ dataset.width }} &times; {{ dataset.height }} &times; {{ dataset.depth }})
+                  <div v-if="dataset.type === 'plain'">
+                    dimensions: ({{ dataset.width }} &times; {{ dataset.height }} &times; {{ dataset.depth }})
+                  </div>
+                  <div v-else-if="dataset.type === 'netcdf'">
+                    variables: [
+                      <span v-for="(name, idx) in Object.keys(dataset.vars)" :key=name>
+                        <span v-if="idx !== 0">, </span>{{ name }}
+                      </span>]
+                  </div>
                 </div>
                 <!-- Select and delete buttons -->
                 <div class="d-flex align-items-center">
@@ -95,8 +211,9 @@
               </li>
             </ul>
           </div>
-          <div v-else class="modal-body text-warning">
-            No saved datasets!
+          <div id="datasetModalBody" v-else class="modal-body">
+            <p v-if="isLoadingDatasets" class="text-info">Loading datasets from server...</p>
+            <p v-else class="text-warning">No saved datasets!</p>
           </div>
           <div class="modal-footer">
             <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
@@ -110,9 +227,10 @@
 
 <script>
 
-import axios from 'axios'
+import axios from 'axios';
 import { Modal } from 'bootstrap';
 import { ref } from 'vue';
+
 export default {
   name: 'InputDataset',
   
@@ -130,6 +248,7 @@ export default {
 
   data() {
     return {
+      baseURL: process.env.VUE_APP_API_BASE,
       depth: null,
       width: null,
       height: null,
@@ -139,9 +258,14 @@ export default {
       file: null,
       currentDataset: null,
       datasetToChange: null,
+      isLoadingDatasets: false,
       uploadedDatasets: [],
       datasetsToDelete:[],
       showProgressBar: false,
+      isNetCDF: false,
+      ncSelectedVar: "",
+      showSliceControls: false,
+      sliceParams: {},
     }
   },
 
@@ -152,6 +276,9 @@ export default {
 
     // Check if all form fields are filled before allowing emission
     isFormValid() {
+      if (this.isNetCDF) {
+        return this.file;
+      }
       // Modify dimensions of the existing dataset
       if (!this.file && this.currentDataset) {
         return this.width && this.height && this.depth && this.precision;
@@ -159,6 +286,28 @@ export default {
       // Upload a new dataset
       return this.file && this.width && this.height && this.depth && this.precision;
     },
+
+    // Check if there is a slicable dimension for a variable in NetCDF file
+    hasSlicableDimensions() {
+      if (!this.ncSelectedVar) return false;
+      return this.currentDataset.vars[this.ncSelectedVar].shape.some(size => size > 1);
+    }
+  },
+  
+  watch: {
+    ncSelectedVar(newVal) {
+      this.showSliceControls = false;
+      this.sliceParams = [];
+
+      if (newVal) {
+        const shape = this.currentDataset.vars[newVal].shape;
+        this.sliceParams = shape.map(size => ({
+          start: 0, 
+          end: size, 
+          step: 1
+        }));
+      }
+    }
   },
   
   methods:{
@@ -166,15 +315,15 @@ export default {
       this.datasetToChange = this.currentDataset;
       this.datasetsToDelete = [];
       var modalElement = document.getElementById("datasetModal");
+      if (modalElement) {
+        var modal = new Modal(modalElement);
+        modal.show();
+      }
 
+      this.isLoadingDatasets = true;
       if (!this.hasDatasets) {
-        const baseURL = process.env.VUE_APP_API_BASE;
-        axios.get(`${baseURL}/listDatasets`).then(response => {
+        axios.get(`${this.baseURL}/listDatasets`).then(response => {
           this.uploadedDatasets = response.data.datasets;
-          if (modalElement) {
-            var modal = new Modal(modalElement);
-            modal.show();
-          }
         })
         .catch(error => {
           if (this.progressAlert && this.progressAlertMessage) {
@@ -188,34 +337,37 @@ export default {
           }
         });
       }
-      else {
-        if (modalElement) {
-          var modal = new Modal(modalElement);
-          modal.show();
+      this.isLoadingDatasets = false;
+    },
+
+    async handleFileChange(event) {
+      const newFile = event.target.files[0];
+      if (newFile) {
+        this.file = newFile;
+        // Handle NetCDF file format
+        const validExtensions = [".nc", ".cdf", ".nc4"];
+        const filename = newFile.name.toLowerCase();
+        this.ncSelectedVar = "";
+        this.isNetCDF = validExtensions.some(ext => filename.endsWith(ext));
+        if (!this.isNetCDF) {
+          const reader = new FileReader();
+          reader.onload = (e) => {
+            this.fileContent = e.target.result; // save file content
+          };
+          reader.readAsArrayBuffer(newFile); // read binary data
         }
       }
     },
 
-    handleFileChange(event) {
-      const newFile = event.target.files[0];
-      if (newFile) {
-        this.file = newFile;
-        
-        const reader = new FileReader();
-        reader.onload = (e) => {
-          this.fileContent = e.target.result; // save file content
-        };
-
-        reader.readAsArrayBuffer(newFile); // read binary data
-      }
-    },
-
     emitFileData() {
+      // console.log("fileContent:", this.fileContent);
       this.$store.commit("setFileData", {
         content: this.fileContent,
         dimensions: [Number(this.width), Number(this.height), Number(this.depth)],
-        precision: this.precision
+        precision: this.precision,
       });
+      // probably also need to reset the compressed data
+      this.$store.commit("showDecompressionView", false);
     },
 
     uploadFile() {
@@ -226,15 +378,21 @@ export default {
       } else if (this.currentDataset) {
         formData.append("filename", this.currentDataset.name);
       }
-      formData.append("width", this.width);
-      formData.append("height", this.height);
-      formData.append("depth", this.depth);
-      formData.append("precision", this.precision);
       
       this.showProgressBar = true;
-      const baseURL = process.env.VUE_APP_API_BASE;
       
-      axios.post(`${baseURL}/upload`, formData, {
+      if (this.isNetCDF) {
+        formData.append("type", "netcdf");
+      }
+      else {
+        formData.append("type", "plain");
+        formData.append("width", this.width);
+        formData.append("height", this.height);
+        formData.append("depth", this.depth);
+        formData.append("precision", this.precision);
+      }
+      
+      axios.post(`${this.baseURL}/upload`, formData, {
         onUploadProgress: (eventData) => {
           if (eventData.lengthComputable) {
             const percentComplete = Math.round((eventData.loaded / eventData.total) * 90);
@@ -249,8 +407,13 @@ export default {
         }
       })
       .then(response => {
-        this.currentDataset = response.data.dataset;
-        this.emitFileData();
+        console.log("response.data:", response.data);
+        console.log("response.data.dataset:", response.data.dataset);
+        this.currentDataset = response.data["dataset"];
+        console.log("current dataset:", this.currentDataset);
+        if (!this.isNetCDF) {
+          this.emitFileData();
+        }
         // update the cached dataset list
         // or simply set `hasDatasets` to false?
         if (this.uploadedDatasets) {
@@ -285,59 +448,63 @@ export default {
       var btn = document.getElementById("viewDatasetsBtn");
       btn.disabled = true;
       const formData = new FormData();
-      const baseURL = process.env.VUE_APP_API_BASE;
       
       if (this.currentDataset != this.datasetToChange) {
-        this.file = null;   // reset the file if the user has previously selected one
-        this.width = this.datasetToChange.width;
-        this.height = this.datasetToChange.height;
-        this.depth = this.datasetToChange.depth;
-        this.precision = this.datasetToChange.precision;
-        // console.log("Change dataset to:", JSON.stringify(this.datasetToChange));
-        // Get the new file from the server asynchronously
         formData.append("currentDataset", JSON.stringify(this.datasetToChange));
-        await axios.get(`${baseURL}/download`, {
-          params: { filename: this.datasetToChange.name },
-          responseType: "arraybuffer", 
-          onDownloadProgress: (eventData) => {
-            this.showProgressBar = true;
-            if (eventData.lengthComputable) {
-              const percentComplete = Math.round((eventData.loaded / eventData.total) * 90);
-              this.progressBar.style.width = percentComplete + '%';
-              this.progressBar.setAttribute("aria-valuenow", percentComplete);
-              this.progressBar.textContent = percentComplete + '%';
+        this.file = null;   // reset the file if the user has previously selected one
+        // Handle different data file types
+        if (this.datasetToChange.type === "plain") {
+          this.width = this.datasetToChange.width;
+          this.height = this.datasetToChange.height;
+          this.depth = this.datasetToChange.depth;
+          this.precision = this.datasetToChange.precision;
+          // Get the new file from the server asynchronously
+          await axios.get(`${this.baseURL}/download`, {
+            params: { filename: this.datasetToChange.name, filetype: this.datasetToChange.type },
+            responseType: "arraybuffer",
+            onDownloadProgress: (eventData) => {
+              this.showProgressBar = true;
+              if (eventData.lengthComputable) {
+                const percentComplete = Math.round((eventData.loaded / eventData.total) * 90);
+                this.progressBar.style.width = percentComplete + '%';
+                this.progressBar.setAttribute("aria-valuenow", percentComplete);
+                this.progressBar.textContent = percentComplete + '%';
+              }
+
+              this.progressAlert.classList.remove("alert-danger");
+              this.progressAlert.classList.remove("alert-success");
+              this.progressAlert.classList.add("alert-secondary", "show");
+              this.progressAlertMessage.textContent = "Waiting to download the dataset...";
             }
+          }).then(response => {
+            this.isNetCDF = false;
+            this.fileContent = response.data;
+            this.emitFileData();
+            this.currentDataset = this.datasetToChange;
+            this.progressBar.style.width = "100%";
+            this.progressBar.setAttribute("aria-valuenow", 100);
+            this.progressBar.textContent = "100%";
 
             this.progressAlert.classList.remove("alert-danger");
-            this.progressAlert.classList.remove("alert-success");
-            this.progressAlert.classList.add("alert-secondary", "show");
-            this.progressAlertMessage.textContent = "Waiting to download the dataset...";
-          }
-        }).then(response => {
-          this.fileContent = response.data;
-          this.emitFileData();
+            this.progressAlert.classList.remove("alert-secondary");
+            this.progressAlert.classList.add("alert-success", "show");
+            this.progressAlertMessage.textContent = "Downloaded file successfully!";
+            // Auto dismiss
+            setTimeout(() => {
+              this.showProgressBar = false;
+              this.progressBar.style.width = "0%";
+              this.progressAlert.classList.remove("show");
+            }, 5000);
+          }).catch(error => {
+            console.error("Download file failed.", error);
+          });
+        }
+        else if(this.datasetToChange.type === "netcdf") {
+          this.isNetCDF = true;
           this.currentDataset = this.datasetToChange;
-          this.progressBar.style.width = "100%";
-          this.progressBar.setAttribute("aria-valuenow", 100);
-          this.progressBar.textContent = "100%";
-
-          this.progressAlert.classList.remove("alert-danger");
-          this.progressAlert.classList.remove("alert-secondary");
-          this.progressAlert.classList.add("alert-success", "show");
-          this.progressAlertMessage.textContent = "Downloaded file successfully!";
-          // Auto dismiss
-          setTimeout(() => {
-            this.showProgressBar = false;
-            this.progressBar.style.width = "0%";
-            this.progressAlert.classList.remove("show");
-          }, 5000);
-
-        })
-        .catch(error => {
-          console.error("Download file failed.", error);
-        });
+        }
       }
-
+        
       // delete datasets
       if (this.datasetsToDelete.length > 0) {
         formData.append("deletedDatasets", JSON.stringify(this.datasetsToDelete));
@@ -346,7 +513,7 @@ export default {
 
       // check if there are any changes made 
       if (!formData.entries().next().done) {
-        await axios.post(`${baseURL}/updateDatasets`, formData).then(response => {
+        await axios.post(`${this.baseURL}/updateDatasets`, formData).then(response => {
           if (!(JSON.stringify(this.uploadedDatasets) === JSON.stringify(response.data.datasets))) {
             console.error("uploadedDatasets are not equal!");
           }
@@ -357,6 +524,98 @@ export default {
       }
       btn.disabled = false;
     },
+
+    selectNetCDFVariable() {
+      // console.log("selectedNCVariable:", this.ncSelectedVar);
+      // console.log("dtype:", this.currentDataset.vars[this.ncSelectedVar].dtype);
+      
+      // Set precision
+      var dtype = this.currentDataset.vars[this.ncSelectedVar].dtype;
+      if (dtype === "float32") {
+        this.precision = "f";
+      }
+      else if (dtype === "float64") {
+        this.precision = "d";
+      }
+
+      // Set dimensions
+      var dims = this.currentDataset.vars[this.ncSelectedVar].shape;
+      const slicedDims = dims.map((size, dimIndex) => {
+        if (size == 1) return 1;
+        const slice = this.sliceParams[dimIndex];
+        if (!slice) return size;
+
+        const start = slice.start || 0;
+        const end = slice.end !== undefined ? slice.end : size;
+        const step = slice.step || 1;
+
+        return Math.ceil((end - start) / step);
+      });
+
+      if (slicedDims.length === 2) {
+        this.height = slicedDims[0];
+        this.width = slicedDims[1];
+        this.depth = 1;
+      }
+      else if (slicedDims.length === 3) {
+        this.depth = slicedDims[0];
+        this.height = slicedDims[1];
+        this.width = slicedDims[2];
+      }
+
+      const slices = this.sliceParams
+        .filter(param => param != null)
+        .map(param => ({
+          start: param.start,
+          end: param.end,
+          step: param.step,
+        }));
+
+      // Get the variable data from the backend server
+      axios.get(`${this.baseURL}/download`, {
+        params: { 
+          filename: this.currentDataset.name, 
+          filetype: "netcdf", 
+          variable: this.ncSelectedVar,
+          slices: JSON.stringify(slices),
+        },
+        responseType: "arraybuffer",
+        onDownloadProgress: (eventData) => {
+          this.showProgressBar = true;
+          if (eventData.lengthComputable) {
+            const percentComplete = Math.round((eventData.loaded / eventData.total) * 90);
+            this.progressBar.style.width = percentComplete + '%';
+            this.progressBar.setAttribute("aria-valuenow", percentComplete);
+            this.progressBar.textContent = percentComplete + '%';
+          }
+
+          this.progressAlert.classList.remove("alert-danger");
+          this.progressAlert.classList.remove("alert-success");
+          this.progressAlert.classList.add("alert-secondary", "show");
+          this.progressAlertMessage.textContent = "Waiting to download the variable data...";
+        }
+      }).then(response => {
+        this.fileContent = response.data;
+        this.emitFileData();
+
+        this.progressBar.style.width = "100%";
+        this.progressBar.setAttribute("aria-valuenow", 100);
+        this.progressBar.textContent = "100%";
+
+        this.progressAlert.classList.remove("alert-danger");
+        this.progressAlert.classList.remove("alert-secondary");
+        this.progressAlert.classList.add("alert-success", "show");
+        this.progressAlertMessage.textContent = "Downloaded the variable data successfully!";
+        // Auto dismiss
+        setTimeout(() => {
+          this.showProgressBar = false;
+          this.progressBar.style.width = "0%";
+          this.progressAlert.classList.remove("show");
+        }, 5000);
+      }).catch(error => {
+        console.error("Download file failed.", error);
+      });
+    }
   },
   
 };

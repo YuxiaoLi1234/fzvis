@@ -1,12 +1,14 @@
 #!/usr/bin/env python
 
 from argparse import ArgumentParser
-from flask import Flask, request, jsonify, send_file, send_from_directory
+from flask import Flask, request, jsonify, send_file, send_from_directory, Response
 from flask_cors import CORS
+import io
 import json
 import libpressio
 import math
 import numpy as np
+import netCDF4 as nc
 import os
 from pathlib import Path
 import threading 
@@ -48,11 +50,52 @@ def read_input_data(dataset):
     elif dataset["precision"] == 'f': 
         input_data = np.fromfile(filepath, dtype=np.float32)
 
-    if len(input_data) > width*height*depth: 
-        input_data = input_data[len(input_data)- width*height*depth:]
+    if len(input_data) > depth*height*width: 
+        input_data = input_data[len(input_data)- depth*height*width:]
     
-    input_data = input_data.reshape(width, height, depth)
+    input_data = input_data.reshape(depth, height, width)
     input_data = np.nan_to_num(input_data, nan=0)
+
+
+# Read NetCDF file
+def read_netcdf_file(filename, variable, slice_params=None):
+    filepath = upload_dir / filename
+    with nc.Dataset(filepath) as dataset:
+        if variable == "metadata":
+            for var_name in dataset.variables:
+                print(var_name, dataset.variables[var_name].dimensions)
+            return {
+                var_name: {
+                    "shape": dataset.variables[var_name].shape,
+                    "dtype": str(dataset.variables[var_name].dtype),
+                }
+                for var_name in dataset.variables
+            }
+        elif variable == "all":
+            var_data = {}
+            for var_name in dataset.variables:
+                var = dataset.variables[var_name]
+                data = np.nan_to_num(var[:], nan=0)
+                var_data[var_name] = data.flatten().tolist()
+            return var_data
+        else:
+            # update the input_data
+            global input_data
+            var_data = dataset.variables[variable][:]
+            # if slicing needs to be applied
+            if slice_params:
+                slices = []
+                for dim_slice in slice_params:
+                    sl = slice(
+                        dim_slice.get("start", 0),
+                        dim_slice.get("end", None),
+                        dim_slice.get("step", 1)
+                    )
+                    slices.append(sl)
+                input_data = np.nan_to_num(var_data[tuple(slices)], nan=0)
+            else: 
+                input_data = np.nan_to_num(var_data, nan=0)
+            return input_data
 
 
 # Save metadata to the disk
@@ -72,16 +115,33 @@ def get_uploaded_datasets():
 @app.route("/download", methods=["GET", "POST"])
 def send_data_file(): 
     filename = request.args.get("filename")
+    filetype = request.args.get("filetype")
+
+    # Check if the file exists first
     filepath = upload_dir / filename
-    return send_file(filepath, as_attachment=False)
+    if not filepath.exists():
+        return jsonify({"error": "File not found"}), 404
+    
+    # Handle different file types
+    if filetype == "plain":
+        return send_file(filepath, as_attachment=False)
+    elif filetype == "netcdf":
+        variable = request.args.get("variable")
+        slices = request.args.get("slices")
+        slice_params = json.loads(slices) if slices else None
+        var_data = read_netcdf_file(filename, variable, slice_params)
+        # Send the array as bytes
+        return Response(var_data.tobytes(), mimetype="application/octet-stream")
 
 
 # Route to handle file upload
 @app.route("/upload", methods=["POST"])
 def upload_file():
     try:
+        result = {}
         dataset_metadata = {}
         read_data_file = False
+        filepath = ""
         # Uploading a new dataset 
         if "file" in request.files: 
             file = request.files["file"]
@@ -90,7 +150,7 @@ def upload_file():
 
             # Save file
             filename = file.filename
-            filepath = os.path.join(upload_dir, filename)
+            filepath = upload_dir / filename
             file.save(filepath)
 
             # Use the filename as the key for now as we don't allow two duplicate files
@@ -103,18 +163,30 @@ def upload_file():
             filename = request.form.get("filename")
             dataset_metadata = saved_datasets[filename]
 
-        dataset_metadata["width"] = request.form.get("width")
-        dataset_metadata["height"] = request.form.get("height")
-        dataset_metadata["depth"] = request.form.get("depth")
-        dataset_metadata["precision"] = request.form.get("precision")
-        if read_data_file:
-            threading.Thread(target=read_input_data, args=(dataset_metadata,)).start()
+        # Handle different file types
+        file_type = request.form.get("type")
+        dataset_metadata["type"] = file_type
+
+        if file_type == "netcdf":
+            if read_data_file:
+                dataset = nc.Dataset(filepath)
+                variable_keys = dataset.variables.keys()
+                dataset_metadata["vars"] = read_netcdf_file(dataset_metadata["name"], "metadata")
+        
+        elif file_type == "plain":
+            dataset_metadata["width"] = request.form.get("width")
+            dataset_metadata["height"] = request.form.get("height")
+            dataset_metadata["depth"] = request.form.get("depth")
+            dataset_metadata["precision"] = request.form.get("precision")
+            if read_data_file:
+                threading.Thread(target=read_input_data, args=(dataset_metadata,)).start()
 
         # Save metadata to a json file
         saved_datasets[filename] = dataset_metadata
+        result["dataset"] = dataset_metadata
         with open(metadata_file, 'w') as f:
             json.dump(saved_datasets, f, indent=4)
-        return jsonify({"dataset" : dataset_metadata}), 200
+        return jsonify(result), 200
         
     except Exception as e:
         print("Error in upload_file():", e)
@@ -129,7 +201,8 @@ def update_datasets():
         if request.form.get("currentDataset"):
             currentDataset = json.loads(request.form["currentDataset"])
             # print("currentDataset:", currentDataset)
-            threading.Thread(target=read_input_data, args=(currentDataset,)).start()
+            if currentDataset["type"] == "plain":
+                threading.Thread(target=read_input_data, args=(currentDataset,)).start()
 
         # Remove the files if deleted datasets are provided
         if request.form.get("deletedDatasets"):
@@ -231,8 +304,8 @@ def indexlist():
                         print("decp_data.shape:", output["decp_data"].shape)
                         print("original data:", np.count_nonzero(input_data))
                         print("decompressed data:", np.count_nonzero(output["decp_data"]))
-                        decp_data.append(output['decp_data'].flatten().tolist())
-                result['decp_data'] = decp_data
+                        decp_data.append(output["decp_data"].flatten().tolist())
+                result["decp_data"] = decp_data
                 return result, 200
                 
                 # print(slice_number,sliced_id,slice_width,slice_height,type(input_data),len(input_data))
@@ -253,8 +326,8 @@ def indexlist():
                 return jsonify({"highlevel" : highlevel, "options" : module_slots}), 200 
         
         except Exception as e:
-                print("Error in indexlist():", e)
-                return jsonify({"error": str(e)}), 500
+            print("Error in indexlist():", e)
+            return jsonify({"error": str(e)}), 500
         
     else:
         return jsonify({"error": "configuration is illegal"}), 400

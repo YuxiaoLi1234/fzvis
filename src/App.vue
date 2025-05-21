@@ -58,7 +58,6 @@ export default {
         
         <div class="tab-content">
           <div id="datavis" class="tab-pane fade show active" role="tabpanel" aria-labelledby="datavis-tab">
-            <!-- <DataVis /> -->
             <HelloVtk />
           </div>
           <div id="metrics" class="tab-pane fade" role="tabpanel" aria-labelledby="metrics-tab">

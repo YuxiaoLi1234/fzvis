@@ -467,7 +467,7 @@ export default {
           alertBox.classList.add("alert-secondary", "show");
           alertMessage.textContent = "Processing...";
         }
-        this.$store.commit("enableDecompressionView");
+        this.$store.commit("showDecompressionView", true);
 
         const baseURL = process.env.VUE_APP_API_BASE;
         axios.post(`${baseURL}/indexlist`, this.formData).then(response => {

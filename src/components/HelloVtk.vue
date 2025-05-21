@@ -11,7 +11,7 @@
 
     <div id="options-top" class="d-flex flex-wrap justify-content-center mt-3 gap-2">
       <!-- Toggle Button -->
-      <button @click="toggleLayout" class="btn btn-outline-primary">
+      <button @click="toggleLayout" :class="['btn', horizontalLayout ? 'btn-primary' : 'btn-outline-primary']">
         <i class="bi bi-layout-split"></i>
       </button>
 
@@ -48,7 +48,7 @@
       </div>
 
       <!-- Decompressed Container -->
-      <div class="card" :style="horizontalLayout ? 'height: 360px; flex: 1;' : 'height: 360px; margin-top: 1rem;'" v-show="showDecompression">
+      <div class="card" v-show="showDecompression" :style="horizontalLayout ? 'height: 360px; flex: 1;' : 'height: 360px; margin-top: 1rem;'">
         <div class="card-header">Decompressed</div>
         <div class="card-body p-2">
           <div style="width: 100%; height: 100%; position: relative;">
@@ -61,14 +61,14 @@
       </div> -->
     </div>
   </div>
+
 </template>
-  
+
 <script>
 import { ref, onMounted, onBeforeUnmount, computed, watch, nextTick } from 'vue';
 import { useStore } from 'vuex';
-import * as d3 from 'd3-scale';
-import { formatDefaultLocale } from 'd3-format';
 import '@kitware/vtk.js/Rendering/Profiles/Volume';
+import '@kitware/vtk.js/Rendering/Profiles/Geometry';
 import vtkColorMaps from '@kitware/vtk.js/Rendering/Core/ColorTransferFunction/ColorMaps';
 import vtkFullScreenRenderWindow from '@kitware/vtk.js/Rendering/Misc/FullScreenRenderWindow';
 import vtkImageData from '@kitware/vtk.js/Common/DataModel/ImageData';
@@ -86,9 +86,11 @@ import vtkGestureCameraManipulator from '@kitware/vtk.js/Interaction/Manipulator
 import vtkMouseCameraTrackballPanManipulator from '@kitware/vtk.js/Interaction/Manipulators/MouseCameraTrackballPanManipulator';
 import vtkMouseCameraTrackballRollManipulator from '@kitware/vtk.js/Interaction/Manipulators/MouseCameraTrackballRollManipulator';
 import vtkInteractorStyleTrackballCamera from '@kitware/vtk.js/Interaction/Style/InteractorStyleTrackballCamera';
+import vtkScalarBarActor from '@kitware/vtk.js/Rendering/Core/ScalarBarActor';
 
 export default {
   name: 'HelloVtk',
+
   setup() {
     const store = useStore();
     const fileData = computed(() => store.state.fileData);
@@ -100,7 +102,10 @@ export default {
     const horizontalLayout = ref(false);
     const vtkContainerOriginal = ref(null);
     const vtkContainerCompressed = ref(null);
-    const context = ref(null);
+    const context = ref({
+      original: null,
+      compressed: null,
+    });
     const colormap = ref("rainbow");
     
     let sameCamera = ref(false);
@@ -154,59 +159,14 @@ export default {
       return imageData;
     }
 
-    // Change the number of ticks (TODO: add numberOfTicks to ScalarBarActor)
-    function generateTicks(numberOfTicks, useLogScale = false) {
-      return (helper) => {
-        const lastTickBounds = helper.getLastTickBounds();
-        // compute tick marks for axes
-        const scale = useLogScale ? d3.scaleLog() : d3.scaleLinear();
-        scale.domain([lastTickBounds[0], lastTickBounds[1]]).range([0, 1]);
-
-        const ticks = scale.ticks(numberOfTicks);
-        const tickPositions = ticks.map((tick) => scale(tick));
-
-        // Replace minus "\u2212" with hyphen-minus "\u002D" so that parseFloat() works
-        formatDefaultLocale({ minus: '\u002D' });
-        const format = scale.tickFormat(ticks[0], ticks[ticks.length - 1]);
-        const tickStrings = ticks.map(format).map((tick) => {
-          if (tick === '') {
-            return '';
-          }
-          return Number(parseFloat(tick).toPrecision(12)).toPrecision();
-        }); // d3 sometimes adds unwanted whitespace
-
-        helper.setTicks(ticks);
-        helper.setTickStrings(tickStrings);
-        helper.setTickPositions(tickPositions);
-      };
-    }
-
     // Create 2D visualizaiton for image data
     function create2DImageActor(imageData) {
-      // Set color mapping function
       const dataRange = imageData.getPointData().getScalars().getRange();
-      // console.log("data range:", dataRange[0], dataRange[1]);
-
-      const ctfunc = vtkColorTransferFunction.newInstance();
-      const preset = vtkColorMaps.getPresetByName(colormap.value);
-      ctfunc.applyColorMap(preset);
-      ctfunc.setRange(dataRange[0], dataRange[1]);
-      ctfunc.setMappingRange(dataRange[0], dataRange[1]);
-      ctfunc.updateRange();
-
+      
       const mapper = vtkImageMapper.newInstance();
       mapper.setInputData(imageData);
       mapper.setSliceAtFocalPoint(true);
       mapper.setSlicingMode(SlicingMode.Z);
-
-      // Update the existing scalar bar
-      const scalarBarActor = context.value.original.barActor;
-      if (scalarBarActor) {
-        scalarBarActor.setAxisLabel("Intensity");
-        scalarBarActor.setScalarsToColors(ctfunc);
-        scalarBarActor.setGenerateTicks(generateTicks(10, false));
-        scalarBarActor.modified(); // Force update
-      }
 
       const imageActor = vtkImageSlice.newInstance();
       imageActor.setMapper(mapper);
@@ -214,10 +174,6 @@ export default {
       const level = (dataRange[0] + dataRange[1]) / 2;
       imageActor.getProperty().setColorWindow(window);
       imageActor.getProperty().setColorLevel(level);
-      imageActor.getProperty().setRGBTransferFunction(0, ctfunc);
-      // imageActor.getProperty().setPiecewiseFunction(0, otfunc);
-      imageActor.getProperty().setOpacity(1.0);
-      imageActor.getProperty().setInterpolationTypeToLinear();
 
       return imageActor;
     }
@@ -256,40 +212,30 @@ export default {
 
     function initializeVTK() {
       // Only initialize the context once 
-      if (!context.value) {
-        const contextData = {};
-
+      if (!context.value.original) {
         // Initialize the renderer for original dataset
-        if (vtkContainerOriginal.value?.offsetWidth > 0) {
-          const fullScreenRenderer = vtkFullScreenRenderWindow.newInstance({
-            rootContainer: vtkContainerOriginal.value,
-            containerStyle: {
-              position: "absolute", 
-              width: "100%",
-              height: "100%",
-              overflow: "hidden",
-            },
-          });
-  
-          const renderer = fullScreenRenderer.getRenderer();
-          renderer.setBackground(0.2, 0.3, 0.4);
-          const renderWindow = fullScreenRenderer.getRenderWindow();
+        const fullScreenRenderer = vtkFullScreenRenderWindow.newInstance({
+          rootContainer: vtkContainerOriginal.value,
+        });
 
-          const resizeObserver = new ResizeObserver(() => {
-            fullScreenRenderer.resize();
-            renderWindow.render();
-          });
-          resizeObserver.observe(vtkContainerOriginal.value);
+        const renderer = fullScreenRenderer.getRenderer();
+        renderer.setBackground(0.1, 0.2, 0.3);
+        const renderWindow = fullScreenRenderer.getRenderWindow();
+        const lookupTable = vtkColorTransferFunction.newInstance();
 
-          contextData.original = {
-            fullScreenRenderer,
-            renderer,
-            renderWindow,
-            resizeObserver,
-          };
-        }
+        const resizeObserver = new ResizeObserver(() => {
+          fullScreenRenderer.resize();
+          renderWindow.render();
+        });
+        resizeObserver.observe(vtkContainerOriginal.value);
 
-        context.value = contextData;
+        context.value.original = {
+          fullScreenRenderer,
+          renderer,
+          renderWindow,
+          resizeObserver,
+          lookupTable,
+        };
       }
     }
 
@@ -297,36 +243,98 @@ export default {
       // Only initialize the context once 
       if (!context.value.compressed) {
         // Initialize the renderer for (de)compressed dataset
-        if (vtkContainerCompressed.value?.offsetWidth > 0) {
-          const fullScreenRenderer = vtkFullScreenRenderWindow.newInstance({
-            rootContainer: vtkContainerCompressed.value,
-            containerStyle: {
-              position: "absolute", 
-              width: "100%",
-              height: "100%",
-              overflow: "hidden",
-            },
-          });
-          
-          const renderer = fullScreenRenderer.getRenderer();
-          renderer.setBackground(0.2, 0.3, 0.4);
-          const renderWindow = fullScreenRenderer.getRenderWindow();
+        const fullScreenRenderer = vtkFullScreenRenderWindow.newInstance({
+          rootContainer: vtkContainerCompressed.value,
+        });
+        
+        const renderer = fullScreenRenderer.getRenderer();
+        renderer.setBackground(0.1, 0.2, 0.3);
+        const renderWindow = fullScreenRenderer.getRenderWindow();
+        const lookupTable = vtkColorTransferFunction.newInstance();
 
-          
-          const resizeObserver = new ResizeObserver(() => {
-            fullScreenRenderer.resize();
-            renderWindow.render();
-          });
-          resizeObserver.observe(vtkContainerCompressed.value);
+        const resizeObserver = new ResizeObserver(() => {
+          fullScreenRenderer.resize();
+          renderWindow.render();
+        });
+        resizeObserver.observe(vtkContainerCompressed.value);
 
-          context.value.compressed = {
-            fullScreenRenderer,
-            renderer,
-            renderWindow,
-            resizeObserver,
-          };
-        }
+        context.value.compressed = {
+          fullScreenRenderer,
+          renderer,
+          renderWindow,
+          resizeObserver,
+          lookupTable,
+        };
       }
+    }
+
+    function renderView(content, dimensions, precision, contextInfo, forceUpdate = false) {
+      if (!contextInfo) {
+        console.error('VTK context is not initialized!');
+        return;
+      }
+
+      if (!contextInfo?.cachedData || forceUpdate) {
+        contextInfo.cachedData = createImageData(content, dimensions, precision);
+      }
+
+      const { renderer, renderWindow, lookupTable } = contextInfo;
+      renderer.removeAllViewProps();
+
+      // Set color mapping function
+      const dataRange = contextInfo.cachedData.getPointData().getScalars().getRange();
+      const preset = vtkColorMaps.getPresetByName(colormap.value);
+      lookupTable.applyColorMap(preset);
+      lookupTable.setMappingRange(...dataRange);
+      lookupTable.updateRange();
+
+      let actor;
+      const sliceInput = document.getElementById("sliceID");
+      // Enable the 2D visualization if one of the dimension is 1
+      if (dimensions[0] == 1 || dimensions[1] == 1 || dimensions[2] == 1) {
+        if (sliceInput) {
+          sliceInput.disabled = true;
+        }
+        actor = create2DImageActor(contextInfo.cachedData);
+        actor.getProperty().setRGBTransferFunction(0, lookupTable);
+        actor.getProperty().setInterpolationTypeToLinear(true);
+        renderer.addActor(actor);
+        contextInfo.actor = actor;
+        
+        // Set camera properties for 2D visualization
+        const camera = renderer.getActiveCamera();
+        camera.setParallelProjection(true);
+        camera.setPosition(0, 0, 1);
+        camera.setFocalPoint(0, 0, 0);
+        camera.setViewUp(0, 1, 0);
+
+        // Set 2D image visualization interactor style
+        const interactorStyle = customize2DInteractorStyle();
+        renderWindow.getInteractor().setInteractorStyle(interactorStyle);
+      }
+      // Otherwise, render 3D volume
+      else {
+        if (sliceInput) {
+          sliceInput.disabled = false;
+        }
+        const interactorStyle = vtkInteractorStyleTrackballCamera.newInstance();
+        renderWindow.getInteractor().setInteractorStyle(interactorStyle);
+        actor = createVolumeActor(contextInfo.cachedData);
+        renderer.addVolume(actor);
+        contextInfo.actor = actor;
+      }
+
+      const scalarBarActor = vtkScalarBarActor.newInstance();
+      scalarBarActor.setAxisLabel("Intensity");
+      scalarBarActor.setBoxSize(0.4, 0.8);
+      scalarBarActor.setVisibility(true);
+      renderer.addActor(scalarBarActor);
+      scalarBarActor.setScalarsToColors(
+        actor.getProperty().getRGBTransferFunction()
+      );
+      
+      renderer.resetCamera();
+      renderWindow.render();
     }
 
     function renderOriginal(content, dimensions, precision, forceUpdate = false) {
@@ -339,15 +347,15 @@ export default {
         cachedOriginalData = createImageData(content, dimensions, precision);
       }
 
-      const { renderer, renderWindow } = context.value.original;
+      const { renderer, renderWindow, lookupTable } = context.value.original;
       renderer.removeAllViewProps();
 
-      // const scalarBarActor = vtkScalarBarActor.newInstance();
-      // scalarBarActor.setVisibility(true);
-      // scalarBarActor.setPosition(0.9, 0.1, 0);  // Right side
-      // scalarBarActor.setBoxSize(0.08, 0.5);
-      // renderer.addActor(scalarBarActor);
-      // context.value.original.barActor = scalarBarActor;  // Store for later updates
+      // Set color mapping function
+      const dataRange = cachedOriginalData.getPointData().getScalars().getRange();
+      const preset = vtkColorMaps.getPresetByName(colormap.value);
+      lookupTable.applyColorMap(preset);
+      lookupTable.setMappingRange(...dataRange);
+      lookupTable.updateRange();
 
       let actor;
       const sliceInput = document.getElementById("sliceID");
@@ -356,6 +364,12 @@ export default {
         if (sliceInput) {
           sliceInput.disabled = true;
         }
+        actor = create2DImageActor(cachedOriginalData);
+        actor.getProperty().setRGBTransferFunction(0, lookupTable);
+        actor.getProperty().setInterpolationTypeToLinear(true);
+        renderer.addActor(actor);
+        context.value.original.actor = actor;
+        
         // Set camera properties for 2D visualization
         const camera = renderer.getActiveCamera();
         camera.setParallelProjection(true);
@@ -366,10 +380,6 @@ export default {
         // Set 2D image visualization interactor style
         const interactorStyle = customize2DInteractorStyle();
         renderWindow.getInteractor().setInteractorStyle(interactorStyle);
-
-        actor = create2DImageActor(cachedOriginalData);
-        renderer.addActor(actor);
-        context.value.original.actor = actor;
       }
       // Otherwise, render 3D volume
       else {
@@ -383,6 +393,15 @@ export default {
         context.value.original.actor = actor;
       }
 
+      const scalarBarActor = vtkScalarBarActor.newInstance();
+      scalarBarActor.setAxisLabel("Intensity");
+      scalarBarActor.setBoxSize(0.4, 0.8);
+      scalarBarActor.setVisibility(true);
+      renderer.addActor(scalarBarActor);
+      scalarBarActor.setScalarsToColors(
+        actor.getProperty().getRGBTransferFunction()
+      );
+      
       renderer.resetCamera();
       renderWindow.render();
     }
@@ -461,7 +480,7 @@ export default {
       setTimeout(() => {
         initializeVTK();
         if (fileData.value && dimensions.value && precision.value) {
-          renderOriginal(fileData.value, dimensions.value, precision.value);
+          renderView(fileData.value, dimensions.value, precision.value, context.value.original);
         }
       }, 200);
     });
@@ -470,7 +489,7 @@ export default {
     watch([fileData, dimensions, precision], ([newFileData, newDimensions, newPrecision]) => {
       if (newFileData && newDimensions && newPrecision) {
         setTimeout(() => {
-          renderOriginal(newFileData, newDimensions, newPrecision, true);
+          renderView(newFileData, newDimensions, newPrecision, context.value.original, true);
         }, 300);
       }
     });
@@ -486,49 +505,44 @@ export default {
     watch([compressedData, dimensions, precision], ([newFileData, newDimensions, newPrecision]) => {
       if (newFileData && newDimensions && newPrecision) {
         setTimeout(() => {
-          renderCompressed(newFileData, newDimensions, newPrecision, true);
+          renderView(newFileData, newDimensions, newPrecision, context.value.compressed, true);
         }, 300);
       }
-    });
-
-    // Rerender the volume when the colormap changes
-    watch(colormap, (newColormap) => {
-      console.log("Colormap is changed to:", newColormap)
-      if (newColormap && cachedOriginalData) {
-        // Create a new color transfer function
-        const dataRange = cachedOriginalData.getPointData().getScalars().getRange();
-        const ctfunc = vtkColorTransferFunction.newInstance();
-        const preset = vtkColorMaps.getPresetByName(newColormap);
-        ctfunc.applyColorMap(preset);
-        ctfunc.setMappingRange(dataRange[0], dataRange[1]);
-        ctfunc.updateRange();
-        
-        // Update to the new color transfer function
-        var actor = context.value.original.actor;
-        var renderWindow = context.value.original.renderWindow;
-        actor.getProperty().setRGBTransferFunction(0, ctfunc);
-        renderWindow.render();
-        actor = context.value?.compressed?.actor;
-        if (actor) {
-          renderWindow = context.value.compressed.renderWindow;
-          actor.getProperty().setRGBTransferFunction(0, ctfunc);
-          renderWindow.render();
+      else {
+        if (context.value.compressed?.cachedData) {
+          context.value.compressed.cachedData = null;
         }
       }
     });
 
+    // // Rerender the volume when the colormap changes
+    watch(colormap, (newColormap) => {
+      console.log("Colormap is changed to:", newColormap)
+      if (newColormap && cachedOriginalData) {
+        const { renderWindow, lookupTable } = context.value.original;
+        // const dataRange = cachedOriginalData.getPointData().getScalars().getRange();
+        const preset = vtkColorMaps.getPresetByName(newColormap);
+        lookupTable.applyColorMap(preset);
+        // ctfunc.setMappingRange(dataRange[0], dataRange[1]);
+        // ctfunc.updateRange();
+        
+        // Update to the new color transfer function
+        renderWindow.render();
+      }
+    });
+
     onBeforeUnmount(() => {
-      if (context.value) {
-        Object.keys(context.value).forEach(key => {
+      Object.keys(context.value).forEach(key => {
+        if (context.value[key]) {
           const { fullScreenRenderer, actor } = context.value[key];
           if (actor) actor.delete();
           fullScreenRenderer.delete();
           if (context.value[key]?.resizeObserver) {
             context.value[key].resizeObserver.disconnect(); 
           }
-        });
-        context.value = null;
-      }
+          context.value[key] = null;
+        }
+      });
     });
 
     return {

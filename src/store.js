@@ -17,8 +17,8 @@ export default createStore({
     setCompressedData(state, compressedFile) {
       state.compressedData = compressedFile;
     },
-    enableDecompressionView(state) {
-      state.showDecompression = true;
+    showDecompressionView(state, payload) {
+      state.showDecompression = payload;
     },
   },
   actions: {},
