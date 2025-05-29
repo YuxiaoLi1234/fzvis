@@ -6,6 +6,7 @@ export default createStore({
     compressedData: null,
     dimensions: null,
     precision: null,
+    isTimeVarying: false,
     showDecompression: false,
   },
   mutations: {
@@ -13,6 +14,9 @@ export default createStore({
       state.fileData = payload.content;
       state.dimensions = payload.dimensions;
       state.precision = payload.precision;
+    },
+    setTimeVarying(state, payload) {
+      state.isTimeVarying = payload;
     },
     setCompressedData(state, compressedFile) {
       state.compressedData = compressedFile;

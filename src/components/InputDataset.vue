@@ -12,11 +12,11 @@
 
     <div v-else class="row g-3 align-items-center my-2">
       <!-- precision -->
-      <div class="col-md-7">
+      <div class="col-md-6">
         <div class="row g-1 align-items-center">
           <div class="col">
             <select class="form-select" aria-label="precision" v-model="precision">
-              <option value="" disabled selected>Select precision</option>
+              <option value="" disabled selected>Data precision</option>
               <option value="f">single (f)</option>
               <option value="d">double (d)</option>
             </select>
@@ -24,7 +24,7 @@
         </div>
       </div>
       <!-- depth -->
-      <div class="col-md-5">
+      <div class="col-md-6">
         <div class="row g-1 align-items-center">
           <div class="col-auto">
             <label for="depth" class="form-label">Depth:</label>
@@ -73,8 +73,8 @@
     </div>
 
     <!-- NetCDF file explorer -->
-    <div v-if="isNetCDF">
-      <table class="table table-hover mt-2">
+    <div v-show="isNetCDF">
+      <table class="table mt-2" v-if="currentDataset">
         <thead>
           <tr>
             <th></th>
@@ -83,12 +83,12 @@
             <th>dimensions</th>
           </tr>
         </thead>
-        <tbody v-if="currentDataset">
-          <tr v-for="(props, name) in currentDataset.vars" :key="name">
-            <td><input class="form-check-input" type="radio" name="netcdf-var-select" :value="name" v-model="ncSelectedVar"></td>
-            <td>{{ name }}</td>
-            <td>{{ props.dtype }}</td>
-            <td>{{ props.shape }}</td>
+        <tbody v-for="(props, name) in currentDataset.vars" :key="name">
+          <tr :class="ncSelectedVar === name ? 'table-primary' : ''">
+            <td style="vertical-align: middle; text-align: center;"><input class="form-check-input" type="radio" name="netcdf-var-select" :value="name" v-model="ncSelectedVar"></td>
+            <td style="vertical-align: middle;">{{ name }}</td>
+            <td style="vertical-align: middle;">{{ props.dtype }}</td>
+            <td><a class="text-decoration-underline text-dark" data-bs-toggle="tooltip" data-bs-placement="right" :title="'[' + props.dimensions + ']'">{{ props.shape }}</a></td>
           </tr>
         </tbody>
       </table>
@@ -98,7 +98,7 @@
         <!-- checkbox -->
         <div class="d-flex align-items-center gap-3">
           <div class="form-check ms-1">
-            <input class="form-check-input" type="checkbox" id="showSliceControls" v-model="showSliceControls">
+            <input class="form-check-input" type="checkbox" id="showSliceControls" v-model="showSliceControls" @change="initSliceParams">
             <label class="form-check-label mb-2" for="showSliceControls">
               Enable slicing
             </label>
@@ -228,7 +228,7 @@
 <script>
 
 import axios from 'axios';
-import { Modal } from 'bootstrap';
+import { Modal, Tooltip } from 'bootstrap';
 import { ref } from 'vue';
 
 export default {
@@ -265,7 +265,7 @@ export default {
       isNetCDF: false,
       ncSelectedVar: "",
       showSliceControls: false,
-      sliceParams: {},
+      sliceParams: [],
     }
   },
 
@@ -300,17 +300,24 @@ export default {
       this.sliceParams = [];
 
       if (newVal) {
-        const shape = this.currentDataset.vars[newVal].shape;
-        this.sliceParams = shape.map(size => ({
-          start: 0, 
-          end: size, 
-          step: 1
-        }));
+        this.initSliceParams();
       }
     }
   },
+
+  updated() {
+    this.initializeTooltips();
+  },
   
   methods:{
+    // Initialize tooltips in the DOM
+    initializeTooltips() {
+      document.querySelectorAll('[data-bs-toggle="tooltip"]')
+        .forEach(tooltip => {
+          new Tooltip(tooltip);
+        });
+    },
+
     viewDatasets() {
       this.datasetToChange = this.currentDataset;
       this.datasetsToDelete = [];
@@ -349,6 +356,7 @@ export default {
         const filename = newFile.name.toLowerCase();
         this.ncSelectedVar = "";
         this.isNetCDF = validExtensions.some(ext => filename.endsWith(ext));
+        this.$store.commit("setTimeVarying", false);
         if (!this.isNetCDF) {
           const reader = new FileReader();
           reader.onload = (e) => {
@@ -450,6 +458,7 @@ export default {
       const formData = new FormData();
       
       if (this.currentDataset != this.datasetToChange) {
+        this.$store.commit("setTimeVarying", false);
         formData.append("currentDataset", JSON.stringify(this.datasetToChange));
         this.file = null;   // reset the file if the user has previously selected one
         // Handle different data file types
@@ -500,6 +509,7 @@ export default {
           });
         }
         else if(this.datasetToChange.type === "netcdf") {
+          this.ncSelectedVar = "";
           this.isNetCDF = true;
           this.currentDataset = this.datasetToChange;
         }
@@ -525,9 +535,22 @@ export default {
       btn.disabled = false;
     },
 
+    initSliceParams() {
+      const shape = this.currentDataset.vars[this.ncSelectedVar].shape;
+      this.sliceParams = shape.map(size => ({
+        start: 0, 
+        end: size, 
+        step: 1
+      }));
+    },
+
     selectNetCDFVariable() {
-      // console.log("selectedNCVariable:", this.ncSelectedVar);
-      // console.log("dtype:", this.currentDataset.vars[this.ncSelectedVar].dtype);
+      const timeDimensionIndex = this.currentDataset.vars[this.ncSelectedVar].dimensions.findIndex(
+        dim => dim.toLowerCase() === "time"
+      );
+      // console.log("Time dimension index:", timeDimensionIndex);
+      if (timeDimensionIndex >= 0) 
+        this.$store.commit("setTimeVarying", true);
       
       // Set precision
       var dtype = this.currentDataset.vars[this.ncSelectedVar].dtype;
@@ -558,9 +581,9 @@ export default {
         this.depth = 1;
       }
       else if (slicedDims.length === 3) {
-        this.depth = slicedDims[0];
-        this.height = slicedDims[1];
-        this.width = slicedDims[2];
+        this.depth = slicedDims[timeDimensionIndex > 0 ? timeDimensionIndex : 0];
+        this.height = slicedDims[(timeDimensionIndex === 2 || timeDimensionIndex === -1) ? 0 : 1];
+        this.width = slicedDims[(timeDimensionIndex === 2 || timeDimensionIndex === -1) ? 1 : 2];
       }
 
       const slices = this.sliceParams
@@ -570,7 +593,13 @@ export default {
           end: param.end,
           step: param.step,
         }));
+      console.log("slices values:", slices);
 
+      this.progressAlert.classList.remove("alert-danger");
+      this.progressAlert.classList.remove("alert-success");
+      this.progressAlert.classList.add("alert-secondary", "show");
+      this.progressAlertMessage.textContent = "Waiting to download the variable data...";
+    
       // Get the variable data from the backend server
       axios.get(`${this.baseURL}/download`, {
         params: { 
@@ -589,10 +618,6 @@ export default {
             this.progressBar.textContent = percentComplete + '%';
           }
 
-          this.progressAlert.classList.remove("alert-danger");
-          this.progressAlert.classList.remove("alert-success");
-          this.progressAlert.classList.add("alert-secondary", "show");
-          this.progressAlertMessage.textContent = "Waiting to download the variable data...";
         }
       }).then(response => {
         this.fileContent = response.data;
@@ -620,4 +645,4 @@ export default {
   
 };
 </script>
- 
+

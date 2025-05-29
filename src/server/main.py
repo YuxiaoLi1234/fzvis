@@ -62,11 +62,10 @@ def read_netcdf_file(filename, variable, slice_params=None):
     filepath = upload_dir / filename
     with nc.Dataset(filepath) as dataset:
         if variable == "metadata":
-            for var_name in dataset.variables:
-                print(var_name, dataset.variables[var_name].dimensions)
             return {
                 var_name: {
                     "shape": dataset.variables[var_name].shape,
+                    "dimensions": dataset.variables[var_name].dimensions,
                     "dtype": str(dataset.variables[var_name].dtype),
                 }
                 for var_name in dataset.variables
@@ -82,6 +81,7 @@ def read_netcdf_file(filename, variable, slice_params=None):
             # update the input_data
             global input_data
             var_data = dataset.variables[variable][:]
+            print(variable,"dimensions:", dataset.variables[variable].dimensions)
             # if slicing needs to be applied
             if slice_params:
                 slices = []

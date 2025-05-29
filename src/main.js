@@ -12,11 +12,11 @@ createApp(App).use(store).mount('#app');
 // Initialize all tooltips
 document.querySelectorAll('[data-bs-toggle="tooltip"]')
 .forEach(tooltip => {
-  new bootstrap.Tooltip(tooltip)
+  new bootstrap.Tooltip(tooltip);
 });
 
 // Initialize all popovers
 document.querySelectorAll('[data-bs-toggle="popover"]')
 .forEach(popover => {
-  new bootstrap.Popover(popover)
+  new bootstrap.Popover(popover);
 });
