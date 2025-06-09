@@ -621,6 +621,7 @@ export default {
         }
       }).then(response => {
         this.fileContent = response.data;
+        // console.log("file content:", this.fileContent);
         this.emitFileData();
 
         this.progressBar.style.width = "100%";

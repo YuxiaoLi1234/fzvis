@@ -54,7 +54,7 @@ def read_input_data(dataset):
         input_data = input_data[len(input_data)- depth*height*width:]
     
     input_data = input_data.reshape(depth, height, width)
-    input_data = np.nan_to_num(input_data, nan=0)
+    # input_data = np.nan_to_num(input_data, nan=0)
 
 
 # Read NetCDF file
@@ -92,9 +92,10 @@ def read_netcdf_file(filename, variable, slice_params=None):
                         dim_slice.get("step", 1)
                     )
                     slices.append(sl)
-                input_data = np.nan_to_num(var_data[tuple(slices)], nan=0)
+                input_data = var_data[tuple(slices)]
+                print("nan locations:", np.where(np.isnan(input_data)))
             else: 
-                input_data = np.nan_to_num(var_data, nan=0)
+                input_data = var_data
             return input_data
 
 
@@ -223,116 +224,124 @@ def update_datasets():
         return jsonify({"error" : str(e)}), 500
 
 
-@app.route("/indexlist", methods=["GET", "POST"])
+@app.route("/indexlist", methods=["POST"])
 def indexlist():
-    global input_data
-    def replace_unsupported_values(obj):
-        if isinstance(obj, dict):
-            return {k: replace_unsupported_values(v) for k, v in obj.items()}
-        elif obj == math.inf:
-            return "Infinity"
-        elif obj == -math.inf:
-            return "-Infinity"
-        elif obj is None:
-            return 'null'
-        elif isinstance(obj, float) and math.isnan(obj):
-            return 'null'
-        else:
-            return obj
-    def comparing_compressor(arguments):
-        global input_data
-        print("arguments: ", arguments)
-        def get_metrics_configuration(metrics):
-            if 'composite' in metrics:
-                # If composite is selected, use all metrics
-                return {
-                    "pressio:metric": "composite",
-                    "composite:plugins": ["time", "size", "error_stat"]
-                }
-            else:
-                # Otherwise, only use the selected metrics
-                return {
-                    "pressio:metric": "composite",
-                    "composite:plugins": metrics
-                }
-
-        configs = {
-            "compressor_name": arguments['compressor_name'],
-            "compressor_id": arguments["compressor_id"],
-            "early_config": get_metrics_configuration(arguments['early_config'].get("composite:plugins", [])),
-            "compressor_config": arguments["compressor_config"],
-        }
-        def run_compressor(args):
+    try:
+        option = int(request.form.get("get_options"))
+        # Run all submitted compressors and compare the results
+        if(option == 0):
             global input_data
-            compressor = libpressio.PressioCompressor.from_config({
-                "compressor_id": args['compressor_id'],
-                "early_config": args['early_config'],
-                "compressor_config": args['compressor_config']
-            })
-            decomp_data = input_data.copy()
-            comp_data = compressor.encode(input_data)
-            decomp_data = compressor.decode(comp_data, decomp_data)
-            metrics = compressor.get_metrics()
-            metrics1 = replace_unsupported_values(metrics)
+            def replace_unsupported_values(obj):
+                if isinstance(obj, dict):
+                    return {k: replace_unsupported_values(v) for k, v in obj.items()}
+                elif obj == math.inf:
+                    return "Infinity"
+                elif obj == -math.inf:
+                    return "-Infinity"
+                elif obj is None:
+                    return 'null'
+                elif isinstance(obj, float) and math.isnan(obj):
+                    return 'null'
+                else:
+                    return obj
+            def comparing_compressor(arguments):
+                global input_data
+                print("arguments: ", arguments)
+                # def get_metrics_configuration(metrics):
+                #     if 'composite' in metrics:
+                #         # If composite is selected, use all metrics
+                #         return {
+                #             "pressio:metric": "composite",
+                #             "composite:plugins": ["time", "size", "error_stat"]
+                #         }
+                #     else:
+                #         # Otherwise, only use the selected metrics
+                #         return {
+                #             "pressio:metric": "composite",
+                #             "composite:plugins": metrics
+                #         }
+
+                configs = {
+                    "compressor_name": arguments["compressor_name"],
+                    "compressor_id": arguments["compressor_id"],
+                    "early_config": {
+                        "pressio:metric": "composite",
+                        "composite:plugins": arguments['early_config'].get("composite:plugins", []),
+                    },
+                    # get_metrics_configuration(arguments['early_config'].get("composite:plugins", [])),
+                    "compressor_config": arguments["compressor_config"],
+                }
+                def run_compressor(args):
+                    global input_data
+                    # Check if the configuration is valid
+                    compressor = libpressio.PressioCompressor.from_config({
+                        "compressor_id": args['compressor_id'],
+                        "early_config": args['early_config'],
+                        "compressor_config": args['compressor_config'],
+                    })
+                    decomp_data = input_data.copy()
+                    comp_data = compressor.encode(input_data)
+                    decomp_data = compressor.decode(comp_data, decomp_data)
+                    metrics = compressor.get_metrics()
+                    metrics1 = replace_unsupported_values(metrics)
+                    
+                    return {
+                        "compressor_name": args['compressor_name'],
+                        "compressor_id": args['compressor_id'],
+                        "metrics": metrics1,
+                        "decp_data": decomp_data,
+                    }
+                result = run_compressor(configs)
+                return result
             
-            return {
-                "compressor_name": args['compressor_name'],
-                "compressor_id": args['compressor_id'],
-                "metrics": metrics1,
-                "decp_data": decomp_data,
-            }
-        result = run_compressor(configs)
+            if input_data is None:
+                return jsonify({"error": "No input dataset at backend!"}), 400
+            configurations = json.loads(request.form.get('configurations'))
+            # print("configurations:", configurations)
+            result = {}
+            decp_data = []
+            for config in configurations:
+                if(config['compressor_id'] != ''):
+                    print("config:", config)
+                    output = comparing_compressor(config)
+                    result[output['compressor_name']] = {"compressor_id": output['compressor_id'],
+                    "metrics": output['metrics'],}
+                    print(result[output['compressor_name']])
+                    print("decp_data.shape:", output["decp_data"].shape)
+                    # print("original data non-zero values:", np.count_nonzero(input_data))
+                    # print("decompressed data non-zero values:", np.count_nonzero(output["decp_data"]))
+                    decp_data.append(output["decp_data"].flatten().tolist())
+            result["decp_data"] = decp_data
+            return result, 200
         
-        return result
+        elif option == 1:
+            # pprint(libpressio.PressioCompressor("roibin", {"roibin:roi": "sz3"}).get_configuration())
+            compressor_id = request.form["compressor_id"]
+            c = libpressio.PressioCompressor("pressio", {"pressio:compressor": compressor_id}, name="pressio")
+            top_level = c.get_configuration()["pressio"]
+            doc = c.get_documentation()
+            # print("doc:", json.dumps(doc, indent=4, sort_keys=True))
+            # print("top_level:", json.dumps(top_level, indent=4, sort_keys=True))
+            children = top_level["pressio:children"] # you'll see pressio/noop and pressio/sz3
+            # print("children:", json.dumps(children, indent=4, sort_keys=True))
+            options = top_level[compressor_id] # we determined that "sz3" is the right string here by stripping out "pressio/" from the entries in children
+            highlevel = options["pressio:highlevel"]
+            # print("options:", json.dumps(options, indent=4, sort_keys=True))
+            module_slots = {k: options[k] for k in options if k.startswith(compressor_id)}
+            
+            return jsonify({"highlevel" : highlevel, "options" : module_slots}), 200 
     
-    if request.method == 'POST':
-        try:
-            if(int(request.form['get_options']) == 0):
-                if input_data is None:
-                    return jsonify({"error": "No input dataset!"}), 400
-                configurations = json.loads(request.form.get('configurations'))
-                # print("configurations:", configurations)
-                result = {}
-                decp_data = []
-                for config in configurations:
-                    if(config['compressor_id'] != ''):
-                        print("config:", config)
-                        output = comparing_compressor(config)
-                        result[output['compressor_name']] = {"compressor_id": output['compressor_id'],
-                        "metrics": output['metrics'],}
-                        # flatten the decompressed data for the front end use
-                        print("decp_data.shape:", output["decp_data"].shape)
-                        print("original data:", np.count_nonzero(input_data))
-                        print("decompressed data:", np.count_nonzero(output["decp_data"]))
-                        decp_data.append(output["decp_data"].flatten().tolist())
-                result["decp_data"] = decp_data
-                return result, 200
-                
-                # print(slice_number,sliced_id,slice_width,slice_height,type(input_data),len(input_data))
-            else:
-                compressor_id = request.form["compressor_id"]
-                c = libpressio.PressioCompressor("pressio", {"pressio:compressor": compressor_id}, name="pressio")
-                top_level = c.get_configuration()["pressio"]
-                doc = c.get_documentation()
-                print("doc:", json.dumps(doc, indent=4, sort_keys=True))
-                # print("top_level:", json.dumps(top_level, indent=4, sort_keys=True))
-                children = top_level["pressio:children"] # you'll see pressio/noop and pressio/sz3
-                print("children:", json.dumps(children, indent=4, sort_keys=True))
-                options = top_level[compressor_id] # we determined that "sz3" is the right string here by stripping out "pressio/" from the entries in children
-                highlevel = options["pressio:highlevel"]
-                print("options:", json.dumps(options, indent=4, sort_keys=True))
-                module_slots = {k: options[k] for k in options if k.startswith(compressor_id)}
-                
-                return jsonify({"highlevel" : highlevel, "options" : module_slots}), 200 
-        
-        except Exception as e:
-            print("Error in indexlist():", e)
-            return jsonify({"error": str(e)}), 500
-        
-    else:
-        return jsonify({"error": "configuration is illegal"}), 400
+        # Get available compressors
+        elif option == 2:
+            c = libpressio.PressioCompressor("pressio", name="pressio")
+            compressor_list = c.get_configuration()["pressio"]["pressio:compressor"]
+            print("compressors:", compressor_list)
+            return compressor_list
 
-
+    except Exception as e:
+        print("Error in indexlist():", e)
+        return jsonify({"error": str(e)}), 500
+    
 # Catch-all route to serve the Vue frontend's index.html
 @app.route('/', defaults={'path': ''})
 @app.route('/<path:path>')

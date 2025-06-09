@@ -28,10 +28,10 @@
               </div>
               <p class="card-text">Detailed options are listed here.</p>
               <div v-for="(optionList, optionName) in filteredDetailOptions" :key="optionName">
-                <multiselect class="mb-2 me-2" :options="optionList" v-model="configuredValues['Detail'][optionName]" :close-on-select="true" :clear-on-select="false" :placeholder="`Select ${optionName}`" label="label" track-by="id" @select="handleOptionsChange(optionName)" aria-label="optionName">
+                <!--<multiselect class="mb-2 me-2" :options="optionList" v-model="configuredValues['Detail'][optionName]" :close-on-select="true" :clear-on-select="false" :placeholder="`Select ${optionName}`" label="label" track-by="id" @select="handleOptionsChange(optionName)" aria-label="optionName">
+                </multiselect>-->
+                <multiselect class="mb-2 me-2" :options="optionList" v-model="configuredValues['Detail'][optionName]" :multiple="optionName === 'Metric'" :close-on-select="optionName != 'Metric'" :clear-on-select="false" :placeholder="`Select ${optionName}`" label="label" track-by="id" @select="handleOptionsChange(optionName)" aria-label="optionName">
                 </multiselect>
-                <!-- <multiselect class="mb-2 me-2" :options="optionList" v-model="configuredValues['Detail'][optionName]" :multiple="optionName === 'Metric'" :close-on-select="optionName != 'Metric'" :clear-on-select="false" :placeholder="`Select ${optionName}`" label="label" track-by="id" @select="handleOptionsChange(optionName)" aria-label="optionName">
-                </multiselect> -->
                 <input v-if="optionName === 'Error Bound' && configuredValues['Detail'][optionName] && !configuredValues['Highlevel']['pressio:abs'] && !configuredValues['Highlevel']['pressio:rel']" type="number" class="form-control w-auto mb-2" placeholder="Enter value" min="0" step="0.001" v-model="configuredValues['Detail'][optionName].value">
               </div>
               <small class="d-block mb-2 text-muted">
@@ -209,6 +209,10 @@ export default {
         });
       }
 
+      if ("Metric" in detailOptions) {
+        detailOptions["Metric"] = detailOptions["Metric"].filter(item => item.id !== "composite");
+      }
+
       return detailOptions;
     },
 
@@ -292,11 +296,10 @@ export default {
 
         var formattedOptions = {};
         const baseURL = process.env.VUE_APP_API_BASE;
-        axios.post(`${baseURL}/indexlist`, formData)
-        .then(response => {
+        axios.post(`${baseURL}/indexlist`, formData).then(response => {
           const highlevel = response.data.highlevel;
           formattedOptions["Highlevel"] = highlevel.map(item => ({
-            id: `${item}`,
+            id: item,
             label: this.getFormattedKey(item),
             type: "Highlevel",
           }));
@@ -310,9 +313,9 @@ export default {
               const formattedCategory = this.getFormattedKey(category);
               
               acc[formattedCategory] = values.map(value => ({
-                id: `${category}-${value}`,
+                id: value,
                 label: `${formattedCategory}: ${value}`, // format label for display
-                type: category
+                type: category,
               }));
               return acc;
             }, {})
@@ -345,7 +348,6 @@ export default {
           });
           this.compressorOptions[this.selectedCompressor.id] = formattedOptions;
           console.log("formattedOptions:", formattedOptions);
-          console.log("configuredValues:", JSON.stringify(this.configuredValues));
         })
         .catch(error => {
           console.error('Error submitting configuration:', error.response ? error.response.data : error.message);
@@ -379,7 +381,6 @@ export default {
       // console.log("optionName:", optionName);
       if (optionName === 'Error Bound') {
         const selected = this.configuredValues["Detail"]?.["Error Bound"];
-        // console.log("selected:", selected);
         if (selected && selected.id.toLowerCase().includes("abs")) {
           this.configuredValues["Detail"]["Error Bound"].value = this.configuredValues["Highlevel"]["pressio:abs"];
         }
@@ -394,31 +395,38 @@ export default {
       console.log("configuredValues", JSON.stringify(this.configuredValues));
 
       config.compressor_id = this.selectedCompressor.id;
+      config["early_config"] = {
+        "pressio:metric": "composite",
+        "composite:plugins": [],
+      };
+
+      Object.entries(this.configuredValues["Highlevel"]).forEach(([key, value]) => {
+        if (value !== null && value !== undefined) {
+          config["compressor_config"][key] = value;
+        }
+      });
       Object.values(this.configuredValues["Detail"]).forEach((item) => {
-        // if item is an array
+        // if item is an array (only metrics right now?)
         if (Array.isArray(item)) {
           item.forEach(element => {
             if (element?.id) {
-              const [prefix, key] = element.id.split("-");
-              config["compressor_config"][prefix] = config["compressor_config"][prefix] || [];
-              config["compressor_config"][prefix].push(key);
+              config["early_config"]["composite:plugins"].push(element.id);
             }
           });
         }
         
-        else if (item.label.startsWith("Error Bound:")) {
-          if(item.id.split(":")[0] != this.selectedCompressor.id){
-            config["compressor_config"][item.id] = item.value
-          }
-          else{
-            const errorMode = item.label.split(": ")[1];
-            config["compressor_config"][`${this.selectedCompressor.id}:${errorMode.toLowerCase()}_error_bound`] = item.value;
-          }
-        }
-        
+        // value of error bound will be stored in highlevel?
+        // else if (item.label.startsWith("Error Bound:")) {
+        //   if(item.id.split(":")[0] != this.selectedCompressor.id){
+        //     config["compressor_config"][item.id] = item.value
+        //   }
+        //   else{
+        //     const errorMode = item.label.split(": ")[1];
+        //     config["compressor_config"][`${this.selectedCompressor.id}:${errorMode.toLowerCase()}_error_bound`] = item.value;
+        //   }
+        // }
         else if(!item.label.startsWith("Compressor:")) {
-          const [prefix, key] = item.id.split("-");
-          config["compressor_config"][prefix] = key;
+          config["compressor_config"][item.type] = item.id;
         }
       });
 
@@ -431,7 +439,6 @@ export default {
     },
 
     submitConfigurations() {
-      
       const alertBox = document.getElementById("compressorAlert");
       const alertMessage = document.getElementById("compressorAlertMessage");
 
@@ -440,10 +447,7 @@ export default {
           return {
             compressor_id: config.compressor_id || "unknown",
             compressor_name: name,
-            early_config: {
-              "pressio:metric": "composite",
-              "composite:plugins": ["time", "size", "error_stat"],
-            },
+            early_config: config["early_config"],
             compressor_config: config["compressor_config"],
           };
         });
@@ -473,14 +477,22 @@ export default {
         axios.post(`${baseURL}/indexlist`, this.formData).then(response => {
           const names = Object.values(formattedConfigurations).map((d)=>d.compressor_name);
           const configs = Object.values(formattedConfigurations).map((d)=>d.compressor_config);
-          // console.log("response: ", response.data);
+          // console.log("response compressor: ", response.data[names[0]]);
+          this.compare_data = {
+            'compressor_id':[],
+            'compressor_name':[],
+            'bound':[],
+            'metrics':[],
+            'input_data':''
+          };
+
           for (const key in response.data) {
-            let element = response.data[key]
+            let element = response.data[key];
   
             if(key == 'input_data') continue;
             if(key == 'decp_data') continue;
             
-            this.compare_data['compressor_id'].push(response.data[key]['compressor_id']);
+            this.compare_data['compressor_id'].push(element['compressor_id']);
             this.compare_data['bound'].push(element['bound']);
             if (element['metrics']) {
               this.compare_data['metrics'].push(element['metrics']);
@@ -488,6 +500,8 @@ export default {
               console.warn("Metrics returned from the backend are null or undefined.");
             }
           }
+
+          this.$store.commit("setComparisonData", this.compare_data);
   
           if (alertBox && alertMessage) {
             alertBox.classList.remove("alert-danger");
@@ -505,10 +519,6 @@ export default {
           this.compare_data['compressor_config'] = configs;
 
           this.$store.commit("setCompressedData", response.data["decp_data"][0]);
-          // document.getElementById('temp1').innerHTML = JSON.stringify(this.compare_data);
-          // emitter.emit('myEvent', this.compare_data);
-          // emitter.emit('inputdata', {"input_data":this.input_data, "width": this.width, "height":this.height, "depth":this.depth,"compressor_name":names, "decp_data": response.data['decp_data']});
-          // emitter.emit('compressor_configuration', this.savedConfigurations);
         }).catch(error => {
           if (alertBox && alertMessage) {
             alertBox.classList.remove("alert-success");

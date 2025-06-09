@@ -179,16 +179,23 @@ export default {
     function createImageData(content, dimensions, precision) {
       const imageData = vtkImageData.newInstance();
       imageData.setDimensions(...dimensions);
-      
-      const scalars = (precision === 'f' ? new Float32Array(content) : new Float64Array(content));
+      const inputArray = (precision === 'f' ? new Float32Array(content) : new Float64Array(content));
 
-      const dataArray = vtkDataArray.newInstance({
-        numberOfComponents: 1,
-        values: scalars,
-        dataType: (precision === 'f' ? "Float32Array" : "Float64Array"),
+      const scalars = vtkDataArray.newInstance({
+        size: inputArray.length,
+        values: inputArray,
+        dataType: (precision === 'f' ? `Float32Array` : `Float64Array`),
       });
 
-      imageData.getPointData().setScalars(dataArray);
+      // let totalNaNs = 0;
+      // for (let i = 0; i < inputArray.length; ++i) {
+      //   if (isNaN(inputArray[i])) {
+      //     totalNaNs++;
+      //   }
+      // }
+      // console.log("TotalNaNs:", totalNaNs);
+
+      imageData.getPointData().setScalars(scalars);
       return imageData;
     }
 
@@ -313,7 +320,6 @@ export default {
       else if (rescaleMethod.value === "custom") {
         dataRange = [customMin.value, customMax.value];
       }
-      console.log("Data range: ", dataRange);
       lookupTable.setMappingRange(dataRange[0], dataRange[1]);
       lookupTable.updateRange();
       actor.getMapper().setKSlice(sliceIdx);
@@ -341,15 +347,16 @@ export default {
       console.log("Global range:", dataRange[0], dataRange[1]);
       const preset = vtkColorMaps.getPresetByName(colormap.value);
       lookupTable.applyColorMap(preset);
-      lookupTable.setMappingRange(...dataRange);
-      lookupTable.updateRange();
+      lookupTable.setNanColor([1, 1, 1, 1]);
+      // lookupTable.setMappingRange(...dataRange);
+      // lookupTable.updateRange();
 
       let actor;
       // Enable the 2D visualization if one of the dimension is 1 or the data is time-varying
       // Only check the last dimension (`depth`) as we assume the dimension of the data is like [x, y, t]
       if (dimensions[2] == 1 || isTimeVarying.value) {
         actor = createImageActor(contextInfo.cachedData);
-        actor.getProperty().setRGBTransferFunction(0, lookupTable);
+        actor.getProperty().setRGBTransferFunction(lookupTable);
         actor.getProperty().setInterpolationTypeToLinear(true);
         renderer.addActor(actor);
         contextInfo.actor = actor;

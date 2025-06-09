@@ -8,6 +8,7 @@ export default createStore({
     precision: null,
     isTimeVarying: false,
     showDecompression: false,
+    comparisonData: null,
   },
   mutations: {
     setFileData(state, payload) {
@@ -18,8 +19,11 @@ export default createStore({
     setTimeVarying(state, payload) {
       state.isTimeVarying = payload;
     },
-    setCompressedData(state, compressedFile) {
-      state.compressedData = compressedFile;
+    setCompressedData(state, payload) {
+      state.compressedData = payload;
+    },
+    setComparisonData(state, payload) {
+      state.comparisonData = payload;
     },
     showDecompressionView(state, payload) {
       state.showDecompression = payload;

@@ -2,8 +2,8 @@
 import Header from './components/AppHeader.vue'
 import InputDataset from './components/InputDataset.vue'
 import CustomizeCompressor from './components/CustomizeCompressor.vue'
-import StatA from './components/StatA.vue'
 import HelloVtk from './components/HelloVtk.vue'
+import MetricVis from './components/MetricVis.vue'
 
 export default {
   name: 'App',
@@ -13,7 +13,7 @@ export default {
     InputDataset,
     CustomizeCompressor,
     HelloVtk,
-    StatA,
+    MetricVis,
   },
   
 }
@@ -61,7 +61,7 @@ export default {
             <HelloVtk />
           </div>
           <div id="metrics" class="tab-pane fade" role="tabpanel" aria-labelledby="metrics-tab">
-            <StatA />
+            <MetricVis />
           </div>
         </div>
       </div>
