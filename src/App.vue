@@ -1,19 +1,21 @@
 <script>
-import Header from './components/AppHeader.vue'
+import AppHeader from './components/AppHeader.vue'
 import InputDataset from './components/InputDataset.vue'
 import CustomizeCompressor from './components/CustomizeCompressor.vue'
 import HelloVtk from './components/HelloVtk.vue'
 import MetricVis from './components/MetricVis.vue'
+import AppFooter from './components/AppFooter.vue'
 
 export default {
   name: 'App',
   
   components: {
-    Header,
+    AppHeader,
     InputDataset,
     CustomizeCompressor,
     HelloVtk,
     MetricVis,
+    AppFooter,
   },
   
 }
@@ -21,7 +23,7 @@ export default {
 
 <template>
   <div class="container py-2 px-2 mx-auto">
-    <Header />
+    <AppHeader />
 
     <div class="row">
       <div class="col-sm-4">
@@ -67,6 +69,7 @@ export default {
       </div>
     </div>
 
+    <AppFooter />
   </div>
 
 

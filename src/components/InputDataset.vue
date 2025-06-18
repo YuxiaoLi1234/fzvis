@@ -4,7 +4,7 @@
       <i type="button" class="bi bi-info-circle ms-2 fs-5" data-bs-container="body" data-bs-toggle="popover" data-bs-placement="right" data-bs-html="true" data-bs-content="Currently support: <b>raw</b> and <b>NetCDF</b> file formats."></i>
     </h1>
     
-    <input type="file" class="form-control my-2" id="fileloader" @change="handleFileChange">
+    <input type="file" class="form-control mt-3 mb-2" id="fileloader" @change="handleFileChange">
 
     <div v-if="isNetCDF">
       <small class="py-0 mt-0 text-muted">Click submit button to parse the NetCDF file.</small>

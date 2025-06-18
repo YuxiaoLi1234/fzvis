@@ -1,9 +1,8 @@
 #!/usr/bin/env python
 
 from argparse import ArgumentParser
-from flask import Flask, request, jsonify, send_file, send_from_directory, Response
+from flask import Flask, request, jsonify, send_file, send_from_directory, Response, stream_with_context
 from flask_cors import CORS
-import io
 import json
 import libpressio
 import math
@@ -12,11 +11,15 @@ import netCDF4 as nc
 import os
 from pathlib import Path
 import threading 
+from openai import OpenAI
 
+# CONSTANTS
+DEFAULT_SYSTEM_CONFIG_PROMPT = "You are an expert in lossy compression with deep knowledge of scientific data. Please provide clear and concise answers to all questions. If you are not sure about the answer, please say so. Don't make up answers. Please reply within 200 words if possible."
+LLM_MODEL_NAME = "deepseek-ai/deepseek-r1-0528"
+
+# Useful paths and create necessary folders for the backend
 project_root = Path(__file__).parent.parent.parent
 dist_dir = Path(__file__).parent.parent / "usr/libexec/fzvis/ui"
-
-# Create necessary folders for the backend
 root_dir = Path.home() / ".fzvis"
 upload_dir = root_dir / "uploads"
 work_dir = root_dir / "data"
@@ -24,6 +27,15 @@ work_dir.mkdir(parents=True, exist_ok=True)
 upload_dir.mkdir(parents=True, exist_ok=True)
 metadata_file = upload_dir / "metadata.json"
 saved_datasets = {}
+
+# Create Large Language Model (LLM) client
+# You can request a free API key from NVIDIA at
+# https://build.nvidia.com/models
+client = OpenAI(
+    base_url = "https://integrate.api.nvidia.com/v1",
+    api_key = os.environ.get("LLM_API_KEY", ""),
+)
+conversation_history = [{"role": "system", "content": DEFAULT_SYSTEM_CONFIG_PROMPT}]
 
 app = Flask(__name__)
 CORS(app)
@@ -341,7 +353,55 @@ def indexlist():
     except Exception as e:
         print("Error in indexlist():", e)
         return jsonify({"error": str(e)}), 500
-    
+
+# Route to get AI response
+@app.route("/chat", methods=["POST"])
+def get_ai_response(): 
+    try:
+        message = request.form.get("message")
+        if not message:
+            return jsonify({"error": "No input provided"}), 400
+        
+        # Create and return streaming completion using conversation history
+        conversation_history.append({"role": "user", "content": message})
+        response = client.chat.completions.create(
+            model="deepseek-ai/deepseek-r1-0528",
+            messages=conversation_history,
+            temperature=0.6,
+            top_p=0.7,
+            max_tokens=4096,
+            stream=True,
+        )
+
+        # Stream the response back to the client
+        def generate():
+            full_response = ""
+            for chunk in response:
+                if chunk.choices:
+                    delta = chunk.choices[0].delta
+                    reasoning = delta.reasoning_content or ""
+                    content = delta.content or ""
+
+                    if content:
+                        full_response += content
+                    
+                    payload = {
+                        "reasoning_content": reasoning,
+                        "content": content
+                    }
+                    yield f"data: {json.dumps(payload)}\n\n"
+            conversation_history.append({"role": "assistant", "content": full_response})
+            yield "data: [DONE]\n\n"
+        
+        return Response(
+            stream_with_context(generate()), 
+            mimetype="text/event-stream")
+
+    except Exception as e:
+        print("Error in get_ai_response():", e)
+        return jsonify({"error": str(e)}), 500
+
+
 # Catch-all route to serve the Vue frontend's index.html
 @app.route('/', defaults={'path': ''})
 @app.route('/<path:path>')
