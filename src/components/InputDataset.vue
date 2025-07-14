@@ -1,7 +1,7 @@
 <template>
   <div class="container align-items-center">
     <h1 class="h3 px-2 mt-3">Dataset Settings
-      <i type="button" class="bi bi-info-circle ms-2 fs-5" data-bs-container="body" data-bs-toggle="popover" data-bs-placement="right" data-bs-html="true" data-bs-content="Currently support: <b>raw</b> and <b>NetCDF</b> file formats."></i>
+      <i type="button" class="bi bi-info-circle ms-2 fs-5" data-bs-container="body" data-bs-toggle="popover" data-bs-placement="right" data-bs-html="true" data-bs-content="Currently support <b>raw</b> and <b>NetCDF</b> file formats."></i>
     </h1>
     
     <input type="file" class="form-control mt-3 mb-2" id="fileloader" @change="handleFileChange">
@@ -374,8 +374,7 @@ export default {
         dimensions: [Number(this.width), Number(this.height), Number(this.depth)],
         precision: this.precision,
       });
-      // probably also need to reset the compressed data
-      this.$store.commit("showDecompressionView", false);
+      this.$store.commit("setComparisonData", null);
     },
 
     uploadFile() {
@@ -487,6 +486,7 @@ export default {
             }
           }).then(response => {
             this.isNetCDF = false;
+            this.ncSelectedVar = "";
             this.fileContent = response.data;
             this.emitFileData();
             this.currentDataset = this.datasetToChange;

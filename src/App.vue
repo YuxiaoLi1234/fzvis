@@ -17,12 +17,11 @@ export default {
     MetricVis,
     AppFooter,
   },
-  
 }
 </script>
 
 <template>
-  <div class="container py-2 px-2 mx-auto">
+  <div class="container-fluid py-3 px-5 mx-auto">
     <AppHeader />
 
     <div class="row">
@@ -54,7 +53,9 @@ export default {
             <button class="nav-link active" id="datavis-tab" data-bs-toggle="tab" data-bs-target="#datavis" type="button" role="tab" aria-selected="true"><i class="bi bi-eye me-1"></i>Data Visualization</button>
           </li>
           <li class="nav-item" role="presentation">
-            <button class="nav-link" id="metrics-tab" data-bs-toggle="tab" data-bs-target="#metrics" type="button" role="tab" aria-selected="true"><i class="bi bi-bar-chart-line me-1"></i>Metrics</button>
+            <button class="nav-link" id="metrics-tab" data-bs-toggle="tab" data-bs-target="#metrics" type="button" role="tab" aria-selected="true">
+              <i class="bi bi-bar-chart-line me-1"></i>Metrics
+            </button>
           </li>
         </ul>
         
@@ -94,19 +95,19 @@ export default {
         <div class="mx-2">
           <p class="fw-bold my-1">The Ohio State University</p>
           <ul class="my-0">
-            <li class="fw-bold fst-italic">PI: Hanqi Guo</li>
-            <li>Yuxiao Li</li>
-            <li>Guoxi Liu</li>
-            <li>Hrithik Devaiah Bollachettira Ajithkumar</li>
+            <li class="fw-bold fst-italic"><a href="https://cse.osu.edu/people/guo.2154" target="_blank">PI: Hanqi Guo</a></li>
+            <li><a href="https://github.com/YuxiaoLi1234" target="_blank">Yuxiao Li</a></li>
+            <li><a href="https://cse.osu.edu/people/liu.12722" target="_blank">Guoxi Liu</a></li>
+            <li><a href="https://github.com/hrithikdevaiah-999" target="_blank">Hrithik Devaiah Bollachettira Ajithkumar</a></li>
           </ul>
           <p class="fw-bold my-1">Argonne National Laboratory</p>
           <ul class="my-0">
-            <li>Robert Underwood</li>
+            <li><a href="https://www.anl.gov/profile/robert-underwood" target="_blank">Robert Underwood</a></li>
           </ul>
         </div>
       </div>
     </div>
-    <div class="offcanvas-footer px-2">
+    <div class="offcanvas-footer px-2 pb-5">
       <p class="text-muted">Powered by <a href="https://getbootstrap.com/" target="_blank"><svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" class="bi bi-bootstrap me-1 mb-1" viewBox="0 0 16 16">
         <path d="M5.062 12h3.475c1.804 0 2.888-.908 2.888-2.396 0-1.102-.761-1.916-1.904-2.034v-.1c.832-.14 1.482-.93 1.482-1.816 0-1.3-.955-2.11-2.542-2.11H5.062zm1.313-4.875V4.658h1.78c.973 0 1.542.457 1.542 1.237 0 .802-.604 1.23-1.764 1.23zm0 3.762V8.162h1.822c1.236 0 1.887.463 1.887 1.348 0 .896-.627 1.377-1.811 1.377z"/>
         <path d="M0 4a4 4 0 0 1 4-4h8a4 4 0 0 1 4 4v8a4 4 0 0 1-4 4H4a4 4 0 0 1-4-4zm4-3a3 3 0 0 0-3 3v8a3 3 0 0 0 3 3h8a3 3 0 0 0 3-3V4a3 3 0 0 0-3-3z"/>

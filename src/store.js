@@ -2,15 +2,17 @@ import { createStore } from 'vuex';
 
 export default createStore({
   state: {
-    fileData: null,
-    compressedData: null,
-    dimensions: null,
-    precision: null,
-    isTimeVarying: false,
-    showDecompression: false,
     comparisonData: null,
+    dimensions: null,
+    fileData: null,
+    isTimeVarying: false,
+    precision: null,
   },
+  
   mutations: {
+    setComparisonData(state, payload) {
+      state.comparisonData = payload;
+    },
     setFileData(state, payload) {
       state.fileData = payload.content;
       state.dimensions = payload.dimensions;
@@ -19,16 +21,8 @@ export default createStore({
     setTimeVarying(state, payload) {
       state.isTimeVarying = payload;
     },
-    setCompressedData(state, payload) {
-      state.compressedData = payload;
-    },
-    setComparisonData(state, payload) {
-      state.comparisonData = payload;
-    },
-    showDecompressionView(state, payload) {
-      state.showDecompression = payload;
-    },
   },
+  
   actions: {},
   modules: {}
 });
