@@ -1,13 +1,22 @@
 import { createApp } from 'vue'
-import TDesign from 'tdesign-vue-next';
 import App from './App.vue'
-// import axios from 'axios'
+import store from './store'
+import bootstrap from 'bootstrap/dist/js/bootstrap.bundle.min.js'
 
-import 'tdesign-vue-next/es/style/index.css';
+// CSS files
+import 'bootstrap/dist/css/bootstrap.min.css';
+import 'bootstrap-icons/font/bootstrap-icons.css';
 
-const app = createApp(App)
-app.use(TDesign)
-app.mount('#app')
+createApp(App).use(store).mount('#app');
 
-// axios.defaults.headers.common['Content-Type'] = 'application/x-www-form-urlencoded'
-// axios.defaults.headers.common['Access-Control-Allow-Origin'] = '*';
+// Initialize all tooltips
+document.querySelectorAll('[data-bs-toggle="tooltip"]')
+.forEach(tooltip => {
+  new bootstrap.Tooltip(tooltip);
+});
+
+// Initialize all popovers
+document.querySelectorAll('[data-bs-toggle="popover"]')
+.forEach(popover => {
+  new bootstrap.Popover(popover);
+});
