@@ -4,14 +4,17 @@
       <!-- Options panel -->
       <div class="options-panel px-2">
         <h1 class="h3 pt-3 pb-2">Available Options</h1>
-
         <div class="dropdown">
           <select id="compressor" class="form-select m-1" aria-label="compressor" v-model="selectedCompressor" @change="getCompressorConfigs">
             <option value=null disabled selected>Select compressor</option>
             <option v-for="compressor in availableOptions?.Compressor" :key="compressor.id" :value="compressor">{{ compressor }}</option>
           </select>
+          <span class="text-warning text-align-center">
+            <i class="bi bi-exclamation-triangle-fill me-1"></i>
+            Not all compressors are fully supported or tested.
+          </span>
         </div>
-
+        
         <div v-if="selectedCompressor" class="p-2">
           <div class="card">
             <div class="card-body" v-if="selectedCompressor in this.compressorOptions">
@@ -413,6 +416,7 @@ export default {
       }
 
       const baseConfig = this.baseConfigurations[this.selectedBaseConfig];
+      console.log("baseConfig:", baseConfig);
       const { count, minBound, maxBound, distribution } = this.bulkSettings;
       console.log("bulk settings:", this.bulkSettings);
       
@@ -422,20 +426,23 @@ export default {
         return;
       }
       
-      const errorBoundModeKey = Object.keys(baseConfig.compressor_config).find(key => key.includes("error_bound_mode_str"));
-      const errorBoundMode = errorBoundModeKey ? baseConfig.compressor_config[errorBoundModeKey].toLowerCase() : "abs"; // default to "abs" if not found
       let errorBoundKeys = []
-      if (errorBoundMode.includes("abs")) {
-        errorBoundKeys.push(baseConfig.compressor_id + ":" + "abs_error_bound");
-      } 
-      if (errorBoundMode.includes("rel")) {
-        errorBoundKeys.push(baseConfig.compressor_id + ":" + "rel_error_bound");
-      } 
-      if (errorBoundMode.includes("psnr")) {
-        errorBoundKeys.push(baseConfig.compressor_id + ":" + "psnr_error_bound");
-      }
-      if (errorBoundMode.includes("norm")) {
-        errorBoundKeys.push(baseConfig.compressor_id + ":" + "l2_norm_error_bound");
+      console.log("baseConfig.compressor_id:", baseConfig.compressor_id);
+      if (baseConfig?.compressor_id === "sz3") {
+        const errorBoundModeKey = Object.keys(baseConfig.compressor_config).find(key => key.includes("error_bound_mode_str"));
+        const errorBoundMode = errorBoundModeKey ? baseConfig.compressor_config[errorBoundModeKey].toLowerCase() : "abs"; // default to "abs" if not found
+        if (errorBoundMode.includes("abs")) {
+          errorBoundKeys.push(baseConfig.compressor_id + ":" + "abs_error_bound");
+        } 
+        if (errorBoundMode.includes("rel")) {
+          errorBoundKeys.push(baseConfig.compressor_id + ":" + "rel_error_bound");
+        } 
+        if (errorBoundMode.includes("psnr")) {
+          errorBoundKeys.push(baseConfig.compressor_id + ":" + "psnr_error_bound");
+        }
+        if (errorBoundMode.includes("norm")) {
+          errorBoundKeys.push(baseConfig.compressor_id + ":" + "l2_norm_error_bound");
+        }
       }
       
       // Generate configurations with different error bounds
@@ -452,8 +459,8 @@ export default {
           errorBound = minBound * Math.exp(lambda * i);
         }
         else if (distribution === 'random') {
-        // Random distribution
-        errorBound = Math.random() * (maxBound - minBound) + minBound;
+          // Random distribution
+          errorBound = Math.random() * (maxBound - minBound) + minBound;
         }
         
         // Create a deep copy of the base configuration
