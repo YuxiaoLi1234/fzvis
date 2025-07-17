@@ -175,7 +175,7 @@
 
       <!-- Decompressed Container -->
       <div
-        v-show="hasDecompressedData && selectedDecompressedData"
+        v-show="selectedDecompressedData"
         class="card"
         style="height: 375px;"
       >
@@ -186,7 +186,7 @@
           data-bs-toggle="tooltip"
           data-bs-placement="bottom"
           data-bs-html="true"
-          :title="formatConfigTooltip(selectedDecompressedData?.compressor_config)"
+          :title="formatConfigHTML(selectedDecompressedData?.compressor_config)"
           >
           Decompressed ({{ selectedCompressor }})
           </span>
@@ -205,7 +205,7 @@
 </template>
 
 <script>
-import { Tooltip } from 'bootstrap';
+import { Popover, Tooltip } from 'bootstrap';
 import { ref, onMounted, onBeforeUnmount, computed, watch, nextTick } from 'vue';
 import { useStore } from 'vuex';
 import '@kitware/vtk.js/Rendering/Profiles/Geometry';
@@ -380,7 +380,7 @@ export default {
       return interactorStyle;
     }
 
-    function formatConfigTooltip(config) {
+    function formatConfigHTML(config) {
       if (!config) return '';
       return Object.entries(config)
         .map(([key, value]) => `<b>${key}:</b> ${typeof value === 'object' && value !== null ? JSON.stringify(value) : value}<br>`)
@@ -612,8 +612,14 @@ export default {
           renderView(fileData.value, dimensions.value, precision.value, context.value.original);
         }
         if (hasDecompressedData.value) {
-          selectedCompressor.value = decompressedKeys.value[0];
+          selectedDecompressedIndex.value = 0;
         }
+        
+        nextTick(() => {
+          document.querySelectorAll('[data-bs-toggle="popover"]').forEach(el => {
+            new Popover(el);
+          });
+        });
       }, 200);
     });
 
@@ -637,22 +643,10 @@ export default {
     });
 
     // Rerender when the decompressed data changes
-    watch(comparisonData, newCompData => {
+    watch(comparisonData, () => {
       cleanupContext(context.value.decompressed);
       context.value.decompressed = null;
-      
-      if (newCompData && Object.keys(newCompData).length > 0) {
-        nextTick(() => {
-          document.querySelectorAll('[data-bs-toggle="tooltip"]')
-            .forEach(tooltip => {
-              const instance = Tooltip.getInstance(tooltip);
-              if (instance) instance.dispose();
-              new Tooltip(tooltip);
-            });
-        });
-      } else {
-        selectedCompressor.value = null;
-      }
+      selectedDecompressedIndex.value = 0;
     });
 
     // Watch for decompressedKeys changes to reset index
@@ -711,6 +705,17 @@ export default {
     watch(selectedCompressor, (newCompressor) => {
       if (newCompressor && selectedDecompressedData.value && dimensions.value && precision.value) {
         nextTick(() => {
+          document.querySelectorAll('[data-bs-toggle="tooltip"]').forEach(el => {
+            let tooltip = Tooltip.getInstance(el);
+            if (!tooltip) {
+              new Tooltip(el);
+            } else {
+              // Update the title if the tooltip already exists
+              const newTitle = formatConfigHTML(selectedDecompressedData.value.compressor_config);
+              el.setAttribute('data-bs-original-title', newTitle);
+              tooltip?.update();
+            }
+          });
           initializeVTKDecompressed();
           setTimeout(() => {
             renderView(
@@ -744,7 +749,7 @@ export default {
       customMin,
       decompressedKeys,
       dimensions,
-      formatConfigTooltip,
+      formatConfigHTML,
       handleSyncCameraChange,
       hasDecompressedData,
       isTimeVarying,

@@ -171,7 +171,7 @@
               <li v-for="(dataset, key) in uploadedDatasets" :key="dataset.id" 
                 :class="['list-group-item', 'd-flex', 'justify-content-between', 'align-items-start', { 'active': dataset.name == datasetToChange?.name, 'list-group-item-danger': datasetsToDelete.includes(key) }]">
                 <div class="ms-2 me-auto">
-                  <div :class="['fw-bold', { 'text-decoration-line-through': datasetsToDelete.includes(key) }]">
+                  <div :class="['fw-bold', 'text-break', { 'text-decoration-line-through': datasetsToDelete.includes(key) }]">
                     {{ dataset.name }}
                     <span class="badge bg-secondary" v-if="dataset.type === 'plain' && dataset.precision === 'f'">float32</span>
                     <span class="badge bg-secondary" v-if="dataset.type === 'plain' && dataset.precision === 'd'">float64</span>
@@ -414,10 +414,7 @@ export default {
         }
       })
       .then(response => {
-        console.log("response.data:", response.data);
-        console.log("response.data.dataset:", response.data.dataset);
         this.currentDataset = response.data["dataset"];
-        console.log("current dataset:", this.currentDataset);
         if (!this.isNetCDF) {
           this.emitFileData();
         }

@@ -135,6 +135,7 @@
                         <button
                           class="btn btn-outline-secondary"
                           title="Details"
+                          data-bs-trigger="focus"
                           data-bs-toggle="popover"
                           data-bs-placement="right"
                           data-bs-html="true"
@@ -418,7 +419,6 @@ export default {
       const baseConfig = this.baseConfigurations[this.selectedBaseConfig];
       console.log("baseConfig:", baseConfig);
       const { count, minBound, maxBound, distribution } = this.bulkSettings;
-      console.log("bulk settings:", this.bulkSettings);
       
       // Validate inputs
       if (!count || count <= 0 || !minBound || !maxBound) {
@@ -525,11 +525,20 @@ export default {
               // remove `sz3:` prefix and `_str` suffix
               const formattedCategory = this.getFormattedKey(category);
               
-              acc[formattedCategory] = values.map(value => ({
-                id: value,
-                label: `${formattedCategory}: ${value}`, // format label for display
-                type: category,
-              }));
+              if (Array.isArray(values)) {
+                acc[formattedCategory] = values.map(value => ({
+                  id: value,
+                  label: `${formattedCategory}: ${value}`, // format label for display
+                  type: category,
+                }));
+              } else {
+                // For non-array categories, convert to object with formatted keys
+                acc[formattedCategory] = [{
+                  id: values,
+                  label: `${formattedCategory}: ${values}`, // format label for display
+                  type: category,
+                }];
+              }
               return acc;
             }, {})
           };
@@ -818,7 +827,7 @@ export default {
             this.compare_data[key]["compressor_config"] = this.formatConfig(this.savedConfigurations[key]["compressor_config"]);
           });
           // console.log("compare_data:", this.compare_data);
-          console.log("compressor config:", Object.values(this.compare_data).map(d => d["compressor_config"]));
+          // console.log("compressor config:", Object.values(this.compare_data).map(d => d["compressor_config"]));
           // const names = Object.values(formattedConfigurations).map((d)=>d.compressor_name);
           // const configs = Object.values(formattedConfigurations).map((d)=>d.compressor_config);
 

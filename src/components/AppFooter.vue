@@ -130,6 +130,23 @@ export default {
           body: new URLSearchParams({ message: messageToSend }),
         });
 
+        // Check for server error response
+        if (!response.ok) {
+          let errorText = "Unknown error";
+          try {
+            const errorData = await response.json();
+            errorText = errorData.error || JSON.stringify(errorData);
+          } catch (e) {
+            errorText = await response.text();
+          }
+          this.messages.push({
+            id: Date.now() + 2,
+            text: `Sorry, server error: ${errorText}`,
+            type: "bot",
+          });
+          return;
+        }
+
         const reader = response.body.getReader();
         const decoder = new TextDecoder("utf-8");
 
