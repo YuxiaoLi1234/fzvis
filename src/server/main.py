@@ -347,7 +347,7 @@ def get_ai_response():
         # Create and return streaming completion using conversation history
         conversation_history.append({"role": "user", "content": message})
         response = client.chat.completions.create(
-            model="deepseek-ai/deepseek-r1-0528",
+            model=LLM_MODEL_NAME,
             messages=conversation_history,
             temperature=0.6,
             top_p=0.7,

@@ -248,7 +248,7 @@ export default {
 
   data() {
     return {
-      baseURL: process.env.VUE_APP_API_BASE,
+      baseURL: localStorage.getItem("fzvis_server_address"),
       depth: null,
       width: null,
       height: null,

@@ -63,7 +63,7 @@ export default {
   name: "AppFooter",
   data() {
     return {
-      baseURL: process.env.VUE_APP_API_BASE,
+      baseURL: localStorage.getItem("fzvis_server_address"),
       isChatOpen: false,
       isLoading: false,
       currentMessage: "",
