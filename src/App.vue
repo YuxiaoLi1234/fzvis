@@ -99,7 +99,7 @@ export default {
     <div v-else class="container-fluid py-3 px-5 mx-auto">
       <AppHeader />
       <div class="row">
-        <div class="col-sm-4">
+        <div class="col-sm-4" style="min-width:300px;">
           <ul class="nav nav-tabs" role="tablist">
             <li class="nav-item" role="presentation">
               <button class="nav-link active" id="dataset-tab" data-bs-toggle="tab" data-bs-target="#dataset" type="button" role="tab" aria-selected="true">

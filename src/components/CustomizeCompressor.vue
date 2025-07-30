@@ -94,125 +94,69 @@
         </div>
       </div>
 
-      <!-- Base configurations panel -->
+      <!-- Base configurations panel with force-directed graph -->
       <div class="p-2">
-        <div class="card border-primary">
+        <div class="card border-primary" style="height: 350px;">
           <div class="card-header d-flex justify-content-between align-items-center">
-            <h6 class="mb-0">Base Configurations</h6>
-            <span class="badge bg-info">{{ Object.keys(baseConfigurations).length }}</span>
-          </div>
-          
-          <div class="card-body p-2" v-if="Object.keys(baseConfigurations).length > 0">
-            <div class="row">
-              <div class="col-12 mb-2" v-for="(config, name) in baseConfigurations" :key="name">
-                <div class="card">
-                  <div class="card-body p-2">
-                    <div class="d-flex justify-content-between align-items-center">
-                      <div>
-                        <h6 class="card-title mb-1 text-primary">{{ name }}</h6>
-                        <div class="small text-muted">
-                          {{ config.compressor_id ? config.compressor_id.toUpperCase() : "" }}
-                          <span class="badge bg-secondary pointer me-1">
-                            {{ Object.keys(derivedConfigurations[name]).length }}
-                          </span>
-                          <template v-if="Object.keys(derivedConfigurations[name]).length > 0">
-                            <small style="cursor:pointer" v-if="expandedBaseConfigs[name]" class="link-info" @click="toggleDerivedConfigsVisibility(name)">
-                              (hide)
-                            </small>
-                            <small style="cursor:pointer" v-else class="link-info" @click="toggleDerivedConfigsVisibility(name)">
-                              (show)
-                            </small>
-                          </template>
-                        </div>
-                      </div>
-                      <div class="d-flex gap-2">
-                        <button class="btn btn-outline-danger" title="Delete" @click="removeConfiguration(name)">
-                          <i class="bi bi-trash"></i>
-                        </button>
-                        <button class="btn btn-outline-secondary" title="Bulk Generate" @click="prepareBulkGeneration(name)" data-bs-toggle="modal" data-bs-target="#bulkGenerationModal">
-                          <i class="bi bi-lightning-charge"></i>
-                        </button>
-                        <button
-                          class="btn btn-outline-secondary"
-                          title="Details"
-                          data-bs-trigger="focus"
-                          data-bs-toggle="popover"
-                          data-bs-placement="right"
-                          data-bs-html="true"
-                          :data-bs-content="formatBaseConfig(config)"
-                        >
-                          <i class="bi bi-info"></i>
-                        </button>
-                      </div>
-                    </div>
-                    
-                    <!-- Derived configurations list (expandable) -->
-                    <div v-if="expandedBaseConfigs[name]" class="mt-3">
-                      <hr class="my-2">
-                      <h6 class="text-muted mb-2">Derived Configurations</h6>
-                      <div class="table-responsive">
-                        <table class="table table-sm table-hover">
-                          <thead>
-                            <tr class="text-center">
-                              <th>Suffix</th>
-                              <th>Error Bound</th>
-                              <th>Actions</th>
-                            </tr>
-                          </thead>
-                          <tbody class="text-center">
-                            <tr v-for="(derivedConfig, derivedName) in derivedConfigurations[name]" :key="derivedName">
-                              <td class="small" style="width: 20%;">{{ derivedName.substring(name.length + 1) }}</td>
-                              <td style="width: 50%;">
-                                <input 
-                                  type="number" 
-                                  class="form-control form-control-sm" 
-                                  v-model="derivedConfig.compressor_config[getErrorBoundKey(derivedConfig)]" 
-                                  step="0.00001" 
-                                  min="0"
-                                  :disabled="!editingErrorBound[derivedName]"
-                                >
-                              </td>
-                              <td style="width: 30%">
-                                <button
-                                  v-if="!editingErrorBound[derivedName]"
-                                  class="btn btn-sm btn-outline-primary"
-                                  title="Edit"
-                                  @click="editingErrorBound = { ...editingErrorBound, [derivedName]: true }"
-                                >
-                                  <i class="bi bi-pencil-square"></i>
-                                </button>
-                                <button
-                                  v-else
-                                  class="btn btn-sm btn-success"
-                                  title="Save"
-                                  @click="editingErrorBound = { ...editingErrorBound, [derivedName]: false }"
-                                >
-                                  <i class="bi bi-floppy"></i>
-                                </button>
-                                <button class="btn btn-sm btn-outline-danger ms-2" @click="removeConfiguration(name, derivedName)">
-                                  <i class="bi bi-trash"></i>
-                                </button>
-                              </td>
-                            </tr>
-                          </tbody>
-                        </table>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              </div>
+            <h6 class="mb-0">Configuration Graph</h6>
+            <div class="d-flex align-items-center">
+              <span class="badge bg-info me-2">{{ Object.keys(baseConfigurations).length }}</span>
+              <button class="btn btn-outline-primary btn-sm" @click="openLargeGraphModal" title="Open Large View">
+                <i class="bi bi-arrows-fullscreen"></i>
+              </button>
             </div>
           </div>
           
-          <div class="card-body text-center text-muted" v-else>
-            <p class="mb-0">No saved configurations yet.</p>
+          <div class="card-body p-2" style="height: calc(100% - 120px); overflow: hidden;">
+            <!-- Graph container -->
+            <div id="configuration-graph" ref="graphContainer" style="width: 100%; height: 100%; border: 1px solid #dee2e6; border-radius: 0.375rem; cursor: grab;">
+              <svg ref="graphSvg" width="100%" height="100%"></svg>
+            </div>
+            
+            <!-- No configurations message -->
+            <div v-if="Object.keys(baseConfigurations).length === 0" class="text-center text-muted mt-3">
+              <p class="mb-0">No saved configurations yet.</p>
+            </div>
           </div>
           
-          <div class="card-footer text-center">
+          <div class="card-footer text-center" style="height: 60px;">
             <button type="button" class="btn btn-primary w-60" @click="submitConfigurations" :disabled="Object.keys(savedConfigurations).length === 0">
               Run All {{ Object.keys(savedConfigurations).length }} Configurations
             </button>
           </div>
+        </div>
+      </div>
+
+      <!-- Large Graph Modal -->
+      <div id="largeGraphModal" class="modal fade" tabindex="-1" aria-labelledby="largeGraphModalLabel" aria-hidden="true">
+        <div class="modal-dialog modal-fullscreen">
+          <div class="modal-content">
+            <div class="modal-header">
+              <h5 class="modal-title" id="largeGraphModalLabel">Configuration Graph - Large View</h5>
+              <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body p-0">
+              <div id="large-configuration-graph" ref="largeGraphContainer" style="width: 100%; height: 100%; cursor: grab;">
+                <svg ref="largeGraphSvg" width="100%" height="100%"></svg>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Node context menu -->
+      <div id="node-context-menu" class="context-menu" style="display: none; position: absolute; z-index: 1000; background: white; border: 1px solid #ccc; border-radius: 4px; padding: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.1);">
+        <div class="context-menu-item" @click="editNodeErrorBound" style="padding: 4px 8px; cursor: pointer; border-radius: 4px;">
+          <i class="bi bi-pencil-square me-2"></i>Edit Error Bound
+        </div>
+        <div class="context-menu-item" @click="deleteNode" style="padding: 4px 8px; cursor: pointer; border-radius: 4px;">
+          <i class="bi bi-trash me-2"></i>Delete
+        </div>
+        <div class="context-menu-item" @click="promoteToBase" style="padding: 4px 8px; cursor: pointer; border-radius: 4px;">
+          <i class="bi bi-arrow-up-circle me-2"></i>Promote to Base
+        </div>
+        <div class="context-menu-item" @click="bulkGenerate" style="padding: 4px 8px; cursor: pointer; border-radius: 4px;">
+          <i class="bi bi-lightning-charge me-2"></i>Bulk Generate
         </div>
       </div>
       
@@ -278,6 +222,7 @@
 import axios from 'axios';
 import { Modal, Popover } from 'bootstrap';
 import Multiselect from 'vue-multiselect';
+import * as d3 from 'd3';
 
 export default {
   components: {
@@ -320,6 +265,17 @@ export default {
       },
       expandedBaseConfigs: {}, // track which base configs are expanded
       editingErrorBound: {},
+      // Force-directed graph properties
+      graphData: { nodes: [], links: [] },
+      simulation: null,
+      selectedNode: null,
+      isDragging: false,
+      contextMenuTarget: null,
+      resizeObserver: null,
+      // Zoom and pan functionality
+      zoomBehavior: null,
+      largeZoomBehavior: null,
+      largeSimulation: null,
     };
   },
 
@@ -358,6 +314,7 @@ export default {
     baseConfigurations: {
       handler() {
         this.initializePopovers();
+        this.updateGraphData();
       },
       deep: true,
     },
@@ -372,6 +329,7 @@ export default {
             return acc;
           }, {}
         );
+        this.updateGraphData();
       },
       deep: true,
     },
@@ -385,6 +343,30 @@ export default {
 
   mounted: function () {
     this.getAvailableCompressors();
+    // Initialize graph after component is mounted and refs are available
+    this.$nextTick(() => {
+      this.initializeGraph();
+      this.setupResizeObserver();
+    });
+    // Hide context menu when clicking elsewhere
+    document.addEventListener('click', this.hideContextMenu);
+    
+    // Listen for tab changes to re-initialize graph when compressor tab becomes active
+    const compressorTab = document.getElementById('compressor-tab');
+    if (compressorTab) {
+      compressorTab.addEventListener('shown.bs.tab', () => {
+        this.$nextTick(() => {
+          this.initializeGraph();
+        });
+      });
+    }
+  },
+
+  beforeUnmount() {
+    document.removeEventListener('click', this.hideContextMenu);
+    if (this.resizeObserver) {
+      this.resizeObserver.disconnect();
+    }
   },
 
   methods: {
@@ -634,7 +616,7 @@ export default {
     handleConfigurationCheck() {
       if (this.baseConfigurations[this.currentConfigName]) {
         // Show confirmation modal
-        const replaceModal = Modal(document.getElementById("replaceConfigModal"));
+        const replaceModal = new Modal(document.getElementById("replaceConfigModal"));
         replaceModal.show();
       } else {
         // Save directly if no conflict
@@ -903,8 +885,664 @@ export default {
       this.expandedBaseConfigs[baseConfigName] = !this.expandedBaseConfigs[baseConfigName];
     },
 
+    // Force-directed graph methods
+    initializeGraph() {
+      // Check if refs are available
+      if (!this.$refs.graphContainer || !this.$refs.graphSvg) {
+        console.warn('Graph container refs not available yet');
+        return;
+      }
+
+      const width = this.$refs.graphContainer.clientWidth;
+      const height = this.$refs.graphContainer.clientHeight;
+
+      // Check if dimensions are valid
+      if (width === 0 || height === 0) {
+        console.warn('Graph container has invalid dimensions:', { width, height });
+        // Use default dimensions if container isn't visible yet
+        const defaultWidth = 600;
+        const defaultHeight = 300;
+        
+        // Set explicit dimensions on the container
+        this.$refs.graphContainer.style.width = defaultWidth + 'px';
+        this.$refs.graphContainer.style.height = defaultHeight + 'px';
+        
+        // Use default dimensions for initialization
+      this.initializeGraphWithDimensions(defaultWidth, defaultHeight);
+      return;
+    }
+
+    this.initializeGraphWithDimensions(width, height);
+  },
+
+  initializeGraphWithDimensions(width, height) {
+    const svg = d3.select(this.$refs.graphSvg)
+      .attr('width', width)
+      .attr('height', height);
+
+    // Clear any existing content
+    svg.selectAll("*").remove();
+
+    // Create main group for zoom/pan
+    const mainGroup = svg.append("g").attr("class", "main-group");
+
+    // Create groups for different elements
+    mainGroup.append("g").attr("class", "links");
+    mainGroup.append("g").attr("class", "nodes");
+
+    // Initialize zoom behavior
+    this.zoomBehavior = d3.zoom()
+      .scaleExtent([0.1, 4])
+      .on("zoom", (event) => {
+        console.log('Zoom event triggered:', event.transform);
+        mainGroup.attr("transform", event.transform);
+      });
+
+    console.log('Applying zoom behavior to SVG...');
+    svg.call(this.zoomBehavior);
+    console.log('Zoom behavior applied successfully');
+    
+    // Test SVG event handling
+    svg.on('click', function() {
+      console.log('SVG clicked - events are working');
+    });
+
+    // Initialize force simulation
+    this.simulation = d3.forceSimulation()
+      .force("link", d3.forceLink().id(d => d.id).distance(60))
+      .force("charge", d3.forceManyBody().strength(-200))
+      .force("center", d3.forceCenter(width / 2, height / 2))
+      .force("collision", d3.forceCollide().radius(25));
+
+    console.log('Graph initialized with dimensions:', { width, height });
+    this.updateGraphData();
+  },
+
+    // Method to manually refresh the graph
+    refreshGraph() {
+      this.$nextTick(() => {
+        this.initializeGraph();
+      });
+    },
+
+    updateGraphData() {
+      if (!this.simulation) {
+        console.warn('Simulation not initialized, attempting to initialize graph');
+        this.initializeGraph();
+        return;
+      }
+
+      const nodes = [];
+      const links = [];
+
+      console.log('Base configurations:', this.baseConfigurations);
+      console.log('Derived configurations:', this.derivedConfigurations);
+
+      // Add base configuration nodes
+      Object.keys(this.baseConfigurations).forEach(baseName => {
+        nodes.push({
+          id: baseName,
+          type: 'base',
+          name: baseName,
+          config: this.baseConfigurations[baseName],
+          derivedCount: Object.keys(this.derivedConfigurations[baseName] || {}).length,
+          showDerived: false
+        });
+      });
+
+      // Add derived configuration nodes (if their base is expanded)
+      Object.entries(this.derivedConfigurations).forEach(([baseName, derivedConfigs]) => {
+        const baseNode = nodes.find(n => n.id === baseName);
+        if (baseNode && baseNode.showDerived) {
+          Object.entries(derivedConfigs).forEach(([derivedName, derivedConfig]) => {
+            nodes.push({
+              id: derivedName,
+              type: 'derived',
+              name: derivedName,
+              config: derivedConfig,
+              baseName: baseName
+            });
+
+            // Add link between base and derived
+            links.push({
+              source: baseName,
+              target: derivedName
+            });
+          });
+        }
+      });
+
+      console.log('Generated nodes:', nodes);
+      console.log('Generated links:', links);
+
+      this.graphData = { nodes, links };
+      this.renderGraph();
+    },
+
+    renderGraph() {
+      if (!this.$refs.graphSvg) {
+        console.warn('SVG ref not available for rendering');
+        return;
+      }
+
+      const svg = d3.select(this.$refs.graphSvg);
+      const mainGroup = svg.select(".main-group");
+
+      // Update simulation
+      this.simulation.nodes(this.graphData.nodes);
+      this.simulation.force("link").links(this.graphData.links);
+
+      console.log('Rendering graph with', this.graphData.nodes.length, 'nodes and', this.graphData.links.length, 'links');
+
+      // Render links
+      const link = mainGroup.select(".links")
+        .selectAll("line")
+        .data(this.graphData.links)
+        .join("line")
+        .attr("stroke", "#999")
+        .attr("stroke-opacity", 0.6)
+        .attr("stroke-width", 2);
+
+      // Render nodes
+      const node = mainGroup.select(".nodes")
+        .selectAll("g")
+        .data(this.graphData.nodes)
+        .join("g")
+        .attr("class", "node")
+        .call(this.createDragBehavior());
+
+      // Clear previous content
+      node.selectAll("*").remove();
+
+      // Add circles for nodes
+      node.append("circle")
+        .attr("r", d => d.type === 'base' ? 18 : 13)
+        .attr("fill", d => d.type === 'base' ? "#0d6efd" : "#6c757d")
+        .attr("stroke", "#fff")
+        .attr("stroke-width", 2);
+
+      // Add text labels
+      node.append("text")
+        .attr("text-anchor", "middle")
+        .attr("dy", ".35em")
+        .attr("font-size", "9px")
+        .attr("fill", "white")
+        .text(d => d.name.length > 6 ? d.name.substring(0, 6) + "..." : d.name);
+
+      // Add badge for derived count on base nodes
+      node.filter(d => d.type === 'base' && d.derivedCount > 0)
+        .append("circle")
+        .attr("cx", 13)
+        .attr("cy", -13)
+        .attr("r", 7)
+        .attr("fill", "#dc3545");
+
+      node.filter(d => d.type === 'base' && d.derivedCount > 0)
+        .append("text")
+        .attr("x", 13)
+        .attr("y", -13)
+        .attr("text-anchor", "middle")
+        .attr("dy", ".35em")
+        .attr("font-size", "7px")
+        .attr("fill", "white")
+        .text(d => d.derivedCount);
+
+      // Add event listeners
+      node
+        .on("click", this.handleNodeClick)
+        .on("contextmenu", this.handleNodeContextMenu)
+        .on("mouseover", this.handleNodeMouseOver)
+        .on("mouseout", this.handleNodeMouseOut);
+
+      // Update positions on tick
+      this.simulation.on("tick", () => {
+        link
+          .attr("x1", d => d.source.x)
+          .attr("y1", d => d.source.y)
+          .attr("x2", d => d.target.x)
+          .attr("y2", d => d.target.y);
+
+        node
+          .attr("transform", d => `translate(${d.x},${d.y})`);
+      });
+
+      this.simulation.alpha(1).restart();
+    },
+
+    createDragBehavior() {
+      return d3.drag()
+        .on("start", (event, d) => {
+          this.isDragging = true;
+          if (!event.active) this.simulation.alphaTarget(0.3).restart();
+          d.fx = d.x;
+          d.fy = d.y;
+          
+          // Disable zoom during drag
+          if (this.zoomBehavior) {
+            d3.select(this.$refs.graphSvg).on('.zoom', null);
+          }
+        })
+        .on("drag", (event, d) => {
+          d.fx = event.x;
+          d.fy = event.y;
+        })
+        .on("end", (event, d) => {
+          if (!event.active) this.simulation.alphaTarget(0);
+          d.fx = null;
+          d.fy = null;
+          
+          // Re-enable zoom after drag
+          if (this.zoomBehavior) {
+            d3.select(this.$refs.graphSvg).call(this.zoomBehavior);
+          }
+          
+          setTimeout(() => {
+            this.isDragging = false;
+          }, 100);
+        });
+    },
+
+    handleNodeClick(event, node) {
+      if (this.isDragging) return;
+      
+      if (node.type === 'base') {
+        // Toggle derived configurations visibility
+        const graphNode = this.graphData.nodes.find(n => n.id === node.id);
+        graphNode.showDerived = !graphNode.showDerived;
+        this.updateGraphData();
+      }
+    },
+
+    handleNodeContextMenu(event, node) {
+      event.preventDefault();
+      this.contextMenuTarget = node;
+      
+      const menu = document.getElementById('node-context-menu');
+      menu.style.left = event.pageX + 'px';
+      menu.style.top = event.pageY + 'px';
+      menu.style.display = 'block';
+    },
+
+    handleNodeMouseOver(event, node) {
+      const tooltip = d3.select("body").append("div")
+        .attr("class", "graph-tooltip")
+        .style("position", "absolute")
+        .style("background", "rgba(0,0,0,0.8)")
+        .style("color", "white")
+        .style("padding", "8px")
+        .style("border-radius", "4px")
+        .style("font-size", "12px")
+        .style("z-index", "1000")
+        .style("left", (event.pageX + 10) + "px")
+        .style("top", (event.pageY - 10) + "px");
+
+      if (node.type === 'base') {
+        tooltip.html(`
+          <strong>${node.name}</strong><br/>
+          Compressor: ${node.config.compressor_id?.toUpperCase() || 'Unknown'}<br/>
+          Derived configs: ${node.derivedCount}<br/>
+          <em>Click to expand/collapse</em>
+        `);
+      } else {
+        const errorBoundKey = this.getErrorBoundKey(node.config);
+        const errorBound = errorBoundKey ? node.config.compressor_config[errorBoundKey] : 'N/A';
+        tooltip.html(`
+          <strong>${node.name}</strong><br/>
+          Base: ${node.baseName}<br/>
+          Error Bound: ${errorBound}<br/>
+          <em>Right-click for options</em>
+        `);
+      }
+    },
+
+    handleNodeMouseOut() {
+      d3.selectAll(".graph-tooltip").remove();
+    },
+
+    hideContextMenu() {
+      const menu = document.getElementById('node-context-menu');
+      if (menu) {
+        menu.style.display = 'none';
+      }
+    },
+
+    // Context menu actions
+    editNodeErrorBound() {
+      if (this.contextMenuTarget && this.contextMenuTarget.type === 'derived') {
+        const errorBoundKey = this.getErrorBoundKey(this.contextMenuTarget.config);
+        if (errorBoundKey) {
+          const newValue = prompt('Enter new error bound:', this.contextMenuTarget.config.compressor_config[errorBoundKey]);
+          if (newValue !== null && !isNaN(parseFloat(newValue))) {
+            this.contextMenuTarget.config.compressor_config[errorBoundKey] = parseFloat(newValue);
+            this.updateGraphData();
+          }
+        }
+      }
+      this.hideContextMenu();
+    },
+
+    deleteNode() {
+      if (this.contextMenuTarget) {
+        if (this.contextMenuTarget.type === 'base') {
+          this.removeConfiguration(this.contextMenuTarget.id);
+        } else {
+          this.removeConfiguration(this.contextMenuTarget.baseName, this.contextMenuTarget.id);
+        }
+      }
+      this.hideContextMenu();
+    },
+
+    promoteToBase() {
+      if (this.contextMenuTarget && this.contextMenuTarget.type === 'derived') {
+        const derivedConfig = this.contextMenuTarget.config;
+        const newBaseName = this.contextMenuTarget.id + '_base';
+        
+        // Create new base configuration
+        this.baseConfigurations[newBaseName] = {
+          ...derivedConfig,
+          base_config: undefined
+        };
+        this.derivedConfigurations[newBaseName] = {};
+        
+        // Remove from derived configurations
+        delete this.derivedConfigurations[this.contextMenuTarget.baseName][this.contextMenuTarget.id];
+      }
+      this.hideContextMenu();
+    },
+
+    bulkGenerate() {
+      if (this.contextMenuTarget && this.contextMenuTarget.type === 'base') {
+        this.prepareBulkGeneration(this.contextMenuTarget.id);
+        const modal = new Modal(document.getElementById('bulkGenerationModal'));
+        modal.show();
+      }
+      this.hideContextMenu();
+    },
+
+    setupResizeObserver() {
+      if (!this.$refs.graphContainer) return;
+      
+      // Use ResizeObserver to detect when container becomes visible or changes size
+      this.resizeObserver = new ResizeObserver(entries => {
+        for (let entry of entries) {
+          const { width, height } = entry.contentRect;
+          if (width > 0 && height > 0 && this.simulation) {
+            // Container is now visible and has valid dimensions
+            console.log('Container resized to:', { width, height });
+            this.initializeGraphWithDimensions(width, height);
+          }
+        }
+      });
+      
+      this.resizeObserver.observe(this.$refs.graphContainer);
+    },
+
+    resetZoom() {
+      console.log('resetZoom called');
+      console.log('zoomBehavior exists:', !!this.zoomBehavior);
+      console.log('graphSvg ref exists:', !!this.$refs.graphSvg);
+      
+      if (this.zoomBehavior && this.$refs.graphSvg) {
+        const svg = d3.select(this.$refs.graphSvg);
+        console.log('Resetting zoom...');
+        svg.transition().duration(750).call(
+          this.zoomBehavior.transform,
+          d3.zoomIdentity
+        );
+      } else {
+        console.log('Cannot reset zoom - missing zoomBehavior or SVG ref');
+      }
+    },
+
+    resetLargeZoom() {
+      if (this.largeZoomBehavior && this.$refs.largeGraphSvg) {
+        const svg = d3.select(this.$refs.largeGraphSvg);
+        svg.transition().duration(750).call(
+          this.largeZoomBehavior.transform,
+          d3.zoomIdentity
+        );
+      }
+    },
+
+    openLargeGraphModal() {
+      const modal = new Modal(document.getElementById('largeGraphModal'));
+      modal.show();
+      
+      // Initialize large graph after modal is shown
+      modal._element.addEventListener('shown.bs.modal', () => {
+        this.$nextTick(() => {
+          this.initializeLargeGraph();
+        });
+      }, { once: true });
+    },
+
+    initializeLargeGraph() {
+      if (!this.$refs.largeGraphContainer || !this.$refs.largeGraphSvg) {
+        console.warn('Large graph container refs not available yet');
+        return;
+      }
+
+      const width = this.$refs.largeGraphContainer.clientWidth;
+      const height = this.$refs.largeGraphContainer.clientHeight;
+
+      const svg = d3.select(this.$refs.largeGraphSvg)
+        .attr('width', width)
+        .attr('height', height);
+
+      // Clear any existing content
+      svg.selectAll("*").remove();
+
+      // Create main group for zoom/pan
+      const mainGroup = svg.append("g").attr("class", "large-main-group");
+
+      // Create groups for different elements
+      mainGroup.append("g").attr("class", "large-links");
+      mainGroup.append("g").attr("class", "large-nodes");
+
+      // Initialize zoom behavior for large graph
+      this.largeZoomBehavior = d3.zoom()
+        .scaleExtent([0.1, 10])
+        .on("zoom", (event) => {
+          mainGroup.attr("transform", event.transform);
+        });
+
+      svg.call(this.largeZoomBehavior);
+
+      // Initialize force simulation for large graph
+      this.largeSimulation = d3.forceSimulation()
+        .force("link", d3.forceLink().id(d => d.id).distance(100))
+        .force("charge", d3.forceManyBody().strength(-400))
+        .force("center", d3.forceCenter(width / 2, height / 2))
+        .force("collision", d3.forceCollide().radius(40));
+
+      console.log('Large graph initialized with dimensions:', { width, height });
+      this.renderLargeGraph();
+    },
+
+    renderLargeGraph() {
+      if (!this.$refs.largeGraphSvg || !this.largeSimulation) {
+        console.warn('Large SVG ref or simulation not available for rendering');
+        return;
+      }
+
+      const svg = d3.select(this.$refs.largeGraphSvg);
+      const mainGroup = svg.select(".large-main-group");
+
+      // Update simulation
+      this.largeSimulation.nodes(this.graphData.nodes);
+      this.largeSimulation.force("link").links(this.graphData.links);
+
+      console.log('Rendering large graph with', this.graphData.nodes.length, 'nodes and', this.graphData.links.length, 'links');
+
+      // Render links
+      const link = mainGroup.select(".large-links")
+        .selectAll("line")
+        .data(this.graphData.links)
+        .join("line")
+        .attr("stroke", "#999")
+        .attr("stroke-opacity", 0.6)
+        .attr("stroke-width", 3);
+
+      // Render nodes
+      const node = mainGroup.select(".large-nodes")
+        .selectAll("g")
+        .data(this.graphData.nodes)
+        .join("g")
+        .attr("class", "large-node")
+        .call(this.createLargeDragBehavior());
+
+      // Clear previous content
+      node.selectAll("*").remove();
+
+      // Add circles for nodes (larger for big view)
+      node.append("circle")
+        .attr("r", d => d.type === 'base' ? 25 : 18)
+        .attr("fill", d => d.type === 'base' ? "#0d6efd" : "#6c757d")
+        .attr("stroke", "#fff")
+        .attr("stroke-width", 3);
+
+      // Add text labels (larger font)
+      node.append("text")
+        .attr("text-anchor", "middle")
+        .attr("dy", ".35em")
+        .attr("font-size", "12px")
+        .attr("fill", "white")
+        .text(d => d.name.length > 10 ? d.name.substring(0, 10) + "..." : d.name);
+
+      // Add badge for derived count on base nodes
+      node.filter(d => d.type === 'base' && d.derivedCount > 0)
+        .append("circle")
+        .attr("cx", 18)
+        .attr("cy", -18)
+        .attr("r", 10)
+        .attr("fill", "#dc3545");
+
+      node.filter(d => d.type === 'base' && d.derivedCount > 0)
+        .append("text")
+        .attr("x", 18)
+        .attr("y", -18)
+        .attr("text-anchor", "middle")
+        .attr("dy", ".35em")
+        .attr("font-size", "10px")
+        .attr("fill", "white")
+        .text(d => d.derivedCount);
+
+      // Add event listeners
+      node
+        .on("click", this.handleNodeClick)
+        .on("contextmenu", this.handleNodeContextMenu)
+        .on("mouseover", this.handleNodeMouseOver)
+        .on("mouseout", this.handleNodeMouseOut);
+
+      // Update positions on tick
+      this.largeSimulation.on("tick", () => {
+        link
+          .attr("x1", d => d.source.x)
+          .attr("y1", d => d.source.y)
+          .attr("x2", d => d.target.x)
+          .attr("y2", d => d.target.y);
+
+        node
+          .attr("transform", d => `translate(${d.x},${d.y})`);
+      });
+
+      this.largeSimulation.alpha(1).restart();
+    },
+
+    createLargeDragBehavior() {
+      return d3.drag()
+        .on("start", (event, d) => {
+          this.isDragging = true;
+          if (!event.active) this.largeSimulation.alphaTarget(0.3).restart();
+          d.fx = d.x;
+          d.fy = d.y;
+        })
+        .on("drag", (event, d) => {
+          d.fx = event.x;
+          d.fy = event.y;
+        })
+        .on("end", (event, d) => {
+          if (!event.active) this.largeSimulation.alphaTarget(0);
+          d.fx = null;
+          d.fy = null;
+          
+          setTimeout(() => {
+            this.isDragging = false;
+          }, 100);
+        });
+    },
+
   },
 };
 </script>
 
 <style src="vue-multiselect/dist/vue-multiselect.min.css"></style>
+
+<style scoped>
+.context-menu {
+  background: white;
+  border: 1px solid #ccc;
+  border-radius: 4px;
+  box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+  padding: 0;
+  min-width: 150px;
+}
+
+.context-menu-item {
+  padding: 8px 12px;
+  cursor: pointer;
+  border-radius: 4px;
+  transition: background-color 0.2s;
+}
+
+.context-menu-item:hover {
+  background-color: #f8f9fa;
+}
+
+.context-menu-item:active {
+  background-color: #e9ecef;
+}
+
+#configuration-graph {
+  overflow: hidden;
+  box-sizing: border-box;
+}
+
+#configuration-graph:active {
+  cursor: grabbing;
+}
+
+#configuration-graph svg {
+  display: block;
+}
+
+#large-configuration-graph {
+  overflow: hidden;
+  box-sizing: border-box;
+  cursor: grab;
+}
+
+#large-configuration-graph:active {
+  cursor: grabbing;
+}
+
+.node {
+  cursor: pointer;
+}
+
+.large-node {
+  cursor: pointer;
+}
+
+.node circle {
+  transition: r 0.2s, fill 0.2s;
+}
+
+.node:hover circle {
+  r: 22;
+}
+
+.graph-tooltip {
+  pointer-events: none;
+}
+</style> 
