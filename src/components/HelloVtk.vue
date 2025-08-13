@@ -498,7 +498,7 @@ export default {
       }
     }
 
-    function renderSlice(contextInfo, sliceIdx=sliceId.value) {
+    function renderSlice(contextInfo, sliceIdx = sliceId.value) {
       const contexts = Array.isArray(contextInfo) ? contextInfo : [contextInfo];
       contexts.forEach(ctx => {
         if (!ctx?.cachedData) return;
@@ -510,6 +510,11 @@ export default {
           dataRange = getLocalRange(cachedData, sliceIdx);
         } else if (rescaleMethod.value === "custom") {
           dataRange = [customMin.value, customMax.value];
+        }
+        // Fix zero-width color range?
+        if (dataRange[0] === dataRange[1]) {
+          const delta = dataRange[0] === 0 ? 1e-6 : Math.abs(dataRange[0]) * 1e-6;
+          dataRange = [dataRange[0] - delta, dataRange[1] + delta];
         }
         lookupTable.setMappingRange(dataRange[0], dataRange[1]);
         lookupTable.updateRange();

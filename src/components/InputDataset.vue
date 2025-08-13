@@ -30,7 +30,7 @@
             <label for="depth" class="form-label">Depth:</label>
           </div>
           <div class="col">
-            <input class="form-control ms-1" type="number" min="1" label="depth:" v-model="depth" placeholder="500" />
+            <input class="form-control ms-1" type="number" min="1" label="depth:" v-model="depth" placeholder="500" id="depth" />
           </div>
         </div>
       </div>
@@ -41,7 +41,7 @@
             <label for="width" class="form-label mb-0">Width:</label>
           </div>
           <div class="col">
-            <input class="form-control ms-1" type="number" min="1" label="width:" v-model="width" placeholder="500" />
+            <input class="form-control ms-1" type="number" min="1" label="width:" v-model="width" placeholder="500" id="width" />
           </div>
         </div>
       </div>
@@ -52,7 +52,7 @@
             <label for="height" class="form-label mb-0">Height:</label>
           </div>
           <div class="col">
-            <input class="form-control ms-1" type="number" min="1" label="height:" v-model="height" placeholder="500" />
+            <input class="form-control ms-1" type="number" min="1" label="height:" v-model="height" placeholder="500" id="height" />
           </div>
         </div>
       </div>
