@@ -1,7 +1,8 @@
 <script>
 import * as d3 from 'd3';
-import { Modal, Tooltip } from 'bootstrap';
+import { Modal } from 'bootstrap';
 import Multiselect from 'vue-multiselect';
+import axios from 'axios';
 
 export default {
   name: 'ConfigGraph',
@@ -14,7 +15,7 @@ export default {
   components: {
     Multiselect,
   },
-  emits: ['run-all-configurations', 'error-bound-bulk-generation', 'propagate-parameter'],
+  emits: ['error-bound-bulk-generation', 'propagate-parameter'],
 
   data() {
     return {
@@ -33,6 +34,10 @@ export default {
       availableParameters: {},
       baseNodeParameters: {},
       loading: false,
+      configStatus: {}, // Status for the node: idle, running, success, error
+      running: false,   // Spinner overlay
+      largeGraphModalOpen: false,
+      compressionResults: {},
     };
   },
   
@@ -44,38 +49,11 @@ export default {
   },
 
   beforeUnmount() {
-    // Dispose of all tooltips before unmounting
-    if (this.$refs.graphContainer) {
-      Array.from(this.$refs.graphContainer.querySelectorAll('[data-bs-toggle="tooltip"]'))
-        .forEach(el => {
-          try {
-            const tip = Tooltip.getInstance(el);
-            if (tip) {
-              tip.dispose();
-            }
-          } catch (error) {
-            console.warn('Tooltip disposal error during unmount:', error);
-          }
-        });
-    }
-    
-    if (this.$refs.largeGraphContainer) {
-      Array.from(this.$refs.largeGraphContainer.querySelectorAll('[data-bs-toggle="tooltip"]'))
-        .forEach(el => {
-          try {
-            const tip = Tooltip.getInstance(el);
-            if (tip) {
-              tip.dispose();
-            }
-          } catch (error) {
-            console.warn('Large graph tooltip disposal error during unmount:', error);
-          }
-        });
-    }
-    
     if (this.resizeObserver) {
       this.resizeObserver.disconnect();
     }
+    // Clean up any existing tooltips
+    this.hideTooltip();
   },
 
   watch: {
@@ -100,6 +78,9 @@ export default {
           Object.keys(this.derivedConfigurations[this.contextMenuTarget.id]).forEach(derivedId => {
             if (this.savedConfigurations[derivedId]) {
               delete this.savedConfigurations[derivedId];
+              if (this.compressionResults[derivedId]) {
+                delete this.compressionResults[derivedId];
+              }
             }
           });
           delete this.derivedConfigurations[this.contextMenuTarget.id];
@@ -123,12 +104,10 @@ export default {
       if (this.savedConfigurations[this.contextMenuTarget.id]) {
         delete this.savedConfigurations[this.contextMenuTarget.id];
       }
+      if (this.compressionResults[this.contextMenuTarget.id]) {
+        delete this.compressionResults[this.contextMenuTarget.id];
+      }
 
-      this.hideContextMenu();
-    },
-
-    editDetailInfo() {
-      this.$emit('edit-detailed-info', this.contextMenuTarget);
       this.hideContextMenu();
     },
 
@@ -186,6 +165,19 @@ export default {
 
     getNodeTooltipHtml(d) {
       let html = `<div><strong>${d.name}</strong></div>`;
+      const status = this.configStatus[d.id] || 'idle';
+      // Show error info if status is error
+      if (status === 'error') {
+        let errorMsg = '';
+        // Try to get error message from store's comparisonData
+        const comparisonData = this.$store.state.comparisonData || {};
+        if (comparisonData[d.id] && comparisonData[d.id].error) {
+          errorMsg = comparisonData[d.id].error;
+        } else if (comparisonData[d.id]) {
+          errorMsg = JSON.stringify(comparisonData[d.id], null, 2);
+        }
+        html += `<div class='small text-danger'><strong>Error:</strong> ${errorMsg || 'Unknown error.'}</div>`;
+      }
       if (d.type === 'base') {
         html += `<div class='small text-success'><strong>Derived: ${d.derivedCount}</strong></div>`;
         if (d.config && d.config.compressor_config) {
@@ -255,9 +247,9 @@ export default {
               (link.source.type === 'base' && link.target.type === 'derived') ||
               (link.source.type === 'derived' && link.target.type === 'base')
             ) {
-              return 50; // <-- Set your desired distance here
+              return 50;
             }
-            return 10; // Default for other links
+            return 10;
           })
         )
         .force('charge', d3.forceManyBody().strength(-20))
@@ -272,13 +264,25 @@ export default {
     },
 
     openLargeGraphModal() {
+      this.hideTooltip();
       const modal = document.getElementById('largeGraphModal');
       if (modal) {
-        Modal.getOrCreateInstance(modal).show();
+        const modalInstance = Modal.getOrCreateInstance(modal);
+        // Add event listeners for modal events
+        modal.addEventListener('hidden.bs.modal', () => {
+          this.hideTooltip();
+          this.largeGraphModalOpen = false;
+        });
+        modal.addEventListener('shown.bs.modal', () => {
+          this.largeGraphModalOpen = true;
+          this.renderLargeGraph();
+        }, { once: true });
+        modalInstance.show();
       }
     },
 
     openPropagateModal() {
+      this.hideTooltip();
       const modal = document.getElementById('propagateModal');
       if (modal) {
         this.availableParameters = {};
@@ -304,12 +308,6 @@ export default {
       }
     },
 
-    promoteToBase() {
-      // Emit event to parent for promoting to base
-      this.$emit('promote-to-base', this.contextMenuTarget);
-      this.hideContextMenu();
-    },
-
     propagateParameter() {
       // Emit event to parent with propagation details
       this.$emit('propagate-parameter', {
@@ -327,6 +325,8 @@ export default {
     onNodeClick(event, d) {
       event.preventDefault();
       event.stopPropagation();
+      // Hide tooltip when clicking
+      this.hideTooltip();
       // Toggle context menu if same node is clicked
       if (this.contextMenuTarget && this.contextMenuTarget.id === d.id) {
         this.contextMenuTarget = null;
@@ -346,25 +346,79 @@ export default {
       }
     },
 
+    async submitConfigurations() {
+      const alertBox = document.getElementById("compressorAlert");
+      const alertMessage = document.getElementById("compressorAlertMessage");
+      const fileData = this.$store.state.fileData;
+      if (!fileData) {
+        if (alertBox && alertMessage) {
+          alertBox.classList.remove("alert-success", "alert-secondary");
+          alertBox.classList.add("alert-danger", "show");
+          alertMessage.textContent = "No dataset selected!";
+        }
+        return;
+      }
+      // Set all configs to running
+      Object.keys(this.$props.savedConfigurations).forEach(key => {
+        this.configStatus[key] = "running";
+      });
+      this.running = true;
+      this.renderGraph();
+      // Only render large graph if modal is open
+      if (this.largeGraphModalOpen) {
+        this.renderLargeGraph();
+      }
+      if (alertBox && alertMessage) {
+        alertBox.classList.remove("alert-danger", "alert-success");
+        alertBox.classList.add("alert-secondary", "show");
+        alertMessage.textContent = "Processing...";
+      }
+      // Submit each config as a separate request in parallel
+      const configEntries = Object.entries(this.$props.savedConfigurations);
+      this.compressionResults = {};
+      await Promise.all(configEntries.map(async ([key, config]) => {
+        let formData = new FormData();
+        formData.append("get_options", 0);
+        formData.append("configurations", JSON.stringify({ [key]: config }));
+        try {
+          const response = await axios.post(`${localStorage.getItem("fzvis_server_address")}/indexlist`, formData);
+          this.configStatus[key] = "success";
+          this.compressionResults[key] = response.data[key] || response.data;
+        } catch (error) {
+          this.configStatus[key] = "error";
+          this.compressionResults[key] = { error: error.response ? error.response.data.error : error.toString() };
+        }
+        this.renderGraph();
+        if (this.largeGraphModalOpen) {
+          this.renderLargeGraph();
+        }
+      }));
+      // Update store with all results
+      console.log("Configuration results:", Object.keys(this.compressionResults));
+      this.$store.commit("setComparisonData", this.compressionResults);
+      if (alertBox && alertMessage) {
+        if (Object.values(this.configStatus).every(s => s === "success")) {
+          alertBox.classList.remove("alert-danger", "alert-secondary");
+          alertBox.classList.add("alert-success", "show");
+          alertMessage.textContent = "Compression executed successfully!";
+          setTimeout(() => { alertBox.classList.remove("show"); }, 6000);
+        } else {
+          alertBox.classList.remove("alert-success", "alert-secondary");
+          alertBox.classList.add("alert-danger", "show");
+          alertMessage.textContent = "Some compressions failed. See node status.";
+          setTimeout(() => { alertBox.classList.remove("show"); }, 8000);
+        }
+      }
+      this.running = false;
+      this.renderGraph();
+      if (this.largeGraphModalOpen) {
+        this.renderLargeGraph();
+      }
+    },
+
     renderGraph() {
       const svg = d3.select(this.$refs.graphSvg);
       const mainGroup = svg.select('.main-group');
-      
-      // Dispose of existing tooltips before updating the graph
-      if (this.$refs.graphContainer) {
-        Array.from(this.$refs.graphContainer.querySelectorAll('[data-bs-toggle="tooltip"]'))
-          .forEach(el => {
-            try {
-              const tip = Tooltip.getInstance(el);
-              if (tip) {
-                tip.dispose();
-              }
-            } catch (error) {
-              console.warn('Tooltip disposal error:', error);
-            }
-          });
-      }
-      
       this.simulation.nodes(this.graphData.nodes);
       this.simulation.force('link').links(this.graphData.links);
       const link = mainGroup.select('.links')
@@ -382,7 +436,13 @@ export default {
       node.selectAll('*').remove();
       node.append('circle')
         .attr('r', d => d.type === 'base' ? 20 : 12)
-        .attr('fill', '#6c757d')
+        .attr('fill', d => {
+          const status = this.configStatus[d.id] || 'idle';
+          if (status === 'running') return 'rgba(0,123,255,0.5)';
+          if (status === 'success') return '#28a745';
+          if (status === 'error') return '#dc3545';
+          return '#6c757d';
+        })
         .attr('stroke', '#fff')
         .attr('stroke-width', 2);
       node.append('text')
@@ -391,7 +451,7 @@ export default {
         .attr('font-size', '9px')
         .attr('fill', 'white')
         .text(d => d.name.length > 6 ? d.name.substring(0, 6) + '...' : d.name);
-
+      // Add badge for base nodes with derivedCount > 0
       const badgeNodes = node.filter(d => d.type === 'base' && d.derivedCount > 0);
       badgeNodes.append('circle')
         .attr('cx', 13)
@@ -404,16 +464,22 @@ export default {
         .attr('y', -13)
         .attr('text-anchor', 'middle')
         .attr('dy', '.35em')
-        .attr('font-size', '7px')
+        .attr('font-size', '8px')
         .attr('fill', 'white')
         .attr('class', 'derived-badge-text')
         .text(d => d.derivedCount);
 
-      node.attr('data-bs-toggle', 'tooltip')
-        .attr('data-bs-html', 'true')
-        .attr('title', d => this.getNodeTooltipHtml(d));
-
+      // Add plain HTML tooltip functionality
       node
+        .on('mouseover', (event, d) => {
+          this.showTooltip(event, d);
+        })
+        .on('mousemove', (event,) => {
+          this.updateTooltipPosition(event);
+        })
+        .on('mouseout', () => {
+          this.hideTooltip();
+        })
         .on('click', this.onNodeClick);
       this.simulation.on('tick', () => {
         link
@@ -425,18 +491,6 @@ export default {
           .attr('transform', d => `translate(${d.x},${d.y})`);
       });
       this.simulation.alpha(1).restart();
-      
-      // Re-initialize Bootstrap tooltips for all nodes after rendering
-      if (this.$refs.graphContainer) {
-        Array.from(this.$refs.graphContainer.querySelectorAll('g.node[data-bs-toggle="tooltip"]')).forEach(el => {
-          try {
-            new Tooltip(el);
-          } catch (error) {
-            // Silently handle tooltip initialization errors
-            console.warn('Tooltip initialization error:', error);
-          }
-        });
-      }
     },
 
     renderLargeGraph() {
@@ -445,23 +499,6 @@ export default {
       const svg = d3.select(this.$refs.largeGraphSvg)
         .attr('width', width)
         .attr('height', height);
-      
-      // Dispose of existing tooltips before updating the large graph
-      if (this.$refs.largeGraphContainer) {
-        Array.from(this.$refs.largeGraphContainer.querySelectorAll('[data-bs-toggle="tooltip"]'))
-          .forEach(el => {
-            try {
-              const tip = Tooltip.getInstance(el);
-              if (tip) {
-                tip.dispose();
-              }
-            } catch (error) {
-              // Silently handle tooltip disposal errors
-              console.warn('Large graph tooltip disposal error:', error);
-            }
-          });
-      }
-      
       svg.selectAll('*').remove();
       const mainGroup = svg.append('g').attr('class', 'main-group');
       mainGroup.append('g').attr('class', 'links');
@@ -486,7 +523,7 @@ export default {
         )
         .force('charge', d3.forceManyBody().strength(-40))
         .force('center', d3.forceCenter(width / 2, height / 2))
-        .force('collision', d3.forceCollide().radius(d => d.type === 'base' ? 30 : 12));
+        .force('collision', d3.forceCollide().radius(d => d.type === 'base' ? 25 : 17));
       simulation.nodes(this.graphData.nodes);
       simulation.force('link').links(this.graphData.links);
       const link = mainGroup.select('.links')
@@ -503,37 +540,50 @@ export default {
         .attr('class', 'node');
       node.selectAll('*').remove();
       node.append('circle')
-        .attr('r', d => d.type === 'base' ? 30 : 18)
-        .attr('fill', '#6c757d')
+        .attr('r', d => d.type === 'base' ? 24 : 14)
+        .attr('fill', d => {
+          const status = this.configStatus[d.id] || 'idle';
+          if (status === 'running') return 'rgba(0,123,255,0.5)';
+          if (status === 'success') return '#28a745';
+          if (status === 'error') return '#dc3545';
+          return '#6c757d';
+        })
         .attr('stroke', '#fff')
         .attr('stroke-width', 2);
       node.append('text')
         .attr('text-anchor', 'middle')
         .attr('dy', '.35em')
-        .attr('font-size', '13px')
+        .attr('font-size', '10px')
         .attr('fill', 'white')
-        .text(d => d.name.length > 10 ? d.name.substring(0, 10) + '...' : d.name);
+        .text(d => d.name.length > 12 ? d.name.substring(0, 12) + '...' : d.name);
       const badgeNodes = node.filter(d => d.type === 'base' && d.derivedCount > 0);
       badgeNodes.append('circle')
-        .attr('cx', 20)
-        .attr('cy', -20)
-        .attr('r', 12)
+        .attr('cx', 13)
+        .attr('cy', -13)
+        .attr('r', 7)
         .attr('fill', '#dc3545')
         .attr('class', 'derived-badge');
       badgeNodes.append('text')
-        .attr('x', 20)
-        .attr('y', -20)
+        .attr('x', 13)
+        .attr('y', -13)
         .attr('text-anchor', 'middle')
         .attr('dy', '.35em')
-        .attr('font-size', '10px')
+        .attr('font-size', '8px')
         .attr('fill', 'white')
         .attr('class', 'derived-badge-text')
         .text(d => d.derivedCount);
-      node.attr('data-bs-toggle', 'tooltip')
-        .attr('data-bs-html', 'true')
-        .attr('title', d => this.getNodeTooltipHtml(d));
+      // Add plain HTML tooltip functionality
       node
-        .on('click', this.onNodeClick); // Use the same handler for fullscreen
+        .on('mouseover', (event, d) => {
+          this.showTooltip(event, d);
+        })
+        .on('mousemove', (event,) => {
+          this.updateTooltipPosition(event);
+        })
+        .on('mouseout', () => {
+          this.hideTooltip();
+        })
+        .on('click', this.onNodeClick);
       simulation.on('tick', () => {
         link
           .attr('x1', d => d.source.x)
@@ -544,17 +594,6 @@ export default {
           .attr('transform', d => `translate(${d.x},${d.y})`);
       });
       simulation.alpha(1).restart();
-      
-      // Re-initialize Bootstrap tooltips for all nodes after rendering
-      if (this.$refs.largeGraphContainer) {
-        Array.from(this.$refs.largeGraphContainer.querySelectorAll('g.node[data-bs-toggle="tooltip"]')).forEach(el => {
-          try {
-            new Tooltip(el);
-          } catch (error) {
-            console.warn('Large graph tooltip initialization error:', error);
-          }
-        });
-      }
     },
 
     setupResizeObserver() {
@@ -605,10 +644,68 @@ export default {
         });
         this.graphData = { nodes, links };
         this.renderGraph();
-        this.renderLargeGraph();
+        // Only render large graph if modal is open
+        if (this.largeGraphModalOpen) {
+          this.renderLargeGraph();
+        }
         this.loading = false;
       });
     },
+
+    // Tooltip methods for plain HTML tooltips
+    showTooltip(event, d) {
+      // Remove any existing tooltip
+      this.hideTooltip();
+      
+      // Create tooltip element
+      const tooltip = document.createElement('div');
+      tooltip.id = 'graph-tooltip';
+      tooltip.style.cssText = `
+        position: absolute;
+        background: rgba(0, 0, 0, 0.9);
+        color: white;
+        padding: 8px 12px;
+        border-radius: 4px;
+        font-size: 12px;
+        pointer-events: none;
+        z-index: 1080;
+        max-width: 300px;
+        box-shadow: 0 2px 8px rgba(0,0,0,0.3);
+      `;
+      
+      // Set tooltip content
+      tooltip.innerHTML = this.getNodeTooltipHtml(d);
+      
+      // Add to document
+      document.body.appendChild(tooltip);
+      
+      // Position tooltip
+      this.updateTooltipPosition(event);
+    },
+
+    updateTooltipPosition(event) {
+      const tooltip = document.getElementById('graph-tooltip');
+      if (tooltip) {
+        const x = event.pageX + 10;
+        const y = event.pageY - 10;
+        
+        // Adjust position if tooltip would go off screen
+        const rect = tooltip.getBoundingClientRect();
+        const finalX = (x + rect.width > window.innerWidth) ? event.pageX - rect.width - 10 : x;
+        const finalY = (y < 0) ? event.pageY + 20 : y;
+        
+        tooltip.style.left = finalX + 'px';
+        tooltip.style.top = finalY + 'px';
+      }
+    },
+
+    hideTooltip() {
+      const tooltip = document.getElementById('graph-tooltip');
+      if (tooltip) {
+        tooltip.remove();
+      }
+    },
+
   }
 }
 </script>
@@ -799,10 +896,16 @@ export default {
         <button
           type="button"
           class="btn btn-primary w-60"
-          @click="$emit('run-all-configurations')"
-          :disabled="Object.keys($props.savedConfigurations).length === 0"
+          @click="submitConfigurations"
+          :disabled="Object.keys($props.savedConfigurations).length === 0 || running"
         >
-          Run All {{ Object.keys($props.savedConfigurations).length }} Configurations
+          <span v-if="running">
+            <span class="spinner-border spinner-border-sm me-2" role="status" aria-hidden="true"></span>
+            Running...
+          </span>
+          <span v-else>
+            Run All {{ Object.keys($props.savedConfigurations).length }} Configurations
+          </span>
         </button>
       </div>
     </div>

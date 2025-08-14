@@ -7,7 +7,9 @@ import bootstrap from 'bootstrap/dist/js/bootstrap.bundle.min.js'
 import 'bootstrap/dist/css/bootstrap.min.css';
 import 'bootstrap-icons/font/bootstrap-icons.css';
 
-createApp(App).use(store).mount('#app');
+const app = createApp(App);
+app.use(store);
+app.mount('#app');
 
 // Initialize all tooltips
 document.querySelectorAll('[data-bs-toggle="tooltip"]')

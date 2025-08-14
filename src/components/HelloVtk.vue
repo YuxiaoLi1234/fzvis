@@ -1,209 +1,3 @@
-<template>
-  <div class="vtk-wrapper">
-
-    <div
-      id="options-top"
-      class="d-flex flex-wrap align-items-center justify-content-center mt-3 gap-3 py-2 bg-light rounded shadow-sm"
-    >
-      <!-- Displays per row -->
-      <div class="d-flex align-items-center me-3">
-        <label class="me-2 mb-0 fw-semibold text-secondary">
-          <i class="bi bi-grid-3x3-gap me-1"></i>Displays per row:
-        </label>
-        <select
-          v-model="containersPerRow"
-          class="form-select form-select-sm"
-          style="width: 70px; min-width: 70px;"
-        >
-          <option v-for="n in 4" :key="n" :value="n">{{ n }}</option>
-        </select>
-      </div>
-
-      <!-- Colormap -->
-      <div class="d-flex align-items-center me-3">
-        <label class="me-2 mb-0 fw-semibold text-secondary">
-          <i class="bi bi-palette me-1"></i>Colormap:
-        </label>
-        <select
-          class="form-select form-select-sm"
-          aria-label="colormap"
-          v-model="colormap"
-          style="min-width: 120px; max-width: 180px;"
-        >
-          <option v-for="preset in allPresets" :value="preset" :key="preset">
-          {{ preset }}
-          </option>
-        </select>
-      </div>
-
-      <!-- Decompressed Data Selector -->
-      <div v-if="hasDecompressedData" class="d-flex align-items-center me-3">
-        <label class="me-2 mb-0 fw-semibold text-secondary">
-          <i class="bi bi-box me-1"></i>Decompressed:
-        </label>
-        <template v-if="decompressedKeys.length <= 10">
-          <input
-          type="range"
-          class="form-range"
-          min="0"
-          :max="decompressedKeys.length - 1"
-          v-model="selectedDecompressedIndex"
-          style="width: 120px;"
-          />
-          <span class="ms-2">{{ decompressedKeys[selectedDecompressedIndex] }}</span>
-        </template>
-        <template v-else>
-          <button
-          class="btn btn-sm btn-outline-secondary me-1"
-          :disabled="selectedDecompressedIndex === 0"
-          @click="selectedDecompressedIndex--"
-          >
-          &lt;
-          </button>
-          <span>{{ decompressedKeys[selectedDecompressedIndex] }}</span>
-          <button
-          class="btn btn-sm btn-outline-secondary ms-1"
-          :disabled="selectedDecompressedIndex === decompressedKeys.length - 1"
-          @click="selectedDecompressedIndex++"
-          >
-          &gt;
-          </button>
-        </template>
-      </div>
-
-      <!-- Camera Sync -->
-      <button
-        :class="['btn btn-sm d-flex align-items-center', sameCamera ? 'btn-primary' : 'btn-outline-primary']"
-        @click="handleSyncCameraChange"
-        title="Synchronize camera views"
-      >
-        <i class="bi bi-camera me-1"></i>Sync Camera
-      </button>
-
-      <!-- Undo -->
-      <!-- <button
-        id="undoBtn"
-        class="btn btn-sm btn-outline-info d-flex align-items-center"
-        title="Undo last action"
-      >
-        <i class="bi bi-arrow-counterclockwise me-1"></i>Undo
-      </button> -->
-
-      <!-- Reset -->
-      <!-- <button
-        id="resetBtn"
-        class="btn btn-sm btn-outline-info d-flex align-items-center"
-        title="Reset all settings"
-      >
-        <i class="bi bi-arrow-clockwise me-1"></i>Reset
-      </button> -->
-      
-    </div>
-
-    <!-- Modified container grid with dynamic columns -->
-    <div
-      class="position-relative mt-3"
-      :style="{
-        display: 'grid',
-        gridTemplateColumns: `repeat(${containersPerRow}, 1fr)`,
-        gap: '1rem'
-      }"
-    >
-      <!-- Original Container -->
-      <div class="card" style="height: 375px;">
-        <div class="card-header">
-          <div class="d-flex align-items-center justify-content-between">
-            <span>
-              Original
-              <i
-                type="button"
-                class="bi bi-question-circle ms-1"
-                title="Instructions"
-                data-bs-toggle="popover"
-                data-bs-placement="right"
-                data-bs-html="true"
-                data-bs-content="<ul><li>Use <b>scroll</b> to zoom.</li><li>Use <b>left click + drag</b> to move.</li><li>Use <b>ctrl + left click</b> to rotate. </li></ul>"
-              ></i>
-            </span>
-            <div v-if="isTimeVarying && dimensions" class="d-flex align-items-center">
-              <div class="d-flex align-items-center">
-                <select
-                  class="form-select w-auto"
-                  aria-label="rescale"
-                  v-model="rescaleMethod"
-                >
-                  <option value="global">Global range</option>
-                  <option value="local">Local range</option>
-                  <option value="custom">Custom range</option>
-                </select>
-                <div v-if="rescaleMethod === 'custom'" class="d-flex align-items-center">
-                <input
-                  type="number"
-                  class="form-control form-control-sm w-auto mx-2"
-                  v-model="customMin"
-                  placeholder="Min"
-                  style="max-width: 100px;"
-                />
-                <input
-                  type="number"
-                  class="form-control form-control-sm w-auto"
-                  v-model="customMax"
-                  placeholder="Max"
-                  style="max-width: 100px;"
-                />
-              </div>
-            </div>
-            <label for="sliceId" class="form-label mx-2 pt-2">Slice:</label>
-            <input
-              type="range"
-              min="0"
-              :max="dimensions[2]-1"
-              step="1"
-              class="form-range align-self-center w-auto"
-              v-model="sliceId"
-              style="max-width: 160px;"
-            />
-          </div>
-        </div>
-      </div>
-      <div class="card-body p-2">
-        <div style="width: 100%; height: 100%; position: relative;">
-        <div ref="vtkContainerOriginal"></div>
-        </div>
-      </div>
-      </div>
-
-      <!-- Decompressed Container -->
-      <div
-        v-show="selectedDecompressedData"
-        class="card"
-        style="height: 375px;"
-      >
-        <div class="card-header">
-          <span
-          class="ms-1 text-decoration-underline text-dark"
-          style="cursor: pointer;"
-          data-bs-toggle="tooltip"
-          data-bs-placement="bottom"
-          data-bs-html="true"
-          :title="formatConfigHTML(selectedDecompressedData?.compressor_config)"
-          >
-          Decompressed ({{ selectedCompressor }})
-          </span>
-        </div>
-        <div class="card-body p-2">
-          <div style="width: 100%; height: 100%; position: relative;">
-            <div ref="vtkContainerDecompressed"></div>
-          </div>
-        </div>
-      </div>
-
-    </div>
-
-  </div>
-
-</template>
-
 <script>
 import { Popover, Tooltip } from 'bootstrap';
 import { ref, onMounted, onBeforeUnmount, computed, watch, nextTick } from 'vue';
@@ -710,17 +504,16 @@ export default {
     watch(selectedCompressor, (newCompressor) => {
       if (newCompressor && selectedDecompressedData.value && dimensions.value && precision.value) {
         nextTick(() => {
-          document.querySelectorAll('[data-bs-toggle="tooltip"]').forEach(el => {
-            let tooltip = Tooltip.getInstance(el);
-            if (!tooltip) {
+          const root = document.querySelector('.vtk-wrapper');
+          if (root) {
+            root.querySelectorAll('[data-bs-toggle="tooltip"]').forEach(el => {
+              let tooltip = Tooltip.getInstance(el);
+              if (tooltip) {
+                tooltip.dispose();
+              }
               new Tooltip(el);
-            } else {
-              // Update the title if the tooltip already exists
-              const newTitle = formatConfigHTML(selectedDecompressedData.value.compressor_config);
-              el.setAttribute('data-bs-original-title', newTitle);
-              tooltip?.update();
-            }
-          });
+            });
+          }
           initializeVTKDecompressed();
           setTimeout(() => {
             renderView(
@@ -779,3 +572,208 @@ export default {
 
 };
 </script>
+
+<template>
+  <div class="vtk-wrapper">
+    <div
+      id="options-top"
+      class="d-flex flex-wrap align-items-center justify-content-center mt-3 gap-3 py-2 bg-light rounded shadow-sm"
+    >
+      <!-- Displays per row -->
+      <div class="d-flex align-items-center me-2">
+        <label class="me-2 mb-0 fw-semibold text-secondary">
+          <i class="bi bi-grid-3x3-gap me-1"></i>Displays per row:
+        </label>
+        <select
+          v-model="containersPerRow"
+          class="form-select form-select-sm"
+          style="width: 70px; min-width: 70px;"
+        >
+          <option v-for="n in 2" :key="n" :value="n">{{ n }}</option>
+        </select>
+      </div>
+
+      <!-- Colormap -->
+      <div class="d-flex align-items-center me-2">
+        <label class="me-2 mb-0 fw-semibold text-secondary">
+          <i class="bi bi-palette me-1"></i>Colormap:
+        </label>
+        <select
+          class="form-select form-select-sm"
+          aria-label="colormap"
+          v-model="colormap"
+          style="min-width: 120px; max-width: 180px;"
+        >
+          <option v-for="preset in allPresets" :value="preset" :key="preset">
+          {{ preset }}
+          </option>
+        </select>
+      </div>
+
+      <!-- Camera Sync -->
+      <button
+        :class="['btn btn-sm d-flex align-items-center', sameCamera ? 'btn-primary' : 'btn-outline-primary']"
+        @click="handleSyncCameraChange"
+        title="Synchronize camera views"
+      >
+        <i class="bi bi-camera me-1"></i>Sync Camera
+      </button>
+
+      <!-- Decompressed Data Selector -->
+      <div v-if="hasDecompressedData" class="d-flex align-items-center me-3">
+        <label class="me-2 mb-0 fw-semibold text-secondary">
+          <i class="bi bi-box me-1"></i>Decompressed:
+        </label>
+        <template v-if="decompressedKeys.length <= 10">
+          <input
+          type="range"
+          class="form-range"
+          min="0"
+          :max="decompressedKeys.length - 1"
+          v-model="selectedDecompressedIndex"
+          style="width: 120px;"
+          />
+          <span class="ms-2">{{ decompressedKeys[selectedDecompressedIndex] }}</span>
+        </template>
+        <template v-else>
+          <button
+          class="btn btn-sm btn-outline-secondary me-1"
+          :disabled="selectedDecompressedIndex === 0"
+          @click="selectedDecompressedIndex--"
+          >
+          &lt;
+          </button>
+          <span>{{ decompressedKeys[selectedDecompressedIndex] }}</span>
+          <button
+          class="btn btn-sm btn-outline-secondary ms-1"
+          :disabled="selectedDecompressedIndex === decompressedKeys.length - 1"
+          @click="selectedDecompressedIndex++"
+          >
+          &gt;
+          </button>
+        </template>
+      </div>
+
+      <!-- Undo -->
+      <!-- <button
+        id="undoBtn"
+        class="btn btn-sm btn-outline-info d-flex align-items-center"
+        title="Undo last action"
+      >
+        <i class="bi bi-arrow-counterclockwise me-1"></i>Undo
+      </button> -->
+
+      <!-- Reset -->
+      <!-- <button
+        id="resetBtn"
+        class="btn btn-sm btn-outline-info d-flex align-items-center"
+        title="Reset all settings"
+      >
+        <i class="bi bi-arrow-clockwise me-1"></i>Reset
+      </button> -->
+      
+    </div>
+
+    <!-- Modified container grid with dynamic columns -->
+    <div
+      class="position-relative mt-3"
+      :style="{
+        display: 'grid',
+        gridTemplateColumns: `repeat(${containersPerRow}, 1fr)`,
+        gap: '1rem'
+      }"
+    >
+      <!-- Original Container -->
+      <div class="card" style="height: 400px;">
+        <div class="card-header">
+          <div class="d-flex align-items-center justify-content-between">
+            <span>
+              Original
+              <i
+                type="button"
+                class="bi bi-question-circle ms-1"
+                title="Instructions"
+                data-bs-toggle="popover"
+                data-bs-placement="right"
+                data-bs-html="true"
+                data-bs-content="<ul><li>Use <b>scroll</b> to zoom.</li><li>Use <b>left click + drag</b> to move.</li><li>Use <b>ctrl + left click</b> to rotate. </li></ul>"
+              ></i>
+            </span>
+            <div v-if="isTimeVarying && dimensions" class="d-flex align-items-center">
+              <div class="d-flex align-items-center">
+                <select
+                  class="form-select w-auto"
+                  aria-label="rescale"
+                  v-model="rescaleMethod"
+                >
+                  <option value="global">Global range</option>
+                  <option value="local">Local range</option>
+                  <option value="custom">Custom range</option>
+                </select>
+                <div v-if="rescaleMethod === 'custom'" class="d-flex align-items-center">
+                <input
+                  type="number"
+                  class="form-control form-control-sm w-auto mx-2"
+                  v-model="customMin"
+                  placeholder="Min"
+                  style="max-width: 100px;"
+                />
+                <input
+                  type="number"
+                  class="form-control form-control-sm w-auto"
+                  v-model="customMax"
+                  placeholder="Max"
+                  style="max-width: 100px;"
+                />
+              </div>
+            </div>
+            <label for="sliceId" class="form-label mx-2 pt-2">Slice:</label>
+            <input
+              type="range"
+              min="0"
+              :max="dimensions[2]-1"
+              step="1"
+              class="form-range align-self-center w-auto"
+              v-model="sliceId"
+              style="max-width: 160px;"
+            />
+          </div>
+        </div>
+      </div>
+      <div class="card-body p-2">
+        <div style="width: 100%; height: 100%; position: relative;">
+        <div ref="vtkContainerOriginal"></div>
+        </div>
+      </div>
+      </div>
+
+      <!-- Decompressed Container -->
+      <div
+        v-show="selectedDecompressedData"
+        class="card"
+        style="height: 400px;"
+      >
+        <div class="card-header">
+          <span
+          class="ms-1 text-decoration-underline text-dark"
+          style="cursor: pointer;"
+          data-bs-toggle="tooltip"
+          data-bs-placement="bottom"
+          data-bs-html="true"
+          :title="formatConfigHTML(selectedDecompressedData?.compressor_config)"
+          >
+          Decompressed ({{ selectedCompressor }})
+          </span>
+        </div>
+        <div class="card-body p-2">
+          <div style="width: 100%; height: 100%; position: relative;">
+            <div ref="vtkContainerDecompressed"></div>
+          </div>
+        </div>
+      </div>
+
+    </div>
+
+  </div>
+
+</template>

@@ -34,6 +34,7 @@ export default {
       selectedCompressor: null,
       compare_data: {},
       formData: new FormData(),
+      showConfigPanel: true, // Add toggle for config panel
     };
   },
 
@@ -227,7 +228,7 @@ export default {
         const newConfig = JSON.parse(JSON.stringify(baseConfig));
         if (!newConfig.compressor_config) newConfig.compressor_config = {};
         newConfig.compressor_config[parameter] = val;
-        const derivedName = `${baseConfigName}_${parameter.replace(/\s+/g, '')}_${val}`;
+        const derivedName = `${baseConfigName}_error_bound_${val}`;
         this.derivedConfigurations[baseConfigName][derivedName] = newConfig;
         this.savedConfigurations[derivedName] = newConfig;
       });
@@ -354,7 +355,7 @@ export default {
           newConfig.compressor_config[valObj.type] = valObj?.id;
         }
 
-        const derivedName = `${baseNodeId}_${parameter.replace(/\s+/g, '')}_${valObj?.id}`;
+        const derivedName = `${baseNodeId}_${valObj?.id}`;
         this.derivedConfigurations[baseNodeId][derivedName] = newConfig;
         this.savedConfigurations[derivedName] = newConfig;
       });
@@ -401,115 +402,6 @@ export default {
       });
     },
 
-    submitConfigurations() {
-      const alertBox = document.getElementById("compressorAlert");
-      const alertMessage = document.getElementById("compressorAlertMessage");
-
-      if (this.fileData) {
-        console.log("savedConfigurations:", this.savedConfigurations);
-        // const formattedConfigurations = Object.entries(this.savedConfigurations).map(([name, config]) => {
-        //   return {
-        //     compressor_id: config.compressor_id || "unknown",
-        //     compressor_name: name,
-        //     early_config: config["early_config"],
-        //     compressor_config: config["compressor_config"],
-        //   };
-        // });
-        // console.log("Formatted Configurations:", formattedConfigurations);
-  
-        // Clear out previous configurations
-        if(this.formData.has("configurations")){
-          this.formData.delete("configurations");
-        }
-  
-        if(this.formData.has("get_options")){
-          this.formData["get_options"] = 0;
-        } else {
-          this.formData.append("get_options", 0);
-        }
-        this.formData.append("configurations", JSON.stringify(this.savedConfigurations));
-        this.compare_data = null;
-        
-        if (alertBox && alertMessage) {
-          alertBox.classList.remove("alert-danger");
-          alertBox.classList.remove("alert-success");
-          alertBox.classList.add("alert-secondary", "show");
-          alertMessage.textContent = "Processing...";
-        }
-
-        axios.post(`${this.baseURL}/indexlist`, this.formData).then(response => {
-          this.compare_data = response.data;
-          Object.keys(this.compare_data).forEach(key => {
-            this.compare_data[key]["compressor_config"] = this.formatConfig(this.savedConfigurations[key]["compressor_config"]);
-          });
-          // console.log("compare_data:", this.compare_data);
-          // console.log("compressor config:", Object.values(this.compare_data).map(d => d["compressor_config"]));
-          // const names = Object.values(formattedConfigurations).map((d)=>d.compressor_name);
-          // const configs = Object.values(formattedConfigurations).map((d)=>d.compressor_config);
-
-          // this.compare_data = {
-          //   "compressor_id":[],
-          //   "bound":[],
-          //   "metrics":[],
-          // };
-
-          // for (const key in response.data) {
-          //   let element = response.data[key];
-          //   this.compare_data["compressor_id"].push(element["compressor_id"]);
-          //   this.compare_data["bound"].push(element["bound"]);
-          //   if (element["metrics"]) {
-          //     this.compare_data["metrics"].push(element["metrics"]);
-          //   } else {
-          //     console.warn("Metrics returned from the backend are null or undefined.");
-          //   }
-          // }
-
-          // this.compare_data["compressor_name"] = names;
-          // this.compare_data["compressor_config"] = configs;
-          // this.compare_data["decp_data"] = response.data["decp_data"];
-          this.$store.commit("setComparisonData", this.compare_data);
-  
-          if (alertBox && alertMessage) {
-            alertBox.classList.remove("alert-danger");
-            alertBox.classList.remove("alert-secondary");
-            alertBox.classList.add("alert-success", "show");
-            alertMessage.textContent = "Compression executed successfully!";
-            // Auto dismiss
-            setTimeout(() => {
-              alertBox.classList.remove("show");
-            }, 6000);
-          }
-        }).catch(error => {
-          if (alertBox && alertMessage) {
-            alertBox.classList.remove("alert-success");
-            alertBox.classList.remove("alert-secondary");
-            alertBox.classList.add("alert-danger", "show");
-            if (error.response) {
-              alertMessage.textContent = `Compression failed. ${error.response.data.error}`;
-            } else {
-              alertMessage.textContent = `Compression failed. ${error}`;
-            }
-            // Auto dismiss
-            setTimeout(() => {
-              alertBox.classList.remove("show");
-            }, 8000);
-          }
-          console.error("Error submitting configuration:", error.response ? error.response.data : error.message);
-          // alert("An error occurred. Please check the console for details.");
-        });
-        
-        // return formattedConfigurations;
-      }
-      // No dataset file selected
-      else {
-        if (alertBox && alertMessage) {
-          alertBox.classList.remove("alert-success");
-          alertBox.classList.remove("alert-secondary");
-          alertBox.classList.add("alert-danger", "show");
-          alertMessage.textContent = "No dataset selected!";
-        }
-      }
-    },
 
   }
 };
@@ -525,76 +417,90 @@ export default {
             <option value=null disabled selected>Select compressor</option>
             <option v-for="compressor in availableOptions?.Compressor" :key="compressor.id" :value="compressor">{{ compressor }}</option>
           </select>
-          <span class="text-warning text-align-center">
+          <!-- <span class="text-warning text-align-center">
             <i class="bi bi-exclamation-triangle-fill me-1"></i>
             Not all compressors are fully supported or tested.
-          </span>
+          </span> -->
         </div>
         
         <div v-if="selectedCompressor" class="p-2">
           <div class="card">
             <div class="card-body" v-if="selectedCompressor in this.compressorOptions">
-              <h5 class="card-title">{{ selectedCompressor }}</h5>
-              <p class="card-text" v-show="compressorOptions[selectedCompressor]['Highlevel'].length > 0">High-level options are listed here.</p>
-              <div class="d-flex flex-wrap mb-2" v-show="compressorOptions[selectedCompressor]['Highlevel'].length > 0">
-                <div
-                  class="me-2 mb-2"
-                  v-for="option in compressorOptions[selectedCompressor]['Highlevel'].filter(opt => opt.label === 'Nthreads')"
-                  :key="option.id"
+              <h5 class="card-title d-flex align-items-center" style="gap: 0.5rem;">
+                {{ selectedCompressor }}
+                <button
+                  class="btn btn-sm btn-outline-secondary"
+                  type="button"
+                  :aria-label="showConfigPanel ? 'Hide configuration panel' : 'Show configuration panel'"
+                  :title="showConfigPanel ? 'Hide configuration panel' : 'Show configuration panel'"
+                  @click="showConfigPanel = !showConfigPanel"
                 >
-                  <div class="form-floating">
-                    <input
-                      type="number"
-                      class="form-control"
-                      style="width:120px;"
-                      title="Number of threads to use"
-                      :id="option.id"
-                      :placeholder="option.label"
-                      min="1"
-                      step="1"
-                      v-model="configuredValues['Highlevel'][option.id]"
-                    >
-                    <label :for="option.id">{{ option.label }}</label>
-                  </div>
-                </div>
-              </div>
-
-              <div class="d-flex align-items-center mb-2">
-                <p class="card-text mb-0">Detailed options are listed here.</p>
-                <button class="btn btn-outline-success btn-sm ms-2" @click="randomlyPickOptions" type="button">
-                  Pick for me
+                  <span v-if="showConfigPanel" class="bi bi-chevron-up"></span>
+                  <span v-else class="bi bi-chevron-down"></span>
                 </button>
-              </div>
-
-              <div id="detailConfigPanel">
-                <div class="mb-2 me-2" v-for="(optionList, optionName) in compressorOptions[selectedCompressor]['Detail']" :key="optionName">
-                  <div v-if="optionName.toLowerCase().includes('error bound') && configuredValues['Detail'][optionName]" class="row g-2">
-                    <div class="col-8">
-                      <multiselect v-model="configuredValues['Detail'][optionName]" :options="optionList" :searchable="true" :multiple="optionName === 'Metric'" :close-on-select="optionName !== 'Metric'" :clear-on-select="false" :placeholder="`Select ${optionName}`" label="label" show-label="false" track-by="id" :title="optionDocs[optionList[0].type] || 'No documentation available'" aria-label="optionName">
-                      </multiselect>
-                    </div>
-                    <div class="col-4" style="min-width: 100px;">
+              </h5>
+              <div v-show="showConfigPanel">
+                <p class="card-text" v-show="compressorOptions[selectedCompressor]['Highlevel'].length > 0">High-level options are listed here.</p>
+                <div class="d-flex flex-wrap mb-2" v-show="compressorOptions[selectedCompressor]['Highlevel'].length > 0">
+                  <div
+                    class="me-2 mb-2"
+                    v-for="option in compressorOptions[selectedCompressor]['Highlevel'].filter(opt => opt.label === 'Nthreads')"
+                    :key="option.id"
+                  >
+                    <div class="form-floating">
                       <input
                         type="number"
                         class="form-control"
-                        placeholder="Enter bound value"
-                        min="0"
-                        step="0.001"
-                        v-model="configuredValues['Detail'][optionName].value"
-                      />
+                        style="width:120px;"
+                        title="Number of threads to use"
+                        :id="option.id"
+                        :placeholder="option.label"
+                        min="1"
+                        step="1"
+                        v-model="configuredValues['Highlevel'][option.id]"
+                      >
+                      <label :for="option.id">{{ option.label }}</label>
                     </div>
                   </div>
-                  <div v-else class="d-flex align-items-center" style="gap: 0.25rem;">
-                    <multiselect v-model="configuredValues['Detail'][optionName]" :options="optionList" :searchable="true" :multiple="optionName === 'Metric'" :close-on-select="optionName !== 'Metric'" :clear-on-select="false" :placeholder="`Select ${optionName}`" label="label" show-label="false" track-by="id" :title="optionDocs[optionList[0].type] || 'No documentation available'" aria-label="optionName">
-                    </multiselect>
+                </div>
+
+                <div class="d-flex align-items-center mb-2">
+                  <p class="card-text mb-0">Detailed options are listed here.</p>
+                  <button class="btn btn-outline-success btn-sm ms-2" @click="randomlyPickOptions" type="button">
+                    Pick for me
+                  </button>
+                </div>
+
+                <div id="detailConfigPanel">
+                  <div class="mb-2 me-2" v-for="(optionList, optionName) in compressorOptions[selectedCompressor]['Detail']" :key="optionName">
+                    <div v-if="optionName.toLowerCase().includes('error bound') && configuredValues['Detail'][optionName]" class="row g-2">
+                      <div class="col-8">
+                        <multiselect v-model="configuredValues['Detail'][optionName]" :options="optionList" :searchable="true" :multiple="optionName === 'Metric'" :close-on-select="optionName !== 'Metric'" :clear-on-select="false" :placeholder="`Select ${optionName}`" label="label" show-label="false" track-by="id" :title="optionDocs[optionList[0].type] || 'No documentation available'" aria-label="optionName">
+                        </multiselect>
+                      </div>
+                      <div class="col-4" style="min-width: 100px;">
+                        <input
+                          type="number"
+                          class="form-control"
+                          placeholder="Enter bound value"
+                          min="0"
+                          step="0.001"
+                          v-model="configuredValues['Detail'][optionName].value"
+                        />
+                      </div>
+                    </div>
+                    <div v-else class="d-flex align-items-center" style="gap: 0.25rem;">
+                      <multiselect v-model="configuredValues['Detail'][optionName]" :options="optionList" :searchable="true" :multiple="optionName === 'Metric'" :close-on-select="optionName !== 'Metric'" :clear-on-select="false" :placeholder="`Select ${optionName}`" label="label" show-label="false" track-by="id" :title="optionDocs[optionList[0].type] || 'No documentation available'" aria-label="optionName">
+                      </multiselect>
+                    </div>
                   </div>
                 </div>
+                <small class="d-block mb-2 text-muted">
+                  {{ isConfigValid ? "Click submit to record configuration." : "Please fill all fields to submit." }}
+                </small>
+                <button type="button" class="btn btn-primary me-2" :disabled="!isConfigValid" data-bs-toggle="modal" data-bs-target="#saveConfigModal" @click="currentConfigName = selectedCompressor + '_' + getFormattedTimestamp()">Save</button>
+                <button type="reset" class="btn btn-secondary" @click="resetConfiguredValues">Reset</button>
               </div>
-              <small class="d-block mb-2 text-muted">
-                {{ isConfigValid ? "Click submit to record configuration." : "Please fill all fields to submit." }}
-              </small>
-              <button type="button" class="btn btn-primary me-2" :disabled="!isConfigValid" data-bs-toggle="modal" data-bs-target="#saveConfigModal" @click="currentConfigName = selectedCompressor + '_' + getFormattedTimestamp()">Save</button>
-              <button type="reset" class="btn btn-secondary" @click="resetConfiguredValues">Reset</button>
             </div>
           </div>
         </div>
@@ -647,7 +553,6 @@ export default {
         :derivedConfigurations="derivedConfigurations"
         :savedConfigurations="savedConfigurations"
         :compressorOptions="compressorOptions"
-        @run-all-configurations="submitConfigurations"
         @error-bound-bulk-generation="handleErrorBoundGeneration"
         @propagate-parameter="handleParameterGeneration"
       />

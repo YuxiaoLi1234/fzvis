@@ -430,4 +430,4 @@ if __name__ == '__main__':
         with open(metadata_file, 'r') as f:
             saved_datasets = json.load(f)
 
-    app.run(host=api_host, port=api_port, debug=True)
+    app.run(host=api_host, port=api_port, debug=True, threaded=True)
