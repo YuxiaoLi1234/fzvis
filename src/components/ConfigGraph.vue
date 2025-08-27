@@ -38,6 +38,8 @@ export default {
       running: false,   // Spinner overlay
       largeGraphModalOpen: false,
       compressionResults: {},
+      nodePositions: {}, // Store node positions by id
+      prevNodeIds: [],   // Track previous node ids for change detection
     };
   },
   
@@ -419,6 +421,23 @@ export default {
     renderGraph() {
       const svg = d3.select(this.$refs.graphSvg);
       const mainGroup = svg.select('.main-group');
+      // Save current node ids
+      const currentNodeIds = this.graphData.nodes.map(n => n.id).sort();
+      const prevNodeIds = this.prevNodeIds || [];
+      const nodeSetChanged =
+        currentNodeIds.length !== prevNodeIds.length ||
+        currentNodeIds.some((id, i) => id !== prevNodeIds[i]);
+      // Restore node positions if not changed
+      if (!nodeSetChanged) {
+        this.graphData.nodes.forEach(n => {
+          if (this.nodePositions[n.id]) {
+            n.x = this.nodePositions[n.id].x;
+            n.y = this.nodePositions[n.id].y;
+            n.vx = this.nodePositions[n.id].vx;
+            n.vy = this.nodePositions[n.id].vy;
+          }
+        });
+      }
       this.simulation.nodes(this.graphData.nodes);
       this.simulation.force('link').links(this.graphData.links);
       const link = mainGroup.select('.links')
@@ -481,6 +500,7 @@ export default {
           this.hideTooltip();
         })
         .on('click', this.onNodeClick);
+      // Save node positions on tick
       this.simulation.on('tick', () => {
         link
           .attr('x1', d => d.source.x)
@@ -489,8 +509,24 @@ export default {
           .attr('y2', d => d.target.y);
         node
           .attr('transform', d => `translate(${d.x},${d.y})`);
+        // Save positions
+        this.graphData.nodes.forEach(n => {
+          this.nodePositions[n.id] = {
+            x: n.x,
+            y: n.y,
+            vx: n.vx,
+            vy: n.vy
+          };
+        });
       });
-      this.simulation.alpha(1).restart();
+      // Only restart simulation if node set changed
+      if (nodeSetChanged) {
+        this.simulation.alpha(1).restart();
+      } else {
+        this.simulation.alpha(0.1).restart(); // Just a nudge for color/status update
+      }
+      // Update prevNodeIds
+      this.prevNodeIds = currentNodeIds;
     },
 
     renderLargeGraph() {
@@ -723,7 +759,7 @@ export default {
       </div>
     </div>
     <div class="card-body p-2">
-      <div id="configuration-graph" ref="graphContainer" style="min-height: 360px; width: 100%; border: 1px solid #dee2e6; border-radius: 0.35rem; cursor: grab; position: relative;">
+      <div id="configuration-graph" ref="graphContainer" style="min-height: 320px; width: 100%; border: 1px solid #dee2e6; border-radius: 0.35rem; cursor: grab; position: relative;">
         <svg ref="graphSvg" width="100%" height="100%"></svg>
         <div
           v-if="loading"

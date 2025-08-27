@@ -1,22 +1,4 @@
-<template>
-  <div class="container py-3">
-    <div v-if="!comparisonData" class="alert alert-danger">
-      No metrics data available to visualize.
-    </div>
-    <button v-else
-      class="btn btn-outline-primary d-flex align-items-center mb-2"
-      type="button"
-      @click="drawBarCharts">
-      <span class="me-2">Refresh View</span>
-      <i class="bi bi-arrow-clockwise"></i>
-    </button>
-    <!-- Charts -->
-    <div id="stat" class="container"></div>
-  </div>
-</template>
-
 <script>
-
 import * as d3 from "d3";
 
 export default {
@@ -48,6 +30,16 @@ export default {
       },
       deep: true,
     },
+  },
+
+  mounted() {
+    // Listen for Bootstrap tab show event
+    const metricsTab = document.getElementById('metrics-tab');
+    if (metricsTab) {
+      metricsTab.addEventListener('shown.bs.tab', () => {
+        this.drawBarCharts();
+      });
+    }
   },
 
   methods: {
@@ -139,9 +131,15 @@ export default {
       const tooltip = this.tooltip;
 
       Object.entries(categories).forEach(([category, data]) => {
-        const width = containerWidth * 0.96;
+        const width = Math.max(0, containerWidth * 0.96);
         const height = 350;
         const margin = { top: 80, right: 20, bottom: 30, left: 50 }; // Increased top margin for legend
+
+        // Filter metrics to only those with at least one value > 0
+        const metrics = [...new Set(data.map((d) => d.metric))].filter(metric =>
+          data.some(item => item.metric === metric && item.value > 0)
+        );
+        if (metrics.length === 0) return; // Skip this category if no valid metrics
 
         const svg = statDiv
           .append("svg")
@@ -150,7 +148,6 @@ export default {
           .append("g")
           .attr("transform", `translate(${margin.left}, ${margin.top})`);
 
-        const metrics = [...new Set(data.map((d) => d.metric))];
         const chartWidth = width - margin.left - margin.right;
         const chartHeight = height - margin.top - margin.bottom;
 
@@ -244,7 +241,7 @@ export default {
         const legend = svg.append("foreignObject")
           .attr("x", 0)
           .attr("y", -45) // Position legend below title
-          .attr("width", chartWidth)
+          .attr("width", Math.max(0, chartWidth))
           .attr("height", 45);
 
         const legendDiv = legend.append("xhtml:div")
@@ -276,5 +273,23 @@ export default {
       });
     },
   },
+
 };
 </script>
+
+<template>
+  <div class="container py-3">
+    <div v-if="!comparisonData" class="alert alert-danger">
+      No metrics data available to visualize.
+    </div>
+    <button v-else
+      class="btn btn-outline-primary d-flex align-items-center mb-2"
+      type="button"
+      @click="drawBarCharts">
+      <span class="me-2">Refresh View</span>
+      <i class="bi bi-arrow-clockwise"></i>
+    </button>
+    <!-- Charts -->
+    <div id="stat" class="container"></div>
+  </div>
+</template>

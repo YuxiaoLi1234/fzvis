@@ -577,50 +577,71 @@ export default {
   <div class="vtk-wrapper">
     <div
       id="options-top"
-      class="d-flex flex-wrap align-items-center justify-content-center mt-3 gap-3 py-2 bg-light rounded shadow-sm"
+      class="d-flex flex-column align-items-center justify-content-center mt-3 py-2 bg-light rounded shadow-sm"
     >
-      <!-- Displays per row -->
-      <div class="d-flex align-items-center me-2">
-        <label class="me-2 mb-0 fw-semibold text-secondary">
-          <i class="bi bi-grid-3x3-gap me-1"></i>Displays per row:
-        </label>
-        <select
-          v-model="containersPerRow"
-          class="form-select form-select-sm"
-          style="width: 70px; min-width: 70px;"
+      <!-- Top controls row -->
+      <div class="d-flex flex-wrap align-items-center justify-content-center gap-3 w-100">
+        <!-- Displays per row -->
+        <div class="d-flex align-items-center me-2">
+          <label class="me-2 mb-0 fw-semibold text-secondary">
+            <i class="bi bi-grid-3x3-gap me-1"></i>Displays per row:
+          </label>
+          <select
+            v-model="containersPerRow"
+            class="form-select form-select-sm"
+            style="width: 70px; min-width: 70px;"
+          >
+            <option v-for="n in 2" :key="n" :value="n">{{ n }}</option>
+          </select>
+        </div>
+
+        <!-- Colormap -->
+        <div class="d-flex align-items-center me-2">
+          <label class="me-2 mb-0 fw-semibold text-secondary">
+            <i class="bi bi-palette me-1"></i>Colormap:
+          </label>
+          <select
+            class="form-select form-select-sm"
+            aria-label="colormap"
+            v-model="colormap"
+            style="min-width: 120px; max-width: 180px;"
+          >
+            <option v-for="preset in allPresets" :value="preset" :key="preset">
+            {{ preset }}
+            </option>
+          </select>
+        </div>
+
+        <!-- Camera Sync -->
+        <button
+          :class="['btn btn-sm d-flex align-items-center', sameCamera ? 'btn-primary' : 'btn-outline-primary']"
+          @click="handleSyncCameraChange"
+          title="Synchronize camera views"
         >
-          <option v-for="n in 2" :key="n" :value="n">{{ n }}</option>
-        </select>
+          <i class="bi bi-camera me-1"></i>Sync Camera
+        </button>
+
+        <!-- Undo -->
+        <!-- <button
+          id="undoBtn"
+          class="btn btn-sm btn-outline-info d-flex align-items-center"
+          title="Undo last action"
+        >
+          <i class="bi bi-arrow-counterclockwise me-1"></i>Undo
+        </button> -->
+
+        <!-- Reset -->
+        <!-- <button
+          id="resetBtn"
+          class="btn btn-sm btn-outline-info d-flex align-items-center"
+          title="Reset all settings"
+        >
+          <i class="bi bi-arrow-clockwise me-1"></i>Reset
+        </button> -->
       </div>
 
-      <!-- Colormap -->
-      <div class="d-flex align-items-center me-2">
-        <label class="me-2 mb-0 fw-semibold text-secondary">
-          <i class="bi bi-palette me-1"></i>Colormap:
-        </label>
-        <select
-          class="form-select form-select-sm"
-          aria-label="colormap"
-          v-model="colormap"
-          style="min-width: 120px; max-width: 180px;"
-        >
-          <option v-for="preset in allPresets" :value="preset" :key="preset">
-          {{ preset }}
-          </option>
-        </select>
-      </div>
-
-      <!-- Camera Sync -->
-      <button
-        :class="['btn btn-sm d-flex align-items-center', sameCamera ? 'btn-primary' : 'btn-outline-primary']"
-        @click="handleSyncCameraChange"
-        title="Synchronize camera views"
-      >
-        <i class="bi bi-camera me-1"></i>Sync Camera
-      </button>
-
-      <!-- Decompressed Data Selector -->
-      <div v-if="hasDecompressedData" class="d-flex align-items-center me-3">
+      <!-- Decompressed Data Selector always on new row, inside #options-top -->
+      <div v-if="hasDecompressedData" class="d-flex align-items-center justify-content-center gap-2 w-100 mt-2 mb-1">
         <label class="me-2 mb-0 fw-semibold text-secondary">
           <i class="bi bi-box me-1"></i>Decompressed:
         </label>
@@ -653,25 +674,6 @@ export default {
           </button>
         </template>
       </div>
-
-      <!-- Undo -->
-      <!-- <button
-        id="undoBtn"
-        class="btn btn-sm btn-outline-info d-flex align-items-center"
-        title="Undo last action"
-      >
-        <i class="bi bi-arrow-counterclockwise me-1"></i>Undo
-      </button> -->
-
-      <!-- Reset -->
-      <!-- <button
-        id="resetBtn"
-        class="btn btn-sm btn-outline-info d-flex align-items-center"
-        title="Reset all settings"
-      >
-        <i class="bi bi-arrow-clockwise me-1"></i>Reset
-      </button> -->
-      
     </div>
 
     <!-- Modified container grid with dynamic columns -->
