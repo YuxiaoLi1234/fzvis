@@ -1,6 +1,5 @@
 <script>
 import * as d3 from 'd3'
-import emitter from './eventBus.js';
 
 export default {
   name:'DataVis',
@@ -29,55 +28,34 @@ export default {
 
 
   async mounted(){
-    
-    await emitter.on("file-input", async (data) => {
-        const { metadata, content } = data;
-
-        this.width = metadata['width'];
-        this.height = metadata['height'];
-        this.depth = metadata['depth'];
-
-        // Check if content is ArrayBuffer
-        console.log("content:", content);
-        console.log(content instanceof ArrayBuffer);
-        if (!content || !(content instanceof ArrayBuffer)) {
-            console.error("Invalid data content!");
-            return;
-        }
-
-        // Parse the binary data
-        if (metadata.precision === 'f') {
-            this.input_data = Array.from(new Float32Array(content));
-        } else if (metadata.precision === 'd') {
-            this.input_data = Array.from(new Float64Array(content));
+    // React to dataset changes via Vuex store instead of event bus
+    this.$watch(
+      () => ({
+        data: this.$store.state.fileData,
+        dims: this.$store.state.dimensions,
+        precision: this.$store.state.precision,
+      }),
+      (val) => {
+        if (!val || !val.data || !val.dims || !val.precision) return;
+        const [w,h,d] = val.dims;
+        this.width = w; this.height = h; this.depth = d;
+        if (!(val.data instanceof ArrayBuffer)) return;
+        if (val.precision === 'f') {
+          this.input_data = Array.from(new Float32Array(val.data));
+        } else if (val.precision === 'd') {
+          this.input_data = Array.from(new Float64Array(val.data));
         } else {
-            console.error("Unsupported precision type!");
-            return;
+          return;
         }
-
-        this.mode = "input";
+        this.mode = 'input';
         this.drawZoom = false;
         this.draw_data = this.input_data;
         this.data_vis(this.input_data);
         this.defaultcolormap();
         this.draw();
-    });
-
-    await emitter.on('inputdata', (data) => {
-        this.width = data['width'];
-        this.height = data['height'];
-        this.depth = data['depth'];
-        this.input_data = Object.values(data["input_data"]);  
-        this.decp_data = data["decp_data"];  
-        this.compressor_name = data["compressor_name"];  
-    })
-
-    await emitter.on('compressor_configuration', (data) => {
-        console.log(data)
-        this.configurations = data
-        
-    })
-
+      },
+      { immediate: true, deep: false }
+    );
   },
   methods:{
       vis_error: function () {

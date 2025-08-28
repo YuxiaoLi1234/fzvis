@@ -1,20 +1,23 @@
 <script>
 import AppHeader from './components/AppHeader.vue'
-import InputDataset from './components/InputDataset.vue'
-import CustomizeCompressor from './components/CustomizeCompressor.vue'
+// import CustomizeCompressor from './components/CustomizeCompressor.vue'
 import HelloVtk from './components/HelloVtk.vue'
 import MetricVis from './components/MetricVis.vue'
 import AppFooter from './components/AppFooter.vue'
+import PipelineView from './components/PipelineView.vue'
+import { Splitpanes, Pane } from 'splitpanes'
 
 export default {
   name: 'App',
   components: {
     AppHeader,
-    InputDataset,
-    CustomizeCompressor,
+    PipelineView,
+    // CustomizeCompressor,
     HelloVtk,
     MetricVis,
     AppFooter,
+    Splitpanes,
+    Pane,
   },
 
   data() {
@@ -23,6 +26,9 @@ export default {
       serverAddress: "http://localhost:5003",
       isChecking: false,
       connectionError: "",
+      // For Properties pane
+      selectedModule: null,
+      selectedModuleOptions: [],
     };
   },
 
@@ -41,32 +47,61 @@ export default {
     async checkConnection() {
       this.isChecking = true;
       this.connectionError = "";
+      this.$store.commit('setStatus', { type: 'info', message: 'Checking server connection…' });
       try {
         const response = await fetch(`${this.serverAddress}/listDatasets`);
         if (!response.ok) throw new Error("Server not reachable");
         localStorage.setItem("fzvis_server_address", this.serverAddress);
         this.showServerModal = false;
+        this.$store.commit('setStatus', { type: 'success', message: `Connected to ${this.serverAddress}` });
+        this.$store.commit('addHistory', { kind: 'connection', text: `Connected to ${this.serverAddress}`, timestamp: Date.now() });
       } catch (err) {
         const msg = err.message || err.toString() || "Unknown error";
         this.connectionError = `Failed to connect: ${msg}. Please check the address and try again.`;
         this.showServerModal = true;
         console.log("Connection error:", this.connectionError);
+        this.$store.commit('setStatus', { type: 'danger', message: this.connectionError });
+        this.$store.commit('addHistory', { kind: 'connection', text: `Connection failed: ${msg}`, timestamp: Date.now() });
       } finally {
         this.isChecking = false;
       }
+    },
+    
+    // Handle PipelineView selection to populate Properties pane
+    onModuleSelected(payload) {
+      // Deselect if payload is null
+      if (!payload) {
+        this.selectedModule = null;
+        this.selectedModuleOptions = [];
+        return;
+      }
+      this.selectedModule = { id: payload.id, label: payload.label };
+      this.selectedModuleOptions = payload.options || [];
+    },
+    // Make option draggable for dropping onto modules in PipelineView
+    onOptionDragStart(option, e) {
+      if (!this.selectedModule) return;
+      e.dataTransfer.setData('text/plain', option);
+      e.dataTransfer.setData('module-id', this.selectedModule.id);
     },
     
     resetServerAddress() {
       localStorage.removeItem("fzvis_server_address");
       this.serverAddress = "";
       this.showServerModal = true;
-    }
+      this.$store.commit('setStatus', { type: 'warning', message: 'Server address cleared.' });
+      this.$store.commit('addHistory', { kind: 'connection', text: 'Server address cleared', timestamp: Date.now() });
+    },
+
+    onSplitResize() {
+      window.dispatchEvent(new Event('resize'));
+    },
   }
 }
 </script>
 
 <template>
-  <div>
+  <div class="d-flex flex-column vh-100 overflow-hidden">
     <!-- Bootstrap Modal for Server Address -->
     <div v-if="showServerModal" class="modal show d-block" tabindex="-1" role="dialog">
       <div class="modal-dialog modal-dialog-centered" role="document">
@@ -96,51 +131,84 @@ export default {
       </div>
     </div>
 
-    <div v-else class="container-fluid py-3 px-5 mx-auto">
+    <div v-else class="d-flex flex-column vh-100 overflow-hidden pt-2 px-3 pb-5">
       <AppHeader />
-      <div class="row">
-        <div class="col-sm-4" style="min-width:300px;">
-          <ul class="nav nav-tabs" role="tablist">
-            <li class="nav-item" role="presentation">
-              <button class="nav-link active" id="dataset-tab" data-bs-toggle="tab" data-bs-target="#dataset" type="button" role="tab" aria-selected="true">
-                <i class="bi bi-file-arrow-up me-1"></i>Dataset</button>
-            </li>
-            <li class="nav-item" role="presentation">
-              <button class="nav-link" id="compressor-tab" data-bs-toggle="tab" data-bs-target="#compressor" type="button" role="tab" aria-selected="true">
-                <i class="bi bi-file-zip me-1"></i>Compressor</button>
-            </li>
-          </ul>
-          <div class="tab-content">
-            <div id="dataset" class="tab-pane fade show active" role="tabpanel" aria-labelledby="dataset-tab">
-              <InputDataset />
+
+      <div class="d-flex flex-grow-1 overflow-hidden mb-3">
+        <Splitpanes class="default-theme w-100 h-100" :dbl-click-splitter="false" @resize="onSplitResize" @resized="onSplitResize">
+          <!-- Left: split horizontally (top/bottom) for Pipeline and Properties -->
+          <Pane :size="35" min-size="20" class="h-100 overflow-hidden">
+            <div class="h-100 p-2 d-flex flex-column overflow-hidden">
+              <Splitpanes class="default-theme" horizontal>
+                <Pane min-size="20">
+                  <div class="h-100 p-2 d-flex flex-column overflow-hidden">
+                    <h6 class="text-muted fw-semibold mb-2"><i class="bi bi-diagram-3 me-2"></i>Pipeline</h6>
+                    <div class="flex-grow-1 overflow-auto">
+                      <PipelineView @moduleSelected="onModuleSelected" />
+                    </div>
+                  </div>
+                </Pane>
+                <Pane :size="45" min-size="20">
+                  <div class="h-100 p-2 d-flex flex-column overflow-hidden">
+                    <h6 class="text-muted fw-semibold mb-2"><i class="bi bi-sliders me-2"></i>Properties</h6>
+                    <div class="flex-grow-1 overflow-auto">
+                      <div v-if="selectedModule">
+                        <div class="d-flex align-items-center mb-2">
+                          <span class="me-2 text-muted small">Options for</span>
+                          <span class="badge bg-primary">{{ selectedModule.label }}</span>
+                        </div>
+                        <div class="d-flex flex-row flex-wrap gap-2">
+                          <div
+                            v-for="option in selectedModuleOptions"
+                            :key="option"
+                            class="card p-2 px-3 text-center border border-2 border-primary bg-white flex-shrink-0 shadow-sm user-select-none cursor-pointer"
+                            draggable="true"
+                            @dragstart="onOptionDragStart(option, $event)"
+                          >
+                            <span class="fw-semibold text-primary">{{ option }}</span>
+                          </div>
+                        </div>
+                      </div>
+                      <div v-else class="text-muted small">Select a module in the pipeline to view options here.</div>
+                      <!-- <CustomizeCompressor /> -->
+                    </div>
+                  </div>
+                </Pane>
+              </Splitpanes>
             </div>
-            <div id="compressor" class="tab-pane fade" role="tabpanel" aria-labelledby="compressor-tab">
-              <CustomizeCompressor />
+          </Pane>
+
+          <Pane :size="65" min-size="30" class="h-100 overflow-hidden">
+            <div class="d-flex flex-column h-100 ms-3">
+              <ul class="nav nav-tabs" role="tablist">
+                <li class="nav-item" role="presentation">
+                  <button class="nav-link active" id="datavis-tab" data-bs-toggle="tab" data-bs-target="#datavis" type="button" role="tab" aria-selected="true"><i class="bi bi-eye me-1"></i>Data Visualization</button>
+                </li>
+                <li class="nav-item" role="presentation">
+                  <button class="nav-link" id="metrics-tab" data-bs-toggle="tab" data-bs-target="#metrics" type="button" role="tab" aria-selected="true">
+                    <i class="bi bi-bar-chart-line me-1"></i>Metrics
+                  </button>
+                </li>
+              </ul>
+              <div class="tab-content flex-grow-1">
+                <div id="datavis" class="tab-pane fade show active h-100" role="tabpanel" aria-labelledby="datavis-tab">
+                  <div class="h-100 overflow-auto">
+                    <HelloVtk />
+                  </div>
+                </div>
+                <div id="metrics" class="tab-pane fade h-100" role="tabpanel" aria-labelledby="metrics-tab">
+                  <div class="h-100 overflow-auto">
+                    <MetricVis />
+                  </div>
+                </div>
+              </div>
             </div>
-          </div>
-        </div>
-        <div class="col-sm-8">
-          <ul class="nav nav-tabs" role="tablist">
-            <li class="nav-item" role="presentation">
-              <button class="nav-link active" id="datavis-tab" data-bs-toggle="tab" data-bs-target="#datavis" type="button" role="tab" aria-selected="true"><i class="bi bi-eye me-1"></i>Data Visualization</button>
-            </li>
-            <li class="nav-item" role="presentation">
-              <button class="nav-link" id="metrics-tab" data-bs-toggle="tab" data-bs-target="#metrics" type="button" role="tab" aria-selected="true">
-                <i class="bi bi-bar-chart-line me-1"></i>Metrics
-              </button>
-            </li>
-          </ul>
-          <div class="tab-content">
-            <div id="datavis" class="tab-pane fade show active" role="tabpanel" aria-labelledby="datavis-tab">
-              <HelloVtk />
-            </div>
-            <div id="metrics" class="tab-pane fade" role="tabpanel" aria-labelledby="metrics-tab">
-              <MetricVis />
-            </div>
-          </div>
-        </div>
+          </Pane>
+        </Splitpanes>
       </div>
+
       <AppFooter />
+
       <!-- Offcanvas HTML -->
       <div class="offcanvas offcanvas-end m-2 py-0" tabindex="-1" id="showMore" aria-labelledby="showMoreLabel">
         <div class="offcanvas-header">
@@ -184,6 +252,14 @@ export default {
           </svg>Vue.js</a>. <br>Licensed MIT.</p>
         </div>
       </div>
+
     </div>
   </div>
 </template>
+
+<style>
+.splitpanes.default-theme,
+.splitpanes.default-theme .splitpanes__pane {
+  background-color: transparent !important;
+}
+</style>

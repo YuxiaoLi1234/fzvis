@@ -1,16 +1,47 @@
 <template>
-  <div class="position-fixed bottom-0 end-0 me-3 mb-3" style="width: 400px; z-index: 1050;">
-    <div class="card border-0 shadow">
-      <div class="card-header bg-primary text-white d-flex justify-content-between align-items-center" @click="toggleChat" style="cursor: pointer;">
-        <div>
-          <i class="bi bi-robot me-2"></i>
-          <span>AI Assistant</span>
-        </div>
-        <i class="bi" :class="isChatOpen ? 'bi-chevron-down' : 'bi-chevron-up'"></i>
+  <footer class="footer fixed-bottom bg-white border-top shadow-sm">
+    <div class="container-fluid px-3 py-2 d-flex align-items-center gap-3">
+      <!-- History button -->
+      <button class="btn btn-sm btn-outline-secondary d-flex align-items-center" @click="toggleHistory">
+        <i class="bi bi-clock-history me-2"></i>
+        History
+        <span v-if="history.length" class="badge bg-secondary ms-2">{{ history.length }}</span>
+      </button>
+
+      <!-- Status (center) -->
+      <div class="flex-grow-1 text-center d-flex justify-content-center align-items-center gap-2">
+        <template v-if="progress.active">
+          <div class="flex-grow-1 d-flex align-items-center gap-2" style="max-width: 720px;">
+            <div class="progress flex-shrink-0" style="height: 6px; width: 60%; min-width: 120px;">
+              <div class="progress-bar progress-bar-striped progress-bar-animated" role="progressbar" :style="{ width: (progress.percent || 0) + '%' }" aria-valuemin="0" aria-valuemax="100"></div>
+            </div>
+            <small class="text-muted text-truncate" style="max-width: 40%" :title="progress.message">{{ progress.message || ('Working… ' + (progress.percent || 0) + '%') }}</small>
+          </div>
+        </template>
+        <template v-else>
+          <i class="bi" :class="statusIconClass"></i>
+          <span :class="statusClass">{{ status.message }}</span>
+        </template>
       </div>
-      <div class="collapse" :class="{ show: isChatOpen }">
+
+      <!-- AI Assistant button (right) -->
+      <button class="btn btn-sm btn-primary" @click="toggleChat">
+        <i class="bi bi-robot me-1"></i> Assistant
+      </button>
+    </div>
+
+    <!-- Floating Chat Panel -->
+    <div class="position-fixed bottom-0 end-0 me-3 mb-5" style="width: 420px; z-index: 1050;" v-if="isChatOpen">
+      <div class="card border-0 shadow">
+        <div class="card-header bg-primary text-white d-flex justify-content-between align-items-center" style="cursor: pointer;" @click="toggleChat">
+          <div>
+            <i class="bi bi-robot me-2"></i>
+            <span>AI Assistant</span>
+          </div>
+          <i class="bi bi-x"></i>
+        </div>
         <div class="card-body p-0">
-          <div class="border-bottom" style="max-height: 600px; overflow-y: auto;" ref="chatContainer">
+          <div class="border-bottom" style="max-height: 60vh; overflow-y: auto;" ref="chatContainer">
             <div class="p-3">
               <div v-for="message in messages" :key="message.id" class="mb-2">
                 <div class="d-flex" :class="message.type === 'user' ? 'justify-content-end' : 'justify-content-start'">
@@ -20,7 +51,7 @@
                   </div>
                 </div>
               </div>
-              
+
               <!-- Suggested Questions -->
               <div v-if="showSuggestions && !isLoading" class="mt-3 mb-2">
                 <div class="d-flex flex-wrap gap-2">
@@ -53,7 +84,39 @@
         </div>
       </div>
     </div>
-  </div>
+
+    <!-- History Panel (popover-like) -->
+    <div v-if="showHistory" class="position-fixed bottom-0 start-0 ms-3 mb-5" style="width: 520px; max-width: 60vw; z-index: 1050;">
+      <div class="card border-0 shadow">
+        <div class="card-header d-flex justify-content-between align-items-center">
+          <div>
+            <i class="bi bi-clock-history me-2"></i>
+            <span>Operation History</span>
+          </div>
+          <div class="btn-group">
+            <button type="button" class="btn btn-sm btn-outline-secondary" @click="clearHistory" :disabled="history.length === 0" title="Clear">
+              <i class="bi bi-trash"></i>
+            </button>
+            <button type="button" class="btn btn-sm btn-outline-secondary" @click="toggleHistory" title="Close">
+              <i class="bi bi-x-lg"></i>
+            </button>
+          </div>
+        </div>
+        <div class="card-body p-0" style="max-height: 50vh; overflow: auto;">
+          <div v-if="history.length === 0" class="p-4 text-muted text-center">No operations yet.</div>
+          <ul v-else class="list-group list-group-flush">
+            <li v-for="(item, idx) in orderedHistory" :key="idx" class="list-group-item d-flex justify-content-between align-items-start">
+              <div class="me-3">
+                <span class="badge rounded-pill text-bg-light border me-2 text-capitalize">{{ item.kind }}</span>
+                <span>{{ item.text }}</span>
+              </div>
+              <small class="text-muted">{{ formatTime(item.timestamp) }}</small>
+            </li>
+          </ul>
+        </div>
+      </div>
+    </div>
+  </footer>
 </template>
 
 <script>
@@ -78,24 +141,68 @@ export default {
         "What are aboslute and relative error bound?",
       ],
       suggestedQuestions: [],
+      showHistory: false,
     }
   },
-  
+  computed: {
+    status() {
+      return this.$store.state.status;
+    },
+    history() {
+      return this.$store.state.history;
+    },
+    progress() {
+      return this.$store.state.progress || { active: false, percent: 0, message: '' };
+    },
+    statusClass() {
+      const map = {
+        success: 'text-success',
+        info: 'text-info',
+        warning: 'text-warning',
+        danger: 'text-danger',
+        secondary: 'text-muted'
+      };
+      return map[this.status.type] || 'text-muted';
+    },
+    statusIconClass() {
+      const map = {
+        success: 'bi-check-circle text-success',
+        info: 'bi-info-circle text-info',
+        warning: 'bi-exclamation-triangle text-warning',
+        danger: 'bi-x-circle text-danger',
+        secondary: 'bi-dot text-muted'
+      };
+      return map[this.status.type] || 'bi-dot text-muted';
+    },
+    orderedHistory() {
+      return [...this.history].sort((a, b) => (a.timestamp || 0) - (b.timestamp || 0));
+    }
+  },
   mounted() {
     this.resetSuggestions();
   },
-
   methods: {
     toggleChat() {
       this.isChatOpen = !this.isChatOpen;
     },
-
-    // Use marked to convert markdown to HTML
+    toggleHistory() {
+      this.showHistory = !this.showHistory;
+    },
+    clearHistory() {
+      this.$store.commit('clearHistory');
+    },
+    // helpers
     renderMarkdown(text) {
-      if (text) {
-        return marked.parse(text);
-      }
+      if (text) return marked.parse(text);
       return "";
+    },
+    scrollHistoryToEnd() {
+      const el = this.$refs.historyContainer;
+      if (el) el.scrollLeft = el.scrollWidth;
+    },
+    formatTime(ts) {
+      const d = new Date(ts || Date.now());
+      return d.toLocaleTimeString();
     },
 
     async sendMessage() {
@@ -130,7 +237,6 @@ export default {
           body: new URLSearchParams({ message: messageToSend }),
         });
 
-        // Check for server error response
         if (!response.ok) {
           let errorText = "Unknown error";
           try {
@@ -167,26 +273,16 @@ export default {
 
               try {
                 const parsed = JSON.parse(jsonStr);
-                // const reasoning = parsed.reasoning_content || "";
                 const content = parsed.content || "";
-
-                // fullResponse += reasoning + content;
                 fullResponse += content;
 
-                // Update the bot message
                 if (botIndex !== -1) {
-                  if (fullResponse) {
-                    this.messages[botIndex].text = fullResponse;
-                  } else {
-                    this.messages[botIndex].text = "*Thinking...*";
-                  }
+                  this.messages[botIndex].text = fullResponse || "*Thinking...*";
                 }
 
                 this.$nextTick(() => {
                   const container = this.$refs.chatContainer;
-                  if (container) {
-                    container.scrollTop = container.scrollHeight;
-                  }
+                  if (container) container.scrollTop = container.scrollHeight;
                 });
               } catch (err) {
                 console.error("Failed to parse stream JSON:", err, jsonStr);
@@ -195,30 +291,17 @@ export default {
           }
         }
 
-        // Mark streaming as complete
         const botMessageIndex = this.messages.findIndex(msg => msg.id === botMessage.id);
-        if (botMessageIndex !== -1) {
-          this.messages[botMessageIndex].streaming = false;
-        }
+        if (botMessageIndex !== -1) this.messages[botMessageIndex].streaming = false;
         
       } catch (error) {
         console.error('Error calling OpenAI API:', error);
-        
-        // Add error message
-        this.messages.push({
-          id: Date.now() + 2,
-          text: "Sorry, I encountered an error. Please try again.",
-          type: "bot",
-        });
+        this.messages.push({ id: Date.now() + 2, text: "Sorry, I encountered an error. Please try again.", type: "bot" });
       } finally {
         this.isLoading = false;
-        
-        // Auto-scroll to bottom
         this.$nextTick(() => {
           const container = this.$refs.chatContainer;
-          if (container) {
-            container.scrollTop = container.scrollHeight;
-          }
+          if (container) container.scrollTop = container.scrollHeight;
         });
       }
     },
@@ -226,19 +309,18 @@ export default {
     selectSuggestion(question) {
       this.currentMessage = question;
       this.sendMessage();
-      // Remove this question from the suggestions array
       this.suggestedQuestions = this.suggestedQuestions.filter(q => q !== question);
-      if (this.suggestedQuestions.length === 0) {
-        this.showSuggestions = false;
-      }
+      if (this.suggestedQuestions.length === 0) this.showSuggestions = false;
     },
-    
-    // Reset the suggestions to the original preset questions
     resetSuggestions() {
-      // Reset to original suggestions when needed
       this.suggestedQuestions = this.presetQuestions;
       this.showSuggestions = true;
     }
   }
 }
 </script>
+
+<style scoped>
+/* Remove scroller; no longer used */
+.history-scroller { display: none; }
+</style>

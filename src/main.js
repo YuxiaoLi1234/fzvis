@@ -6,6 +6,7 @@ import bootstrap from 'bootstrap/dist/js/bootstrap.bundle.min.js'
 // CSS files
 import 'bootstrap/dist/css/bootstrap.min.css';
 import 'bootstrap-icons/font/bootstrap-icons.css';
+import 'splitpanes/dist/splitpanes.css';
 
 const app = createApp(App);
 app.use(store);

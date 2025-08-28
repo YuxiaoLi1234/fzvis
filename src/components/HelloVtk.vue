@@ -607,7 +607,7 @@ export default {
             style="min-width: 120px; max-width: 180px;"
           >
             <option v-for="preset in allPresets" :value="preset" :key="preset">
-            {{ preset }}
+              {{ preset }}
             </option>
           </select>
         </div>
@@ -620,73 +620,55 @@ export default {
         >
           <i class="bi bi-camera me-1"></i>Sync Camera
         </button>
-
-        <!-- Undo -->
-        <!-- <button
-          id="undoBtn"
-          class="btn btn-sm btn-outline-info d-flex align-items-center"
-          title="Undo last action"
-        >
-          <i class="bi bi-arrow-counterclockwise me-1"></i>Undo
-        </button> -->
-
-        <!-- Reset -->
-        <!-- <button
-          id="resetBtn"
-          class="btn btn-sm btn-outline-info d-flex align-items-center"
-          title="Reset all settings"
-        >
-          <i class="bi bi-arrow-clockwise me-1"></i>Reset
-        </button> -->
       </div>
 
       <!-- Decompressed Data Selector always on new row, inside #options-top -->
-      <div v-if="hasDecompressedData" class="d-flex align-items-center justify-content-center gap-2 w-100 mt-2 mb-1">
+      <div
+        v-if="hasDecompressedData"
+        class="d-flex align-items-center justify-content-center gap-2 w-100 mt-2 mb-1"
+      >
         <label class="me-2 mb-0 fw-semibold text-secondary">
           <i class="bi bi-box me-1"></i>Decompressed:
         </label>
         <template v-if="decompressedKeys.length <= 10">
           <input
-          type="range"
-          class="form-range"
-          min="0"
-          :max="decompressedKeys.length - 1"
-          v-model="selectedDecompressedIndex"
-          style="width: 120px;"
+            type="range"
+            class="form-range"
+            min="0"
+            :max="decompressedKeys.length - 1"
+            v-model="selectedDecompressedIndex"
+            style="width: 120px;"
           />
           <span class="ms-2">{{ decompressedKeys[selectedDecompressedIndex] }}</span>
         </template>
         <template v-else>
           <button
-          class="btn btn-sm btn-outline-secondary me-1"
-          :disabled="selectedDecompressedIndex === 0"
-          @click="selectedDecompressedIndex--"
+            class="btn btn-sm btn-outline-secondary me-1"
+            :disabled="selectedDecompressedIndex === 0"
+            @click="selectedDecompressedIndex--"
           >
-          &lt;
+            &lt;
           </button>
           <span>{{ decompressedKeys[selectedDecompressedIndex] }}</span>
           <button
-          class="btn btn-sm btn-outline-secondary ms-1"
-          :disabled="selectedDecompressedIndex === decompressedKeys.length - 1"
-          @click="selectedDecompressedIndex++"
+            class="btn btn-sm btn-outline-secondary ms-1"
+            :disabled="selectedDecompressedIndex === decompressedKeys.length - 1"
+            @click="selectedDecompressedIndex++"
           >
-          &gt;
+            &gt;
           </button>
         </template>
       </div>
     </div>
 
-    <!-- Modified container grid with dynamic columns -->
-    <div
-      class="position-relative mt-3"
-      :style="{
-        display: 'grid',
-        gridTemplateColumns: `repeat(${containersPerRow}, 1fr)`,
-        gap: '1rem'
-      }"
-    >
+    <!-- Visualization containers: flex row, fill all space -->
+    <div class="flex-grow-1 d-flex flex-row gap-3 mt-3 w-100 h-100">
       <!-- Original Container -->
-      <div class="card" style="height: 400px;">
+      <div
+        class="card d-flex flex-column"
+        :class="{'flex-grow-1': !selectedDecompressedData, 'w-50': selectedDecompressedData}"
+        style="min-width:0; min-height:0;"
+      >
         <div class="card-header">
           <div class="d-flex align-items-center justify-content-between">
             <span>
@@ -713,69 +695,75 @@ export default {
                   <option value="custom">Custom range</option>
                 </select>
                 <div v-if="rescaleMethod === 'custom'" class="d-flex align-items-center">
-                <input
-                  type="number"
-                  class="form-control form-control-sm w-auto mx-2"
-                  v-model="customMin"
-                  placeholder="Min"
-                  style="max-width: 100px;"
-                />
-                <input
-                  type="number"
-                  class="form-control form-control-sm w-auto"
-                  v-model="customMax"
-                  placeholder="Max"
-                  style="max-width: 100px;"
-                />
+                  <input
+                    type="number"
+                    class="form-control form-control-sm w-auto mx-2"
+                    v-model="customMin"
+                    placeholder="Min"
+                    style="max-width: 100px;"
+                  />
+                  <input
+                    type="number"
+                    class="form-control form-control-sm w-auto"
+                    v-model="customMax"
+                    placeholder="Max"
+                    style="max-width: 100px;"
+                  />
+                </div>
               </div>
+              <label for="sliceId" class="form-label mx-2 pt-2">Slice:</label>
+              <input
+                type="range"
+                min="0"
+                :max="dimensions[2]-1"
+                step="1"
+                class="form-range align-self-center w-auto"
+                v-model="sliceId"
+                style="max-width: 160px;"
+              />
             </div>
-            <label for="sliceId" class="form-label mx-2 pt-2">Slice:</label>
-            <input
-              type="range"
-              min="0"
-              :max="dimensions[2]-1"
-              step="1"
-              class="form-range align-self-center w-auto"
-              v-model="sliceId"
-              style="max-width: 160px;"
-            />
           </div>
         </div>
-      </div>
-      <div class="card-body p-2">
-        <div style="width: 100%; height: 100%; position: relative;">
-        <div ref="vtkContainerOriginal"></div>
+        <div class="card-body p-2 d-flex w-100 h-100" style="min-height:0; flex: 1;">
+          <div ref="vtkContainerOriginal" class="vtk-host w-100 h-100 flex-grow-1" style="min-height: 0;"></div>
         </div>
-      </div>
       </div>
 
       <!-- Decompressed Container -->
       <div
-        v-show="selectedDecompressedData"
-        class="card"
-        style="height: 400px;"
+        v-if="selectedDecompressedData"
+        class="card flex-grow-1 d-flex flex-column h-100"
       >
         <div class="card-header">
           <span
-          class="ms-1 text-decoration-underline text-dark"
-          style="cursor: pointer;"
-          data-bs-toggle="tooltip"
-          data-bs-placement="bottom"
-          data-bs-html="true"
-          :title="formatConfigHTML(selectedDecompressedData?.compressor_config)"
+            class="ms-1 text-decoration-underline text-dark"
+            style="cursor: pointer;"
+            data-bs-toggle="tooltip"
+            data-bs-placement="bottom"
+            data-bs-html="true"
+            :title="formatConfigHTML(selectedDecompressedData?.compressor_config)"
           >
-          Decompressed ({{ selectedCompressor }})
+            Decompressed ({{ selectedCompressor }})
           </span>
         </div>
-        <div class="card-body p-2">
-          <div style="width: 100%; height: 100%; position: relative;">
-            <div ref="vtkContainerDecompressed"></div>
-          </div>
+        <div class="card-body p-2 d-flex" style="min-height:0; flex: 1;">
+          <div ref="vtkContainerDecompressed" class="vtk-host w-100 h-100 flex-grow-1" style="min-height: 0;"></div>
         </div>
       </div>
-
     </div>
-
   </div>
-
 </template>
+
+<style scoped>
+.vtk-wrapper {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.vtk-host {
+  position: relative;
+  overflow: hidden;
+}
+</style>
