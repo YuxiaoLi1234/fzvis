@@ -3,11 +3,13 @@ import axios from 'axios';
 import { Modal } from 'bootstrap';
 import Multiselect from 'vue-multiselect';
 import ConfigGraph from './ConfigGraph.vue';
+import PipelineView from './PipelineView.vue';
 
 export default {
   components: {
     Multiselect,
     ConfigGraph,
+    PipelineView,
   },
   data() {
     return {
@@ -34,7 +36,9 @@ export default {
       selectedCompressor: null,
       compare_data: {},
       formData: new FormData(),
-      showConfigPanel: true, // Add toggle for config panel
+      showConfigPanel: true, // toggle for config panel
+      showPipelinePanel: true, // toggle for pipeline panel
+      showPipelineModal: false, // toggle for pipeline save modal
     };
   },
 
@@ -236,65 +240,75 @@ export default {
 
     handleConfigurationCheck() {
       if (this.baseConfigurations[this.currentConfigName]) {
-        // Show confirmation modal
         const replaceModal = new Modal(document.getElementById("replaceConfigModal"));
         replaceModal.show();
       } else {
-        // Save directly if no conflict
         this.handleConfigurationSave();
       }
     },
 
     handleConfigurationSave() {
-      const config = { "compressor_config":{} };
-      console.log("configuredValues", JSON.stringify(this.configuredValues));
-
-      config.compressor_id = this.selectedCompressor;
-      config["early_config"] = {
-        "pressio:metric": "composite",
-        "composite:plugins": [],
-      };
-
-      Object.entries(this.configuredValues["Highlevel"]).forEach(([key, value]) => {
-        if (value !== null && value !== undefined) {
-          config["compressor_config"][key] = value;
-        }
-      });
-      Object.values(this.configuredValues["Detail"]).forEach((item) => {
-        // if item is an array (only metrics right now?)
-        if (Array.isArray(item)) {
-          item.forEach(element => {
-            if (element?.id) {
-              config["early_config"]["composite:plugins"].push(element.id);
-            }
-          });
-        }
-        else if (item.label.startsWith("Error Bound")) {
-          if (item.type.split(":")[0] != this.selectedCompressor) {
-            config["compressor_config"][item.id] = item.value
+      let config = { compressor_id: this.selectedCompressor, compressor_config: {} };
+      if (
+        this.selectedCompressor === 'sz3' &&
+        this.$refs.pipelineView &&
+        this.$refs.pipelineView.compressor &&
+        this.$refs.pipelineView.compressor.modules
+      ) {
+        // Pipeline save logic
+        this.$refs.pipelineView.compressor.modules.forEach(m => {
+          if (m.value && Object.keys(m.value).length) {
+            const optionValue = m.value[Object.keys(m.value)[0]];
+            config.compressor_config[m.key] = optionValue;
           }
-          else {
-            if (item.type.includes("mode")) {
-              config["compressor_config"][item.type] = item.id;
-            }
-            const errorBoundEntries = this.handleErrorBoundMode(item);
-            Object.entries(errorBoundEntries).forEach(([key, value]) => {
-              config["compressor_config"][key] = value;
+        });
+        this.$store.commit('addHistory', {
+          kind: 'pipeline',
+          text: `Saved pipeline configuration: ${this.currentConfigName}`,
+          timestamp: Date.now()
+        });
+      } else {
+        config.compressor_id = this.selectedCompressor;
+        config.early_config = {
+          'pressio:metric': 'composite',
+          'composite:plugins': [],
+        };
+        Object.entries(this.configuredValues['Highlevel']).forEach(([key, value]) => {
+          if (value !== null && value !== undefined) {
+            config.compressor_config[key] = value;
+          }
+        });
+        Object.values(this.configuredValues['Detail']).forEach((item) => {
+          if (Array.isArray(item)) {
+            item.forEach(element => {
+              if (element?.id) {
+                config.early_config['composite:plugins'].push(element.id);
+              }
             });
+          } else if (item.label && item.label.startsWith('Error Bound')) {
+            if (item.type.split(':')[0] != this.selectedCompressor) {
+              config.compressor_config[item.id] = item.value;
+            } else {
+              if (item.type.includes('mode')) {
+                config.compressor_config[item.type] = item.id;
+              }
+              const errorBoundEntries = this.handleErrorBoundMode(item);
+              Object.entries(errorBoundEntries).forEach(([key, value]) => {
+                config.compressor_config[key] = value;
+              });
+            }
+          } else if (item.label && !item.label.startsWith('Compressor:')) {
+            config.compressor_config[item.type] = item.id;
           }
-        }
-        else if (!item.label.startsWith("Compressor:")) {
-          config["compressor_config"][item.type] = item.id;
-        }
-      });
-
+        });
+      }
       // Save current configuration
       // corrected config format:
       // savedConfig {"compressor_config":{"sz3:algorithm_str":"ALGO_INTERP","sz3:abs_error_bound":0.001,"sz3:intrep_algo_str":"INTERP_ALGO_CUBIC","sz3:metric":"composite"},"compressor_id":"sz3"}
       this.baseConfigurations[this.currentConfigName] = config;
       this.derivedConfigurations[this.currentConfigName] = {};
       this.savedConfigurations[this.currentConfigName] = config;
-      // console.log("baseConfigurations", JSON.stringify(this.baseConfigurations));
+      console.log("baseConfigurations", JSON.stringify(this.baseConfigurations));
       // console.log("savedConfigurations", JSON.stringify(this.savedConfigurations));
       this.currentConfigName = "";
     },
@@ -402,7 +416,38 @@ export default {
       });
     },
 
+    handlePipelineSave() {
+      // Use the same logic as handleConfigurationSave
+      this.handleConfigurationSave();
+    },
 
+    openSaveModal(isPipeline = false) {
+      if (isPipeline) {
+        this.currentConfigName = this.selectedCompressor + '_pipeline_' + this.getFormattedTimestamp();
+      } else {
+        this.currentConfigName = this.selectedCompressor + '_' + this.getFormattedTimestamp();
+      }
+      const modal = document.getElementById('saveConfigModal');
+      if (modal) {
+        Modal.getOrCreateInstance(modal).show();
+        setTimeout(() => {
+          const input = document.getElementById('floatingConfigName');
+          if (input) input.focus();
+        }, 100);
+      }
+    },
+
+    isPipelineComplete() {
+      const pipelineView = this.$refs.pipelineView;
+      if (pipelineView && pipelineView.compressor && pipelineView.compressor.modules) {
+        return pipelineView.compressor.modules.every(m => m.value && Object.keys(m.value).length > 0);
+      }
+      return false;
+    },
+
+    onPipelineModulesUpdated() {
+      this.$forceUpdate();
+    },
   }
 };
 </script>
@@ -426,87 +471,117 @@ export default {
         <div v-if="selectedCompressor" class="p-2">
           <div class="card">
             <div class="card-body" v-if="selectedCompressor in this.compressorOptions">
-              <h5 class="card-title d-flex align-items-center" style="gap: 0.5rem;">
-                {{ selectedCompressor }}
-                <button
-                  class="btn btn-sm btn-outline-secondary"
-                  type="button"
-                  :aria-label="showConfigPanel ? 'Hide configuration panel' : 'Show configuration panel'"
-                  :title="showConfigPanel ? 'Hide configuration panel' : 'Show configuration panel'"
-                  @click="showConfigPanel = !showConfigPanel"
-                >
-                  <span v-if="showConfigPanel" class="bi bi-chevron-up"></span>
-                  <span v-else class="bi bi-chevron-down"></span>
-                </button>
-              </h5>
-              <div v-show="showConfigPanel">
-                <p class="card-text" v-show="compressorOptions[selectedCompressor]['Highlevel'].length > 0">High-level options are listed here.</p>
-                <div class="d-flex flex-wrap mb-2" v-show="compressorOptions[selectedCompressor]['Highlevel'].length > 0">
-                  <div
-                    class="me-2 mb-2"
-                    v-for="option in compressorOptions[selectedCompressor]['Highlevel'].filter(opt => opt.label === 'Nthreads')"
-                    :key="option.id"
+              <div v-if="selectedCompressor === 'sz3'">
+                <h5 class="card-title d-flex align-items-center" style="gap: 0.5rem;">
+                  Pipeline Design
+                  <button
+                    class="btn btn-sm btn-outline-secondary"
+                    type="button"
+                    :aria-label="showPipelinePanel ? 'Hide pipeline view' : 'Show pipeline view'"
+                    :title="showPipelinePanel ? 'Hide pipeline view' : 'Show pipeline view'"
+                    @click="showPipelinePanel = !showPipelinePanel"
                   >
-                    <div class="form-floating">
-                      <input
-                        type="number"
-                        class="form-control"
-                        style="width:120px;"
-                        title="Number of threads to use"
-                        :id="option.id"
-                        :placeholder="option.label"
-                        min="1"
-                        step="1"
-                        v-model="configuredValues['Highlevel'][option.id]"
-                      >
-                      <label :for="option.id">{{ option.label }}</label>
+                    <span v-if="showPipelinePanel" class="bi bi-chevron-up"></span>
+                    <span v-else class="bi bi-chevron-down"></span>
+                  </button>
+                </h5>
+                <div v-show="showPipelinePanel">
+                  <PipelineView ref="pipelineView" @pipeline-modules-updated="onPipelineModulesUpdated" />
+                  <div class="mt-2 d-flex flex-column gap-2">
+                    <small class="d-block mb-1 text-muted">
+                      {{ isPipelineComplete() ? "Click save to record the compressor." : "Please select an option for each module to save." }}
+                    </small>
+                    <div class="d-flex gap-2">
+                      <button type="button" class="btn btn-primary" @click="openSaveModal(true)" :disabled="!isPipelineComplete()">Save</button>
+                      <button type="button" class="btn btn-secondary" @click="handlePipelineReset">Reset</button>
                     </div>
                   </div>
                 </div>
-
-                <div class="d-flex align-items-center mb-2">
-                  <p class="card-text mb-0">Detailed options are listed here.</p>
-                  <button class="btn btn-outline-success btn-sm ms-2" @click="randomlyPickOptions" type="button">
-                    Pick for me
+              </div>
+              <div v-else>
+                <h5 class="card-title d-flex align-items-center" style="gap: 0.5rem;">
+                  Configuration Options
+                  <button
+                    class="btn btn-sm btn-outline-secondary"
+                    type="button"
+                    :aria-label="showConfigPanel ? 'Hide configuration panel' : 'Show configuration panel'"
+                    :title="showConfigPanel ? 'Hide configuration panel' : 'Show configuration panel'"
+                    @click="showConfigPanel = !showConfigPanel"
+                  >
+                    <span v-if="showConfigPanel" class="bi bi-chevron-up"></span>
+                    <span v-else class="bi bi-chevron-down"></span>
                   </button>
-                </div>
-
-                <div id="detailConfigPanel">
-                  <div class="mb-2 me-2" v-for="(optionList, optionName) in compressorOptions[selectedCompressor]['Detail']" :key="optionName">
-                    <div v-if="optionName.toLowerCase().includes('error bound') && configuredValues['Detail'][optionName]" class="row g-2">
-                      <div class="col-8">
-                        <multiselect v-model="configuredValues['Detail'][optionName]" :options="optionList" :searchable="true" :multiple="optionName === 'Metric'" :close-on-select="optionName !== 'Metric'" :clear-on-select="false" :placeholder="`Select ${optionName}`" label="label" show-label="false" track-by="id" :title="optionDocs[optionList[0].type] || 'No documentation available'" aria-label="optionName">
-                        </multiselect>
-                      </div>
-                      <div class="col-4" style="min-width: 100px;">
+                </h5>
+                
+                <div v-show="showConfigPanel">
+                  <p class="card-text" v-show="compressorOptions[selectedCompressor]['Highlevel'].length > 0">High-level options are listed here.</p>
+                  <div class="d-flex flex-wrap mb-2" v-show="compressorOptions[selectedCompressor]['Highlevel'].length > 0">
+                    <div
+                      class="me-2 mb-2"
+                      v-for="option in compressorOptions[selectedCompressor]['Highlevel'].filter(opt => opt.label === 'Nthreads')"
+                      :key="option.id"
+                    >
+                      <div class="form-floating">
                         <input
                           type="number"
                           class="form-control"
-                          placeholder="Enter bound value"
-                          min="0"
-                          step="0.001"
-                          v-model="configuredValues['Detail'][optionName].value"
-                        />
+                          style="width:120px;"
+                          title="Number of threads to use"
+                          :id="option.id"
+                          :placeholder="option.label"
+                          min="1"
+                          step="1"
+                          v-model="configuredValues['Highlevel'][option.id]"
+                        >
+                        <label :for="option.id">{{ option.label }}</label>
                       </div>
                     </div>
-                    <div v-else class="d-flex align-items-center" style="gap: 0.25rem;">
-                      <multiselect v-model="configuredValues['Detail'][optionName]" :options="optionList" :searchable="true" :multiple="optionName === 'Metric'" :close-on-select="optionName !== 'Metric'" :clear-on-select="false" :placeholder="`Select ${optionName}`" label="label" show-label="false" track-by="id" :title="optionDocs[optionList[0].type] || 'No documentation available'" aria-label="optionName">
-                      </multiselect>
+                  </div>
+
+                  <div class="d-flex align-items-center mb-2">
+                    <p class="card-text mb-0">Detailed options are listed here.</p>
+                    <button class="btn btn-outline-success btn-sm ms-2" @click="randomlyPickOptions" type="button">
+                      Pick for me
+                    </button>
+                  </div>
+
+                  <div id="detailConfigPanel">
+                    <div class="mb-2 me-2" v-for="(optionList, optionName) in compressorOptions[selectedCompressor]['Detail']" :key="optionName">
+                      <div v-if="optionName.toLowerCase().includes('error bound') && configuredValues['Detail'][optionName]" class="row g-2">
+                        <div class="col-8">
+                          <multiselect v-model="configuredValues['Detail'][optionName]" :options="optionList" :searchable="true" :multiple="optionName === 'Metric'" :close-on-select="optionName !== 'Metric'" :clear-on-select="false" :placeholder="`Select ${optionName}`" label="label" show-label="false" track-by="id" :title="optionDocs[optionList[0].type] || 'No documentation available'" aria-label="optionName">
+                          </multiselect>
+                        </div>
+                        <div class="col-4" style="min-width: 100px;">
+                          <input
+                            type="number"
+                            class="form-control"
+                            placeholder="Enter bound value"
+                            min="0"
+                            step="0.001"
+                            v-model="configuredValues['Detail'][optionName].value"
+                          />
+                        </div>
+                      </div>
+                      <div v-else class="d-flex align-items-center" style="gap: 0.25rem;">
+                        <multiselect v-model="configuredValues['Detail'][optionName]" :options="optionList" :searchable="true" :multiple="optionName === 'Metric'" :close-on-select="optionName !== 'Metric'" :clear-on-select="false" :placeholder="`Select ${optionName}`" label="label" show-label="false" track-by="id" :title="optionDocs[optionList[0].type] || 'No documentation available'" aria-label="optionName">
+                        </multiselect>
+                      </div>
                     </div>
                   </div>
+                  <small class="d-block mb-2 text-muted">
+                    {{ isConfigValid ? "Click submit to record configuration." : "Please fill all fields to submit." }}
+                  </small>
+                  <button type="button" class="btn btn-primary me-2" :disabled="!isConfigValid" data-bs-toggle="modal" data-bs-target="#saveConfigModal" @click="openSaveModal(false)">Save</button>
+                  <button type="reset" class="btn btn-secondary" @click="resetConfiguredValues">Reset</button>
                 </div>
-                <small class="d-block mb-2 text-muted">
-                  {{ isConfigValid ? "Click submit to record configuration." : "Please fill all fields to submit." }}
-                </small>
-                <button type="button" class="btn btn-primary me-2" :disabled="!isConfigValid" data-bs-toggle="modal" data-bs-target="#saveConfigModal" @click="currentConfigName = selectedCompressor + '_' + getFormattedTimestamp()">Save</button>
-                <button type="reset" class="btn btn-secondary" @click="resetConfiguredValues">Reset</button>
               </div>
             </div>
           </div>
         </div>
       </div>
 
-      <!-- Save configuration modal -->
+      <!-- Save configuration/pipeline modal -->
       <div id="saveConfigModal" class="modal fade" tabindex="-1" aria-labelledby="saveConfigModalLabel" data-bs-keyboard="false" aria-hidden="true">
         <div class="modal-dialog modal-dialog-centered">
           <div class="modal-content">
@@ -522,7 +597,7 @@ export default {
             </div>
             <div class="modal-footer">
               <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
-              <button type="button" class="btn btn-primary" data-bs-dismiss="modal" @click="handleConfigurationCheck" :disabled="currentConfigName == ''">Save changes</button>
+              <button type="button" class="btn btn-primary" data-bs-dismiss="modal" @click="handleConfigurationCheck()" :disabled="currentConfigName == ''">Save changes</button>
             </div>
           </div>
         </div>

@@ -280,7 +280,7 @@ export default {
 <template>
   <div class="container py-3">
     <div v-if="!comparisonData" class="alert alert-danger">
-      No metrics data available to visualize.
+      No metrics data available to visualize.  Please make sure you have run a compressor.
     </div>
     <button v-else
       class="btn btn-outline-primary d-flex align-items-center mb-2"

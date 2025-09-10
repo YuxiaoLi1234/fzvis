@@ -26,7 +26,7 @@
 
       <!-- AI Assistant button (right) -->
       <button class="btn btn-sm btn-primary" @click="toggleChat">
-        <i class="bi bi-robot me-1"></i> Assistant
+        <i class="bi bi-robot me-2"></i> Assistant
       </button>
     </div>
 

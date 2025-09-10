@@ -1,18 +1,18 @@
 <script>
 import AppHeader from './components/AppHeader.vue'
-// import CustomizeCompressor from './components/CustomizeCompressor.vue'
+import InputDataset from './components/InputDataset.vue'
+import CustomizeCompressor from './components/CustomizeCompressor.vue'
 import HelloVtk from './components/HelloVtk.vue'
 import MetricVis from './components/MetricVis.vue'
 import AppFooter from './components/AppFooter.vue'
-import PipelineView from './components/PipelineView.vue'
 import { Splitpanes, Pane } from 'splitpanes'
 
 export default {
   name: 'App',
   components: {
     AppHeader,
-    PipelineView,
-    // CustomizeCompressor,
+    InputDataset,
+    CustomizeCompressor,
     HelloVtk,
     MetricVis,
     AppFooter,
@@ -26,9 +26,6 @@ export default {
       serverAddress: "http://localhost:5003",
       isChecking: false,
       connectionError: "",
-      // For Properties pane
-      selectedModule: null,
-      selectedModuleOptions: [],
     };
   },
 
@@ -65,24 +62,6 @@ export default {
       } finally {
         this.isChecking = false;
       }
-    },
-    
-    // Handle PipelineView selection to populate Properties pane
-    onModuleSelected(payload) {
-      // Deselect if payload is null
-      if (!payload) {
-        this.selectedModule = null;
-        this.selectedModuleOptions = [];
-        return;
-      }
-      this.selectedModule = { id: payload.id, label: payload.label };
-      this.selectedModuleOptions = payload.options || [];
-    },
-    // Make option draggable for dropping onto modules in PipelineView
-    onOptionDragStart(option, e) {
-      if (!this.selectedModule) return;
-      e.dataTransfer.setData('text/plain', option);
-      e.dataTransfer.setData('module-id', this.selectedModule.id);
     },
     
     resetServerAddress() {
@@ -131,55 +110,38 @@ export default {
       </div>
     </div>
 
-    <div v-else class="d-flex flex-column vh-100 overflow-hidden pt-2 px-3 pb-5">
+    <div v-else class="d-flex flex-column vh-100 overflow-hidden pt-2 px-3">
       <AppHeader />
 
       <div class="d-flex flex-grow-1 overflow-hidden mb-3">
         <Splitpanes class="default-theme w-100 h-100" :dbl-click-splitter="false" @resize="onSplitResize" @resized="onSplitResize">
-          <!-- Left: split horizontally (top/bottom) for Pipeline and Properties -->
-          <Pane :size="35" min-size="20" class="h-100 overflow-hidden">
-            <div class="h-100 p-2 d-flex flex-column overflow-hidden">
-              <Splitpanes class="default-theme" horizontal>
-                <Pane min-size="20">
-                  <div class="h-100 p-2 d-flex flex-column overflow-hidden">
-                    <h6 class="text-muted fw-semibold mb-2"><i class="bi bi-diagram-3 me-2"></i>Pipeline</h6>
-                    <div class="flex-grow-1 overflow-auto">
-                      <PipelineView @moduleSelected="onModuleSelected" />
-                    </div>
-                  </div>
-                </Pane>
-                <Pane :size="45" min-size="20">
-                  <div class="h-100 p-2 d-flex flex-column overflow-hidden">
-                    <h6 class="text-muted fw-semibold mb-2"><i class="bi bi-sliders me-2"></i>Properties</h6>
-                    <div class="flex-grow-1 overflow-auto">
-                      <div v-if="selectedModule">
-                        <div class="d-flex align-items-center mb-2">
-                          <span class="me-2 text-muted small">Options for</span>
-                          <span class="badge bg-primary">{{ selectedModule.label }}</span>
-                        </div>
-                        <div class="d-flex flex-row flex-wrap gap-2">
-                          <div
-                            v-for="option in selectedModuleOptions"
-                            :key="option"
-                            class="card p-2 px-3 text-center border border-2 border-primary bg-white flex-shrink-0 shadow-sm user-select-none cursor-pointer"
-                            draggable="true"
-                            @dragstart="onOptionDragStart(option, $event)"
-                          >
-                            <span class="fw-semibold text-primary">{{ option }}</span>
-                          </div>
-                        </div>
-                      </div>
-                      <div v-else class="text-muted small">Select a module in the pipeline to view options here.</div>
-                      <!-- <CustomizeCompressor /> -->
-                    </div>
-                  </div>
-                </Pane>
-              </Splitpanes>
+          <Pane :size="35" min-size="25" class="h-100 overflow-auto">
+            <div class="p-2 d-flex flex-column">
+              <ul class="nav nav-tabs mb-2" role="tablist">
+                <li class="nav-item" role="presentation">
+                  <button class="nav-link active" id="inputdataset-tab" data-bs-toggle="tab" data-bs-target="#inputdataset-pane" type="button" role="tab" aria-selected="true">
+                    <i class="bi bi-upload me-2"></i>Input Data
+                  </button>
+                </li>
+                <li class="nav-item" role="presentation">
+                  <button class="nav-link" id="customizecompressor-tab" data-bs-toggle="tab" data-bs-target="#customizecompressor-pane" type="button" role="tab" aria-selected="false">
+                    <i class="bi bi-sliders me-2"></i>Compressor
+                  </button>
+                </li>
+              </ul>
+              <div class="tab-content flex-grow-1 overflow-auto">
+                <div id="inputdataset-pane" class="tab-pane fade show active h-100" role="tabpanel" aria-labelledby="inputdataset-tab">
+                  <InputDataset />
+                </div>
+                <div id="customizecompressor-pane" class="tab-pane fade h-100" role="tabpanel" aria-labelledby="customizecompressor-tab">
+                  <CustomizeCompressor />
+                </div>
+              </div>
             </div>
           </Pane>
 
           <Pane :size="65" min-size="30" class="h-100 overflow-hidden">
-            <div class="d-flex flex-column h-100 ms-3">
+            <div class="d-flex flex-column h-100 ms-3 main-right">
               <ul class="nav nav-tabs" role="tablist">
                 <li class="nav-item" role="presentation">
                   <button class="nav-link active" id="datavis-tab" data-bs-toggle="tab" data-bs-target="#datavis" type="button" role="tab" aria-selected="true"><i class="bi bi-eye me-1"></i>Data Visualization</button>
@@ -207,6 +169,7 @@ export default {
         </Splitpanes>
       </div>
 
+      <div class="flex-shrink-0" style="height:2.5rem;"></div>
       <AppFooter />
 
       <!-- Offcanvas HTML -->
@@ -257,9 +220,9 @@ export default {
   </div>
 </template>
 
-<style>
-.splitpanes.default-theme,
-.splitpanes.default-theme .splitpanes__pane {
-  background-color: transparent !important;
+<style scoped>
+/* Background color for panes in Splitpanes */
+:deep(.splitpanes.default-theme .splitpanes__pane) {
+  background-color: #f8f9fa; /* Bootstrap bg-light */
 }
 </style>

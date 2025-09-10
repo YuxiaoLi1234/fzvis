@@ -274,20 +274,24 @@ def indexlist():
 
                 configs = {
                     "compressor_id": arguments["compressor_id"],
-                    "early_config": {
+                }
+                if "early_config" in arguments:
+                    configs["early_config"] = {
                         "pressio:metric": "composite",
                         "composite:plugins": arguments["early_config"].get("composite:plugins", []),
-                    },
-                    "compressor_config": arguments["compressor_config"],
-                }
+                    }
+                configs["compressor_config"] = arguments["compressor_config"]
+
                 def run_compressor(args):
                     global input_data
                     # Check if the configuration is valid
-                    compressor = libpressio.PressioCompressor.from_config({
-                        "compressor_id": args["compressor_id"],
-                        "early_config": args["early_config"],
-                        "compressor_config": args["compressor_config"],
-                    })
+                    # compressor_config_dict = {
+                    #     "compressor_id": args["compressor_id"],
+                    #     "compressor_config": args["compressor_config"],
+                    # }
+                    # if "early_config" in args:
+                    #     compressor_config_dict["early_config"] = args["early_config"]
+                    compressor = libpressio.PressioCompressor.from_config(args)
                     decomp_data = input_data.copy()
                     comp_data = compressor.encode(input_data)
                     decomp_data = compressor.decode(comp_data, decomp_data)
