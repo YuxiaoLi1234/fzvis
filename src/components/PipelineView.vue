@@ -15,6 +15,7 @@ export default {
         ]
       },
       selectedModule: null,
+      hoverModuleIdx: null,
       draggingOption: null,
       moduleOptions: {
         error_bound: [
@@ -52,40 +53,6 @@ export default {
       showUnsupportedModal: false,
       unsupportedModalMessage: '',
       unsupportedModalType: '',
-      savedCompressorConfig: {
-        compressor_id: 'sz3',
-        compressor_config: {
-          'metrics:copy_compressor_results': 1,
-          'metrics:errors_fatal': 1,
-          'pressio:abs': 1e-06,
-          'pressio:metric': 'noop',
-          'pressio:nthreads': 1,
-          'pressio:rel': null,
-          'sz3:abs_error_bound': 1e-06,
-          'sz3:algorithm': 1,
-          'sz3:algorithm_str': null,
-          'sz3:encoder': 1,
-          'sz3:error_bound_mode': 0,
-          'sz3:error_bound_mode_str': null,
-          'sz3:interp_algo': 1,
-          'sz3:interp_block_size': 32,
-          'sz3:interp_direction': 0,
-          'sz3:intrep_algo_str': null,
-          'sz3:l2_norm_error_bound': 0.0,
-          'sz3:lorenzo': true,
-          'sz3:lorenzo2': false,
-          'sz3:lossless': 1,
-          'sz3:metric': 'noop',
-          'sz3:openmp': false,
-          'sz3:pred_dim': 1,
-          'sz3:psnr_error_bound': 0.0,
-          'sz3:quant_bin_size': 65536,
-          'sz3:regression': true,
-          'sz3:regression2': false,
-          'sz3:rel_error_bound': 0.0,
-          'sz3:stride': 128,
-        },
-      },
     };
   },
   computed: {
@@ -157,7 +124,6 @@ export default {
         this.$emit('pipeline-modules-updated', this.compressor.modules);
       }
       this.draggingOption = null;
-      console.log(this.compressor.modules);
     },
 
     onOptionDragStart(option, moduleId, event) {
@@ -190,6 +156,18 @@ export default {
 
     onModuleDragLeave(event) {
       event.currentTarget.style.cursor = 'pointer';
+    },
+
+    onModuleMouseEnter(moduleIdx) {
+      if (!this.selectedModule || this.selectedModule.idx.moduleIdx !== moduleIdx) {
+        this.hoverModuleIdx = moduleIdx;
+      }
+    },
+
+    onModuleMouseLeave(moduleIdx) {
+      if (!this.selectedModule || this.selectedModule.idx.moduleIdx !== moduleIdx) {
+        this.hoverModuleIdx = null;
+      }
     },
 
     closeUnsupportedModal() {
@@ -245,6 +223,8 @@ export default {
                 @dragover.prevent="onModuleDragOver(module.id, $event)"
                 @dragleave="onModuleDragLeave($event)"
                 @drop="onDropCompressorOption({moduleIdx}, $event)"
+                @mouseenter="onModuleMouseEnter(moduleIdx)"
+                @mouseleave="onModuleMouseLeave(moduleIdx)"
               >
                 <div class="card-body d-flex flex-column justify-content-center">
                   <span class="fw-bold" :title="module.label">{{ module.label }}</span>
@@ -268,9 +248,9 @@ export default {
         </div>
       </div>
       <div class="col-md-7">
-        <div v-if="selectedModule && selectedModule.type === 'compressor'" class="options-panel card p-3">
+        <div v-if="hoverModuleIdx !== null || (selectedModule && selectedModule.type === 'compressor')" class="options-panel card p-3">
           <h6 class="fw-bold mb-3">Available Options</h6>
-          <div v-for="option in getOptionsForModule(compressor.modules[selectedModule.idx.moduleIdx].id)" :key="option.label" class="option-item mb-2">
+          <div v-for="option in getOptionsForModule(compressor.modules[(selectedModule && selectedModule.type === 'compressor') ? selectedModule.idx.moduleIdx : hoverModuleIdx].id)" :key="option.label" class="option-item mb-2">
             <span
               class="badge px-3 py-2"
               :class="{
@@ -280,7 +260,7 @@ export default {
               }"
               draggable="true"
               :style="option.state === 'unavailable' ? 'pointer-events:none;opacity:0.6;' : option.state === 'unavailable' ? '' : 'cursor:pointer;'"
-              @dragstart="option.state !== 'unavailable' && onOptionDragStart(option, compressor.modules[selectedModule.idx.moduleIdx].id, $event)"
+              @dragstart="option.state !== 'unavailable' && onOptionDragStart(option, compressor.modules[(selectedModule && selectedModule.type === 'compressor') ? selectedModule.idx.moduleIdx : hoverModuleIdx].id, $event)"
             >{{ option.label }}
               <span v-if="option.state === 'experimental'" class="small fst-italic">(experimental)</span>
               <span v-if="option.state === 'unavailable'" class="small fst-italic">(not supported)</span>

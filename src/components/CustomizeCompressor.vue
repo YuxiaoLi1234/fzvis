@@ -48,7 +48,6 @@ export default {
       if (!options) return false;
 
       return Object.values(this.configuredValues["Detail"]).every((item) => {
-        // handle error bound: must have a value
         if (item?.label?.startsWith("Error Bound")) {
           return item?.value !== undefined && item.value !== "";
         }
@@ -221,23 +220,6 @@ export default {
         .replace(/\b\w/g, c => c.toUpperCase()); // capitalize words
     },
 
-    handleErrorBoundGeneration({ baseConfigName, parameter, values }) {
-      if (!this.derivedConfigurations[baseConfigName]) {
-        this.derivedConfigurations[baseConfigName] = {};
-      }
-      values.forEach((val) => {
-        const baseConfig = this.baseConfigurations[baseConfigName];
-        if (!baseConfig) return;
-        // Deep copy base config
-        const newConfig = JSON.parse(JSON.stringify(baseConfig));
-        if (!newConfig.compressor_config) newConfig.compressor_config = {};
-        newConfig.compressor_config[parameter] = val;
-        const derivedName = `${baseConfigName}_error_bound_${val}`;
-        this.derivedConfigurations[baseConfigName][derivedName] = newConfig;
-        this.savedConfigurations[derivedName] = newConfig;
-      });
-    },
-
     handleConfigurationCheck() {
       if (this.baseConfigurations[this.currentConfigName]) {
         const replaceModal = new Modal(document.getElementById("replaceConfigModal"));
@@ -313,6 +295,23 @@ export default {
       this.currentConfigName = "";
     },
 
+    handleErrorBoundGeneration({ baseConfigName, parameter, values }) {
+      if (!this.derivedConfigurations[baseConfigName]) {
+        this.derivedConfigurations[baseConfigName] = {};
+      }
+      values.forEach((val) => {
+        const baseConfig = this.baseConfigurations[baseConfigName];
+        if (!baseConfig) return;
+        // Deep copy base config
+        const newConfig = JSON.parse(JSON.stringify(baseConfig));
+        if (!newConfig.compressor_config) newConfig.compressor_config = {};
+        newConfig.compressor_config[parameter] = val;
+        const derivedName = `${baseConfigName}_error_bound_${val}`;
+        this.derivedConfigurations[baseConfigName][derivedName] = newConfig;
+        this.savedConfigurations[derivedName] = newConfig;
+      });
+    },
+
     // errorBoundItem should contain id, label, type, and value
     handleErrorBoundMode(errorBoundItem) {
       if (!errorBoundItem.type.includes("mode")) return;
@@ -332,18 +331,6 @@ export default {
         res[`${prefix}:${errorMode.toLowerCase()}_error_bound`] = errorBoundItem.value;
       }
       return res;
-    },
-
-    // Handle Enter key in configuration name input field
-    onEnterConfigName() {
-      this.handleConfigurationCheck();
-      setTimeout(() => {
-        const modal = document.getElementById('saveConfigModal');
-        if (modal) {
-          Modal.getOrCreateInstance(modal).hide();
-          document.querySelectorAll('.modal-backdrop').forEach(el => el.remove());
-        }
-      }, 100);
     },
 
     handleParameterGeneration({ baseNodeId, parameter, values }) {
@@ -373,6 +360,54 @@ export default {
         this.derivedConfigurations[baseNodeId][derivedName] = newConfig;
         this.savedConfigurations[derivedName] = newConfig;
       });
+    },
+
+    handlePipelineReset() {
+      if (this.$refs.pipelineView && this.$refs.pipelineView.compressor) {
+        this.$refs.pipelineView.compressor.modules.forEach(m => {
+          m.value = {};
+        });
+      }
+      if (this.configuredValues?.Detail) {
+        this.configuredValues.Detail['Error Bound Mode'] = null;
+      }
+    },
+
+    isPipelineComplete() {
+      const pipelineView = this.$refs.pipelineView;
+      const modulesComplete = pipelineView && pipelineView.compressor && pipelineView.compressor.modules &&
+        pipelineView.compressor.modules.every(m => m.value && Object.keys(m.value).length > 0);
+      const errorBound = this.configuredValues?.Detail?.['Error Bound Mode'];
+      const errorBoundConfigured = errorBound && errorBound.id && errorBound.value !== undefined && errorBound.value !== '';
+      return modulesComplete && errorBoundConfigured;
+    },
+
+    // Handle Enter key in configuration name input field
+    onEnterConfigName() {
+      this.handleConfigurationCheck();
+      setTimeout(() => {
+        const modal = document.getElementById('saveConfigModal');
+        if (modal) {
+          Modal.getOrCreateInstance(modal).hide();
+          document.querySelectorAll('.modal-backdrop').forEach(el => el.remove());
+        }
+      }, 100);
+    },
+
+    openSaveModal(isPipeline = false) {
+      if (isPipeline) {
+        this.currentConfigName = this.selectedCompressor + '_pipeline_' + this.getFormattedTimestamp();
+      } else {
+        this.currentConfigName = this.selectedCompressor + '_' + this.getFormattedTimestamp();
+      }
+      const modal = document.getElementById('saveConfigModal');
+      if (modal) {
+        Modal.getOrCreateInstance(modal).show();
+        setTimeout(() => {
+          const input = document.getElementById('floatingConfigName');
+          if (input) input.focus();
+        }, 100);
+      }
     },
 
     // Randomly pick option values for the selected compressor
@@ -416,38 +451,10 @@ export default {
       });
     },
 
-    handlePipelineSave() {
-      // Use the same logic as handleConfigurationSave
-      this.handleConfigurationSave();
-    },
-
-    openSaveModal(isPipeline = false) {
-      if (isPipeline) {
-        this.currentConfigName = this.selectedCompressor + '_pipeline_' + this.getFormattedTimestamp();
-      } else {
-        this.currentConfigName = this.selectedCompressor + '_' + this.getFormattedTimestamp();
-      }
-      const modal = document.getElementById('saveConfigModal');
-      if (modal) {
-        Modal.getOrCreateInstance(modal).show();
-        setTimeout(() => {
-          const input = document.getElementById('floatingConfigName');
-          if (input) input.focus();
-        }, 100);
-      }
-    },
-
-    isPipelineComplete() {
-      const pipelineView = this.$refs.pipelineView;
-      if (pipelineView && pipelineView.compressor && pipelineView.compressor.modules) {
-        return pipelineView.compressor.modules.every(m => m.value && Object.keys(m.value).length > 0);
-      }
-      return false;
-    },
-
     onPipelineModulesUpdated() {
       this.$forceUpdate();
     },
+
   }
 };
 </script>
@@ -472,10 +479,10 @@ export default {
           <div class="card">
             <div class="card-body" v-if="selectedCompressor in this.compressorOptions">
               <div v-if="selectedCompressor === 'sz3'">
-                <h5 class="card-title d-flex align-items-center" style="gap: 0.5rem;">
+                <h5 class="mb-2 card-title d-flex align-items-center">
                   Pipeline Design
                   <button
-                    class="btn btn-sm btn-outline-secondary"
+                    class="btn btn-sm btn-outline-secondary ms-2"
                     type="button"
                     :aria-label="showPipelinePanel ? 'Hide pipeline view' : 'Show pipeline view'"
                     :title="showPipelinePanel ? 'Hide pipeline view' : 'Show pipeline view'"
@@ -486,6 +493,64 @@ export default {
                   </button>
                 </h5>
                 <div v-show="showPipelinePanel">
+                  <div v-if="compressorOptions[selectedCompressor]['Highlevel']">
+                    <div
+                      class="mb-2 d-flex align-items-center"
+                      v-for="option in compressorOptions[selectedCompressor]['Highlevel'].filter(opt => opt.label === 'Nthreads')"
+                      :key="option.id"
+                      style="gap: 0.5rem;"
+                    >
+                      <label
+                        :for="option.id"
+                        class="form-label fw-bold mb-0"
+                        style="flex-shrink: 0; min-width: 120px; white-space: nowrap;"
+                      >
+                        Number of threads
+                      </label>
+                      <input
+                        type="number"
+                        class="form-control"
+                        style="width:80px;"
+                        title="Number of threads to use"
+                        :id="option.id"
+                        :placeholder="1"
+                        min="1"
+                        step="1"
+                        v-model="configuredValues['Highlevel'][option.id]"
+                      >
+                    </div>
+                  </div>
+                  <!-- Error Bound Selection -->
+                  <div class="mb-2 d-flex align-items-center" style="gap:5px">
+                    <multiselect
+                      v-model="configuredValues['Detail']['Error Bound Mode']"
+                      :options="compressorOptions[selectedCompressor]['Detail']['Error Bound Mode']"
+                      :searchable="true"
+                      :multiple="false"
+                      :close-on-select="true"
+                      :clear-on-select="false"
+                      :placeholder="'Select error bound mode'"
+                      label="label"
+                      show-label="false"
+                      track-by="id"
+                      :title="optionDocs[compressorOptions[selectedCompressor]['Detail']['Error Bound Mode'][0]?.type] || 'No documentation available'"
+                      aria-label="Error Bound Mode"
+                      style="flex: 0 0 60%; max-width: 60%;"
+                    >
+                    </multiselect>
+                    <input
+                      v-if="configuredValues['Detail']['Error Bound Mode']"
+                      type="number"
+                      class="form-control"
+                      style="flex: 0 0 40%; max-width: 40%;"
+                      placeholder="Enter value"
+                      min="0"
+                      step="1e-5"
+                      v-model="configuredValues['Detail']['Error Bound Mode'].value"
+                    />
+                  </div>
+                  
+                  <!-- Pipeline Design -->
                   <PipelineView ref="pipelineView" @pipeline-modules-updated="onPipelineModulesUpdated" />
                   <div class="mt-2 d-flex flex-column gap-2">
                     <small class="d-block mb-1 text-muted">
@@ -517,24 +582,29 @@ export default {
                   <p class="card-text" v-show="compressorOptions[selectedCompressor]['Highlevel'].length > 0">High-level options are listed here.</p>
                   <div class="d-flex flex-wrap mb-2" v-show="compressorOptions[selectedCompressor]['Highlevel'].length > 0">
                     <div
-                      class="me-2 mb-2"
+                      class="me-2 mb-2 d-flex align-items-center"
                       v-for="option in compressorOptions[selectedCompressor]['Highlevel'].filter(opt => opt.label === 'Nthreads')"
                       :key="option.id"
+                      style="gap: 0.5rem;"
                     >
-                      <div class="form-floating">
-                        <input
-                          type="number"
-                          class="form-control"
-                          style="width:120px;"
-                          title="Number of threads to use"
-                          :id="option.id"
-                          :placeholder="option.label"
-                          min="1"
-                          step="1"
-                          v-model="configuredValues['Highlevel'][option.id]"
-                        >
-                        <label :for="option.id">{{ option.label }}</label>
-                      </div>
+                      <label
+                        :for="option.id"
+                        class="form-label fw-bold mb-0"
+                        style="flex-shrink: 0; min-width: 120px; white-space: nowrap;"
+                      >
+                        Number of threads
+                      </label>
+                      <input
+                        type="number"
+                        class="form-control"
+                        style="width:80px;"
+                        title="Number of threads to use"
+                        :id="option.id"
+                        :placeholder="1"
+                        min="1"
+                        step="1"
+                        v-model="configuredValues['Highlevel'][option.id]"
+                      >
                     </div>
                   </div>
 

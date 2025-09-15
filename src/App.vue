@@ -44,24 +44,57 @@ export default {
     async checkConnection() {
       this.isChecking = true;
       this.connectionError = "";
-      this.$store.commit('setStatus', { type: 'info', message: 'Checking server connection…' });
-      try {
-        const response = await fetch(`${this.serverAddress}/listDatasets`);
-        if (!response.ok) throw new Error("Server not reachable");
-        localStorage.setItem("fzvis_server_address", this.serverAddress);
-        this.showServerModal = false;
-        this.$store.commit('setStatus', { type: 'success', message: `Connected to ${this.serverAddress}` });
-        this.$store.commit('addHistory', { kind: 'connection', text: `Connected to ${this.serverAddress}`, timestamp: Date.now() });
-      } catch (err) {
-        const msg = err.message || err.toString() || "Unknown error";
-        this.connectionError = `Failed to connect: ${msg}. Please check the address and try again.`;
-        this.showServerModal = true;
-        console.log("Connection error:", this.connectionError);
-        this.$store.commit('setStatus', { type: 'danger', message: this.connectionError });
-        this.$store.commit('addHistory', { kind: 'connection', text: `Connection failed: ${msg}`, timestamp: Date.now() });
-      } finally {
-        this.isChecking = false;
+      let attempt = 1;
+      const maxAttempts = 3;
+      let connected = false;
+      while (attempt <= maxAttempts && !connected) {
+        let countdown = 4;
+        // Show countdown in status bar
+        const countdownInterval = setInterval(() => {
+          this.$store.commit('setStatus', {
+            type: 'info',
+            message: `Checking server connection… (Attempt ${attempt}/${maxAttempts}, ${countdown}s left)`
+          });
+          countdown--;
+        }, 1000);
+        try {
+          const controller = new AbortController();
+          const timeout = setTimeout(() => controller.abort(), 5000); // 5 seconds time-out
+          // Initial status
+          this.$store.commit('setStatus', {
+            type: 'info',
+            message: `Checking server connection… (Attempt ${attempt}/${maxAttempts}, 5s left)`
+          });
+          const response = await fetch(`${this.serverAddress}/listDatasets`, { signal: controller.signal });
+          clearTimeout(timeout);
+          clearInterval(countdownInterval);
+          if (!response.ok) throw new Error("Server not reachable");
+          localStorage.setItem("fzvis_server_address", this.serverAddress);
+          this.showServerModal = false;
+          this.$store.commit('setStatus', { type: 'success', message: `Connected to ${this.serverAddress}` });
+          this.$store.commit('addHistory', { kind: 'connection', text: `Connected to ${this.serverAddress}`, timestamp: Date.now() });
+          connected = true;
+        } catch (err) {
+          clearInterval(countdownInterval);
+          let msg = err.message || err.toString() || "Unknown error";
+          if (err.name === 'AbortError' || msg.includes('signal is aborted')) {
+            msg = "Connection timed out. Server took too long to respond";
+          }
+          this.connectionError = `Failed to connect: ${msg}. Please check the address and try again.`;
+          this.$store.commit('setStatus', { type: 'danger', message: `Attempt ${attempt} failed: ${msg}` });
+          this.$store.commit('addHistory', { kind: 'connection', text: `Connection failed: ${msg}`, timestamp: Date.now() });
+          attempt++;
+          // Wait a short moment before next attempt
+          if (attempt <= maxAttempts) {
+            await new Promise(resolve => setTimeout(resolve, 1500));
+          }
+        }
       }
+      if (!connected) {
+        this.showServerModal = true;
+        this.$store.commit('setStatus', { type: 'danger', message: this.connectionError });
+      }
+      this.isChecking = false;
     },
     
     resetServerAddress() {
@@ -115,7 +148,7 @@ export default {
 
       <div class="d-flex flex-grow-1 overflow-hidden mb-3">
         <Splitpanes class="default-theme w-100 h-100" :dbl-click-splitter="false" @resize="onSplitResize" @resized="onSplitResize">
-          <Pane :size="35" min-size="25" class="h-100 overflow-auto">
+          <Pane :size="30" min-size="25" class="h-100 overflow-auto">
             <div class="p-2 d-flex flex-column">
               <ul class="nav nav-tabs mb-2" role="tablist">
                 <li class="nav-item" role="presentation">
@@ -140,7 +173,7 @@ export default {
             </div>
           </Pane>
 
-          <Pane :size="65" min-size="30" class="h-100 overflow-hidden">
+          <Pane :size="70" min-size="50" class="h-100 overflow-hidden">
             <div class="d-flex flex-column h-100 ms-3 main-right">
               <ul class="nav nav-tabs" role="tablist">
                 <li class="nav-item" role="presentation">
