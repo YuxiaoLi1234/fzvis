@@ -278,6 +278,15 @@ export default {
       if (newVal) {
         this.initSliceParams();
       }
+    },
+    currentDataset(newVal, oldVal) {
+      if (newVal && newVal !== oldVal) {
+        this.$store.commit('addHistory', {
+          kind: 'dataset',
+          text: `Changed data file to: ${newVal.name}`,
+          timestamp: Date.now()
+        });
+      }
     }
   },
 
@@ -387,10 +396,10 @@ export default {
         this.$store.commit("setProgress", { active: false, percent: 100, message: "Upload complete" });
         this.$store.commit("setStatus", { type: "success", message: "Uploaded file successfully!" });
         // update the cached dataset list
-        // or simply set `hasDatasets` to false?
         if (this.uploadedDatasets) {
           this.uploadedDatasets[this.currentDataset.name] = this.currentDataset;
         }
+        this.emitFileData();
       })
       .catch(error => {
         this.$store.commit("setProgress", { active: false, percent: 0, message: "Upload failed" });

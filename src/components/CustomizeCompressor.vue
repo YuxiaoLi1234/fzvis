@@ -183,7 +183,7 @@ export default {
               });
             }
           });
-          // console.log("formattedOptions", JSON.stringify(formattedOptions, null, 2));
+          // console.log("formattedOptions", formattedOptions);
           this.compressorOptions[this.selectedCompressor] = formattedOptions;
         })
         .catch(error => {
@@ -244,6 +244,23 @@ export default {
             config.compressor_config[m.key] = optionValue;
           }
         });
+        // Save number of threads if present
+        const nthreads = this.configuredValues["Highlevel"]["pressio:nthreads"];
+        if (nthreads !== undefined && nthreads !== null && nthreads !== '') {
+          config.compressor_config["pressio:nthreads"] = nthreads;
+        }
+        const errorBound = this.configuredValues?.Detail?.['Error Bound Mode'];
+        if (errorBound) {
+          config.compressor_config[`${this.selectedCompressor}:error_bound_mode_str`] = errorBound.id;
+          const errorBoundEntries = this.handleErrorBoundMode(errorBound);
+          Object.entries(errorBoundEntries).forEach(([key, value]) => {
+            config.compressor_config[key] = value;
+          });
+        }
+        config.early_config = {
+          'pressio:metric': 'composite',
+          'composite:plugins': ['time', 'size', 'error_stat'],
+        };
         this.$store.commit('addHistory', {
           kind: 'pipeline',
           text: `Saved pipeline configuration: ${this.currentConfigName}`,
@@ -549,12 +566,32 @@ export default {
                       v-model="configuredValues['Detail']['Error Bound Mode'].value"
                     />
                   </div>
+
+                  <!-- Metrics Selection -->
+                  <!-- <div class="mb-2 d-flex align-items-center" style="gap:5px">
+                    <multiselect
+                      v-model="configuredValues['Detail']['Metric']"
+                      :options="compressorOptions[selectedCompressor]['Detail']['Metric']"
+                      :searchable="true"
+                      :multiple="true"
+                      :close-on-select="false"
+                      :clear-on-select="false"
+                      :placeholder="'Select metrics'"
+                      label="label"
+                      show-label="false"
+                      track-by="id"
+                      :title="optionDocs[compressorOptions[selectedCompressor]['Detail']['Metric'][0]?.type] || 'No documentation available'"
+                      aria-label="Metrics"
+                      style="flex: 1 1 auto;"
+                    >
+                    </multiselect>
+                  </div> -->
                   
                   <!-- Pipeline Design -->
                   <PipelineView ref="pipelineView" @pipeline-modules-updated="onPipelineModulesUpdated" />
                   <div class="mt-2 d-flex flex-column gap-2">
                     <small class="d-block mb-1 text-muted">
-                      {{ isPipelineComplete() ? "Click save to record the compressor." : "Please select an option for each module to save." }}
+                      {{ isPipelineComplete() ? "Click save to record the compressor." : "Please complete all fields to save." }}
                     </small>
                     <div class="d-flex gap-2">
                       <button type="button" class="btn btn-primary" @click="openSaveModal(true)" :disabled="!isPipelineComplete()">Save</button>

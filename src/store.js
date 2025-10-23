@@ -1,4 +1,5 @@
 import { createStore } from 'vuex';
+import { markRaw } from 'vue';
 
 export default createStore({
   state: {
@@ -14,6 +15,13 @@ export default createStore({
   
   mutations: {
     setComparisonData(state, payload) {
+      if (payload) {
+        for (const key in payload) {
+          if (payload[key].decp_data) {
+            payload[key].decp_data = markRaw(payload[key].decp_data);
+          }
+        }
+      }
       state.comparisonData = payload;
     },
     setFileData(state, payload) {

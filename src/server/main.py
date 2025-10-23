@@ -281,6 +281,7 @@ def indexlist():
                         "composite:plugins": arguments["early_config"].get("composite:plugins", []),
                     }
                 configs["compressor_config"] = arguments["compressor_config"]
+                # pprint(configs)
 
                 def run_compressor(args):
                     global input_data

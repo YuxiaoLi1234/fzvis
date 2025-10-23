@@ -289,10 +289,15 @@ export default {
       if (modal) {
         this.availableParameters = {};
         if (this.contextMenuTarget && this.contextMenuTarget.config) {
-          const compressorConfig = this.contextMenuTarget.config.compressor_config || {};
-          Object.keys(compressorConfig).forEach(val => {
-            this.availableParameters[this.getFormattedKey(val)] = val;
-          });
+          const config = this.contextMenuTarget.config;
+          const compressorConfig = config.compressor_config || {};
+          if (config.compressor_id === 'sz3') {
+            Object.keys(compressorConfig).forEach(val => {
+              if (val.toLowerCase().includes('error_bound')) {
+                this.availableParameters[this.getFormattedKey(val)] = val;
+              }
+            });
+          }
           Modal.getOrCreateInstance(modal).show();
         } else {
           // Show alert for no available parameters

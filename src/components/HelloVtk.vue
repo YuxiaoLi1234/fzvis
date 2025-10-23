@@ -1,6 +1,6 @@
 <script>
 import { Popover, Tooltip } from 'bootstrap';
-import { ref, onMounted, onBeforeUnmount, computed, watch, nextTick } from 'vue';
+import { ref, onMounted, onBeforeUnmount, computed, watch, nextTick, markRaw } from 'vue';
 import { useStore } from 'vuex';
 import '@kitware/vtk.js/Rendering/Profiles/Geometry';
 import '@kitware/vtk.js/Rendering/Profiles/Volume';
@@ -101,7 +101,7 @@ export default {
 
       const scalars = vtkDataArray.newInstance({
         size: inputArray.length,
-        values: inputArray,
+        values: markRaw(inputArray),
         dataType: (precision === 'f' ? `Float32Array` : `Float64Array`),
       });
 
@@ -175,7 +175,7 @@ export default {
     }
 
     function formatConfigHTML(config) {
-      if (!config) return '';
+      if (!config || Object.keys(config).length === 0) return 'No config available';
       return Object.entries(config)
         .map(([key, value]) => `<b>${key}:</b> ${typeof value === 'object' && value !== null ? JSON.stringify(value) : value}<br>`)
         .join('');
@@ -508,9 +508,7 @@ export default {
           if (root) {
             root.querySelectorAll('[data-bs-toggle="tooltip"]').forEach(el => {
               let tooltip = Tooltip.getInstance(el);
-              if (tooltip) {
-                tooltip.dispose();
-              }
+              if (tooltip) tooltip.dispose();
               new Tooltip(el);
             });
           }
@@ -630,34 +628,27 @@ export default {
         <label class="me-2 mb-0 fw-semibold text-secondary">
           <i class="bi bi-box me-1"></i>Decompressed:
         </label>
-        <template v-if="decompressedKeys.length <= 10">
-          <input
-            type="range"
-            class="form-range"
-            min="0"
-            :max="decompressedKeys.length - 1"
-            v-model="selectedDecompressedIndex"
-            style="width: 120px;"
-          />
-          <span class="ms-2">{{ decompressedKeys[selectedDecompressedIndex] }}</span>
-        </template>
-        <template v-else>
-          <button
-            class="btn btn-sm btn-outline-secondary me-1"
-            :disabled="selectedDecompressedIndex === 0"
-            @click="selectedDecompressedIndex--"
-          >
-            &lt;
-          </button>
-          <span>{{ decompressedKeys[selectedDecompressedIndex] }}</span>
-          <button
-            class="btn btn-sm btn-outline-secondary ms-1"
-            :disabled="selectedDecompressedIndex === decompressedKeys.length - 1"
-            @click="selectedDecompressedIndex++"
-          >
-            &gt;
-          </button>
-        </template>
+        <button
+          class="btn btn-sm btn-outline-secondary"
+          :disabled="selectedDecompressedIndex === 0"
+          @click="selectedDecompressedIndex--"
+        >
+          &lt;
+        </button>
+        <div
+          class="mx-2"
+          style="width: 160px; text-align: center; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;"
+          :title="decompressedKeys[selectedDecompressedIndex]"
+        >
+          {{ decompressedKeys[selectedDecompressedIndex] }}
+        </div>
+        <button
+          class="btn btn-sm btn-outline-secondary"
+          :disabled="selectedDecompressedIndex === decompressedKeys.length - 1"
+          @click="selectedDecompressedIndex++"
+        >
+          &gt;
+        </button>
       </div>
     </div>
 

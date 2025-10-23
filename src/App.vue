@@ -38,6 +38,14 @@ export default {
     } else {
       this.showServerModal = true;
     }
+    this.debouncedResize = this.debounce(this.onSplitResize, 200);
+  },
+
+  mounted() {
+    const tabToggles = document.querySelectorAll('button[data-bs-toggle="tab"]');
+    tabToggles.forEach(tab => {
+      tab.addEventListener('shown.bs.tab', this.debouncedResize);
+    });
   },
 
   methods: {
@@ -97,6 +105,15 @@ export default {
       this.isChecking = false;
     },
     
+    debounce(func, delay) {
+      let timeout;
+      return function(...args) {
+        const context = this;
+        clearTimeout(timeout);
+        timeout = setTimeout(() => func.apply(context, args), delay);
+      };
+    },
+
     resetServerAddress() {
       localStorage.removeItem("fzvis_server_address");
       this.serverAddress = "";
@@ -147,7 +164,7 @@ export default {
       <AppHeader />
 
       <div class="d-flex flex-grow-1 overflow-hidden mb-3">
-        <Splitpanes class="default-theme w-100 h-100" :dbl-click-splitter="false" @resize="onSplitResize" @resized="onSplitResize">
+        <Splitpanes class="default-theme w-100 h-100" :dbl-click-splitter="false" @resized="debouncedResize">
           <Pane :size="30" min-size="25" class="h-100 overflow-auto">
             <div class="p-2 d-flex flex-column">
               <ul class="nav nav-tabs mb-2" role="tablist">
@@ -173,7 +190,7 @@ export default {
             </div>
           </Pane>
 
-          <Pane :size="70" min-size="50" class="h-100 overflow-hidden">
+          <Pane :size="70" min-size="50" class="h-100 overflow-auto">
             <div class="d-flex flex-column h-100 ms-3 main-right">
               <ul class="nav nav-tabs" role="tablist">
                 <li class="nav-item" role="presentation">
@@ -187,7 +204,7 @@ export default {
               </ul>
               <div class="tab-content flex-grow-1">
                 <div id="datavis" class="tab-pane fade show active h-100" role="tabpanel" aria-labelledby="datavis-tab">
-                  <div class="h-100 overflow-auto">
+                  <div class="h-100 overflow-hidden">
                     <HelloVtk />
                   </div>
                 </div>

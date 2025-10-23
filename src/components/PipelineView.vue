@@ -18,14 +18,6 @@ export default {
       hoverModuleIdx: null,
       draggingOption: null,
       moduleOptions: {
-        error_bound: [
-          { label: 'Absolute', state: 'available', value: 'sz3:abs_error_bound' },
-          { label: 'Relative', state: 'available', value: 'sz3:rel_error_bound' },
-          { label: 'PSNR', state: 'available', value: 'sz3:psnr_error_bound' },
-          { label: 'L2_NORM', state: 'available', value: 'sz3:l2_norm_error_bound' },
-          { label: 'ABS_AND_REL', state: 'unavailable', value: 'sz3:abs_and_rel_error_bound' },
-          { label: 'ABS_OR_REL', state: 'unavailable', value: 'sz3:abs_or_rel_error_bound' },
-        ],
         predictor: [
           { label: 'Bypass', state: 'available', value: 'ALGO_NOPRED' },
           { label: 'Interpolation', state: 'available', value: 'ALGO_INTERP' },
@@ -41,7 +33,7 @@ export default {
         ],
         lossless: [
           { label: 'Bypass', state: 'available', value: '0' },
-          { label: 'Default', state: 'available', value: '1' },
+          { label: 'Zstd', state: 'available', value: '1' },
         ],
       },
       uploadedDatasets: [],
