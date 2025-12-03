@@ -6,6 +6,7 @@ import HelloVtk from './components/HelloVtk.vue'
 import MetricVis from './components/MetricVis.vue'
 import AppFooter from './components/AppFooter.vue'
 import { Splitpanes, Pane } from 'splitpanes'
+import axios from 'axios';
 
 export default {
   name: 'App',
@@ -22,87 +23,48 @@ export default {
 
   data() {
     return {
-      showServerModal: false,
-      serverAddress: "http://localhost:5003",
-      isChecking: false,
-      connectionError: "",
+      isAuthenticated: false,
+      passcode: '',
+      authError: '',
+      isAuthenticating: false,
     };
   },
 
   created() {
-    // Try to load from localStorage or config file
-    const savedAddress = localStorage.getItem("fzvis_server_address");
-    if (savedAddress) {
-      this.serverAddress = savedAddress;
-      this.checkConnection(true);
-    } else {
-      this.showServerModal = true;
+    const token = localStorage.getItem("fzvis_token");
+    if (token) {
+      axios.defaults.headers.common['Authorization'] = `Bearer ${token}`;
+      this.isAuthenticated = true;
     }
   },
 
   methods: {
-    async checkConnection() {
-      this.isChecking = true;
-      this.connectionError = "";
-      let attempt = 1;
-      const maxAttempts = 3;
-      let connected = false;
-      while (attempt <= maxAttempts && !connected) {
-        let countdown = 4;
-        // Show countdown in status bar
-        const countdownInterval = setInterval(() => {
-          this.$store.commit('setStatus', {
-            type: 'info',
-            message: `Checking server connection… (Attempt ${attempt}/${maxAttempts}, ${countdown}s left)`
-          });
-          countdown--;
-        }, 1000);
-        try {
-          const controller = new AbortController();
-          const timeout = setTimeout(() => controller.abort(), 5000); // 5 seconds time-out
-          // Initial status
-          this.$store.commit('setStatus', {
-            type: 'info',
-            message: `Checking server connection… (Attempt ${attempt}/${maxAttempts}, 5s left)`
-          });
-          const response = await fetch(`${this.serverAddress}/listDatasets`, { signal: controller.signal });
-          clearTimeout(timeout);
-          clearInterval(countdownInterval);
-          if (!response.ok) throw new Error("Server not reachable");
-          localStorage.setItem("fzvis_server_address", this.serverAddress);
-          this.showServerModal = false;
-          this.$store.commit('setStatus', { type: 'success', message: `Connected to ${this.serverAddress}` });
-          this.$store.commit('addHistory', { kind: 'connection', text: `Connected to ${this.serverAddress}`, timestamp: Date.now() });
-          connected = true;
-        } catch (err) {
-          clearInterval(countdownInterval);
-          let msg = err.message || err.toString() || "Unknown error";
-          if (err.name === 'AbortError' || msg.includes('signal is aborted')) {
-            msg = "Connection timed out. Server took too long to respond";
-          }
-          this.connectionError = `Failed to connect: ${msg}. Please check the address and try again.`;
-          this.$store.commit('setStatus', { type: 'danger', message: `Attempt ${attempt} failed: ${msg}` });
-          this.$store.commit('addHistory', { kind: 'connection', text: `Connection failed: ${msg}`, timestamp: Date.now() });
-          attempt++;
-          // Wait a short moment before next attempt
-          if (attempt <= maxAttempts) {
-            await new Promise(resolve => setTimeout(resolve, 1500));
-          }
+    async handleLogin() {
+      this.isAuthenticating = true;
+      this.authError = '';
+      try {
+        const response = await fetch('/api/login', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({ passcode: this.passcode }),
+        });
+        if (!response.ok) {
+          const errorData = await response.json();
+          throw new Error(errorData.error || 'Login failed');
         }
+        const data = await response.json();
+        localStorage.setItem('fzvis_token', data.token);
+        axios.defaults.headers.common['Authorization'] = `Bearer ${data.token}`;
+        this.isAuthenticated = true;
+        this.$store.commit('setStatus', { type: 'success', message: 'Authenticated successfully!' });
+        this.$store.commit('addHistory', { kind: 'auth', text: 'Logged in', timestamp: Date.now() });
+      } catch (err) {
+        this.authError = err.message;
+      } finally {
+        this.isAuthenticating = false;
       }
-      if (!connected) {
-        this.showServerModal = true;
-        this.$store.commit('setStatus', { type: 'danger', message: this.connectionError });
-      }
-      this.isChecking = false;
-    },
-    
-    resetServerAddress() {
-      localStorage.removeItem("fzvis_server_address");
-      this.serverAddress = "";
-      this.showServerModal = true;
-      this.$store.commit('setStatus', { type: 'warning', message: 'Server address cleared.' });
-      this.$store.commit('addHistory', { kind: 'connection', text: 'Server address cleared', timestamp: Date.now() });
     },
 
     onSplitResize() {
@@ -114,29 +76,32 @@ export default {
 
 <template>
   <div class="d-flex flex-column vh-100 overflow-hidden">
-    <!-- Bootstrap Modal for Server Address -->
-    <div v-if="showServerModal" class="modal show d-block" tabindex="-1" role="dialog">
+    <!-- Bootstrap Modal for Passcode -->
+    <div v-if="!isAuthenticated" class="modal show d-block" tabindex="-1" role="dialog">
       <div class="modal-dialog modal-dialog-centered" role="document">
         <div class="modal-content">
           <div class="modal-header">
-            <h5 class="modal-title">Enter Remote Server Address</h5>
+            <h5 class="modal-title">Enter Passcode</h5>
           </div>
           <div class="modal-body">
             <input
-              v-model="serverAddress"
-              type="text"
+              v-model="passcode"
+              type="password"
               class="form-control"
+              @keyup.enter="handleLogin"
+              placeholder="Passcode"
             />
-            <div v-if="connectionError" class="alert alert-danger mt-2">{{ connectionError }}</div>
+            <div v-if="authError" class="alert alert-danger mt-2">{{ authError }}</div>
           </div>
           <div class="modal-footer">
             <button
               type="button"
               class="btn btn-primary"
-              @click="checkConnection"
-              :disabled="isChecking"
+              @click="handleLogin"
+              :disabled="isAuthenticating"
             >
-              Check Connection
+              <span v-if="isAuthenticating" class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span>
+              Login
             </button>
           </div>
         </div>

@@ -4,6 +4,9 @@ from argparse import ArgumentParser
 from flask import Flask, request, jsonify, send_file, send_from_directory, Response, stream_with_context
 from flask_cors import CORS
 import json
+import jwt
+from datetime import datetime, timedelta
+from functools import wraps
 import libpressio
 import math
 import numpy as np
@@ -13,6 +16,9 @@ from pathlib import Path
 from pprint import pprint
 import threading 
 from openai import OpenAI
+from dotenv import load_dotenv
+
+load_dotenv()
 
 # CONSTANTS
 DEFAULT_SYSTEM_CONFIG_PROMPT = "You are an expert in lossy compression with deep knowledge of scientific data. Please provide clear and concise answers to all questions. If you are not sure about the answer, please say so. Don't make up answers. Please always reply within 200 words if possible."
@@ -20,7 +26,7 @@ LLM_MODEL_NAME = "deepseek-ai/deepseek-r1-0528"
 
 # Useful paths and create necessary folders for the backend
 project_root = Path(__file__).parent.parent.parent
-dist_dir = Path(__file__).parent.parent / "usr/libexec/fzvis/ui"
+dist_dir = project_root / "dist"
 root_dir = Path.home() / ".fzvis"
 upload_dir = root_dir / "uploads"
 work_dir = root_dir / "data"
@@ -39,7 +45,23 @@ client = OpenAI(
 conversation_history = [{"role": "system", "content": DEFAULT_SYSTEM_CONFIG_PROMPT}]
 
 app = Flask(__name__)
+app.config['SECRET_KEY'] = os.getenv('FLASK_SECRET_KEY', 'default_secret_key')
 CORS(app)
+
+def token_required(f):
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        token = None
+        if 'Authorization' in request.headers:
+            token = request.headers['Authorization'].split(" ")[1]
+        if not token:
+            return jsonify({'error': 'Token is missing!'}), 401
+        try:
+            data = jwt.decode(token, app.config['SECRET_KEY'], algorithms=["HS256"])
+        except:
+            return jsonify({'error': 'Token is invalid!'}), 401
+        return f(*args, **kwargs)
+    return decorated
 
 # Get the file size in a human readable format
 def get_human_readable_size(filepath): 
@@ -119,14 +141,28 @@ def save_metadata_to_file(filekey, metadata):
         json.dump(saved_datasets, f, indent=4)
 
 
+@app.route("/api/login", methods=["POST"])
+def login():
+    data = request.get_json()
+    passcode = data.get('passcode')
+    if passcode == os.getenv('FLASK_PASSCODE', 'default_passcode'):
+        token = jwt.encode({
+            'exp': datetime.utcnow() + timedelta(hours=24)
+        }, app.config['SECRET_KEY'], algorithm="HS256")
+        return jsonify({'token': token})
+    return jsonify({'error': 'Invalid passcode'}), 401
+
+
 # Route to get the list of uploaded datasets
-@app.route("/listDatasets", methods=["GET", "POST"])
+@app.route("/api/listDatasets", methods=["GET", "POST"])
+@token_required
 def get_uploaded_datasets():
     return jsonify({"datasets" : saved_datasets}), 200
 
 
 # Route to send the file back to the front end
-@app.route("/download", methods=["GET", "POST"])
+@app.route("/api/download", methods=["GET", "POST"])
+@token_required
 def send_data_file(): 
     filename = request.args.get("filename")
     filetype = request.args.get("filetype")
@@ -149,7 +185,8 @@ def send_data_file():
 
 
 # Route to handle file upload
-@app.route("/upload", methods=["POST"])
+@app.route("/api/upload", methods=["POST"])
+@token_required
 def upload_file():
     try:
         result = {}
@@ -208,7 +245,8 @@ def upload_file():
 
 
 # Route to handle datasets update
-@app.route("/updateDatasets", methods=["POST"])
+@app.route("/api/updateDatasets", methods=["POST"])
+@token_required
 def update_datasets():
     try:
         # Update the currently working dataset
@@ -237,7 +275,8 @@ def update_datasets():
         return jsonify({"error" : str(e)}), 500
 
 # Route to get the list of uploaded datasets
-@app.route("/allCompressors", methods=["GET"])
+@app.route("/api/allCompressors", methods=["GET"])
+@token_required
 def get_available_compressors():
     try: 
         c = libpressio.PressioCompressor("pressio", name="pressio")
@@ -248,7 +287,8 @@ def get_available_compressors():
         print("Error in get_available_compressors():", e)
         return jsonify({"error": str(e)}), 500
 
-@app.route("/indexlist", methods=["POST"])
+@app.route("/api/indexlist", methods=["POST"])
+@token_required
 def indexlist():
     try:
         option = int(request.form.get("get_options"))
@@ -341,7 +381,8 @@ def indexlist():
         return jsonify({"error": str(e)}), 500
 
 # Route to get AI response
-@app.route("/chat", methods=["POST"])
+@app.route("/api/chat", methods=["POST"])
+@token_required
 def get_ai_response(): 
     try:
         message = request.form.get("message")
@@ -414,7 +455,7 @@ if __name__ == '__main__':
     # Parsing command line arguments
     parser = ArgumentParser(description="enter your HOST/POST.", usage="path/to/main.py [OPTIONAL ARGUMENTS] <HOST> <PORT> <configfile>")
     parser.add_argument('--HOST', nargs='?', help='HOST_address', default="0.0.0.0")
-    parser.add_argument('--PORT', nargs='?', help='PORT_address', default="5003")
+    parser.add_argument('--PORT', nargs='?', help='PORT_address', default="10080")
     parser.add_argument('--configfile', nargs='?', help='your_config_file', default=None)
     input = parser.parse_args()
 
@@ -422,12 +463,6 @@ if __name__ == '__main__':
         parser.print_help()
     api_host = input.HOST
     api_port = input.PORT
-    config = {
-        "API_HOST": api_host,
-        "API_PORT": api_port
-    }
-    with open((project_root / "serverConfig.json"), 'w') as json_file:
-        json.dump(config, json_file, indent=4)
     
     # Read uploaded datasets from the metadata file
     if metadata_file.exists():
