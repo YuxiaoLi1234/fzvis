@@ -13,7 +13,7 @@ export default {
   },
   data() {
     return {
-      baseURL: localStorage.getItem("fzvis_server_address"),
+      baseURL: "/api",
       availableOptions: {
         "Compressor": [
           { id: "binning", label: "Compressor: Binning", type: "compressor" },

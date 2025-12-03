@@ -226,7 +226,7 @@ export default {
 
   data() {
     return {
-      baseURL: localStorage.getItem("fzvis_server_address"),
+      baseURL: "/api",
       depth: null,
       width: null,
       height: null,
@@ -316,7 +316,7 @@ export default {
       if (!this.hasDatasets) {
         this.$store.commit("setProgress", { active: true, percent: 0, message: "Loading datasets..." });
         this.$store.commit("setStatus", { type: "info", message: "Loading datasets from server..." });
-        axios.get(`${this.baseURL}/listDatasets`).then(response => {
+  axios.get(`${this.baseURL}/listDatasets`).then(response => {
           this.uploadedDatasets = response.data.datasets;
           this.$store.commit("setProgress", { active: false, percent: 100, message: "Datasets loaded" });
           this.$store.commit("setStatus", { type: "success", message: "Datasets loaded successfully!" });
@@ -383,7 +383,7 @@ export default {
         formData.append("precision", this.precision);
       }
 
-      axios.post(`${this.baseURL}/upload`, formData, {
+  axios.post(`${this.baseURL}/upload`, formData, {
         onUploadProgress: (eventData) => {
           if (eventData.lengthComputable) {
             const percent = Math.round((eventData.loaded / eventData.total) * 100);
@@ -466,7 +466,7 @@ export default {
       if (!formData.entries().next().done) {
         this.$store.commit("setProgress", { active: true, percent: 0, message: "Saving dataset changes..." });
         this.$store.commit("setStatus", { type: "info", message: "Saving dataset changes..." });
-        await axios.post(`${this.baseURL}/updateDatasets`, formData).then(response => {
+  await axios.post(`${this.baseURL}/updateDatasets`, formData).then(response => {
           if (!(JSON.stringify(this.uploadedDatasets) === JSON.stringify(response.data.datasets))) {
             console.error("uploadedDatasets are not equal!");
           }
@@ -546,7 +546,7 @@ export default {
       this.$store.commit("setStatus", { type: "info", message: "Downloading variable data..." });
     
       // Get the variable data from the backend server
-      axios.get(`${this.baseURL}/download`, {
+  axios.get(`${this.baseURL}/download`, {
         params: { 
           filename: this.currentDataset.name, 
           filetype: "netcdf", 

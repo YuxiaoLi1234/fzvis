@@ -388,7 +388,7 @@ export default {
         formData.append("get_options", 0);
         formData.append("configurations", JSON.stringify({ [key]: config }));
         try {
-          const response = await axios.post(`${localStorage.getItem("fzvis_server_address")}/indexlist`, formData);
+          const response = await axios.post(`/api/indexlist`, formData);
           this.configStatus[key] = "success";
           this.compressionResults[key] = response.data[key] || response.data;
         } catch (error) {

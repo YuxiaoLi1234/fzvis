@@ -126,7 +126,7 @@ export default {
   name: "AppFooter",
   data() {
     return {
-      baseURL: localStorage.getItem("fzvis_server_address"),
+      baseURL: "/api",
       isChatOpen: false,
       isLoading: false,
       currentMessage: "",
@@ -233,6 +233,7 @@ export default {
           method: "POST",
           headers: {
             "Content-Type": "application/x-www-form-urlencoded",
+            "Authorization": `Bearer ${localStorage.getItem("fzvis_token")}`
           },
           body: new URLSearchParams({ message: messageToSend }),
         });
