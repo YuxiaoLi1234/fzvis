@@ -28,6 +28,7 @@ export default {
 
   setup() {
     const store = useStore();
+    const isMounted = ref(false);
     const fileData = computed(() => store.state.fileData);
     const dimensions = computed(() => store.state.dimensions);
     const precision = computed(() => store.state.precision);
@@ -248,8 +249,10 @@ export default {
         const lookupTable = vtkColorTransferFunction.newInstance();
 
         const resizeObserver = new ResizeObserver(() => {
-          fullScreenRenderer.resize();
-          renderWindow.render();
+          if (isMounted.value) {
+            fullScreenRenderer.resize();
+            renderWindow.render();
+          }
         });
         resizeObserver.observe(vtkContainerOriginal.value);
 
@@ -276,8 +279,10 @@ export default {
           const lookupTable = vtkColorTransferFunction.newInstance();
 
           const resizeObserver = new ResizeObserver(() => {
-            fullScreenRenderer.resize();
-            renderWindow.render();
+            if (isMounted.value) {
+              fullScreenRenderer.resize();
+              renderWindow.render();
+            }
           });
           resizeObserver.observe(vtkContainerDecompressed.value);
 
@@ -404,6 +409,7 @@ export default {
     }
 
     onMounted(() => {
+      isMounted.value = true;
       // Delay init slightly to allow tab to become visible
       setTimeout(() => {
         initializeVTK();
@@ -527,6 +533,7 @@ export default {
     });
 
     onBeforeUnmount(() => {
+      isMounted.value = false;
       cleanupContext(context.value.original);
       cleanupContext(context.value.decompressed);
       context.value = {

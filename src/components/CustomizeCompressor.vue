@@ -4,12 +4,14 @@ import { Modal } from 'bootstrap';
 import Multiselect from 'vue-multiselect';
 import ConfigGraph from './ConfigGraph.vue';
 import PipelineView from './PipelineView.vue';
+import ProgressiveComposition from './ProgressiveComposition.vue';
 
 export default {
   components: {
     Multiselect,
     ConfigGraph,
     PipelineView,
+    ProgressiveComposition,
   },
   data() {
     return {
@@ -39,6 +41,7 @@ export default {
       showConfigPanel: true, // toggle for config panel
       showPipelinePanel: true, // toggle for pipeline panel
       showPipelineModal: false, // toggle for pipeline save modal
+      progressiveConfig: null, // store progressive configuration temporarily
     };
   },
 
@@ -230,6 +233,17 @@ export default {
     },
 
     handleConfigurationSave() {
+      // If progressive composition was saved, persist it directly without rebuilding
+      if (this.progressiveConfig) {
+        const config = JSON.parse(JSON.stringify(this.progressiveConfig));
+        this.baseConfigurations[this.currentConfigName] = config;
+        this.derivedConfigurations[this.currentConfigName] = {};
+        this.savedConfigurations[this.currentConfigName] = config;
+        this.currentConfigName = "";
+        this.progressiveConfig = null; // clear the temporary config
+        return;
+      }
+
       let config = { compressor_id: this.selectedCompressor, compressor_config: {} };
       if (
         this.selectedCompressor === 'sz3' &&
@@ -310,6 +324,11 @@ export default {
       console.log("baseConfigurations", JSON.stringify(this.baseConfigurations));
       // console.log("savedConfigurations", JSON.stringify(this.savedConfigurations));
       this.currentConfigName = "";
+    },
+
+    handleProgressiveConfigurationSave(config) {
+      this.openSaveModal();
+      this.progressiveConfig = config;
     },
 
     handleErrorBoundGeneration({ baseConfigName, parameter, values }) {
@@ -600,6 +619,14 @@ export default {
                   </div>
                 </div>
               </div>
+
+              <div v-else-if="selectedCompressor === 'roibin'">
+                <ProgressiveComposition
+                  :compressorId="selectedCompressor"
+                  @save-configuration="handleProgressiveConfigurationSave"
+                />
+              </div>
+
               <div v-else>
                 <h5 class="card-title d-flex align-items-center" style="gap: 0.5rem;">
                   Configuration Options

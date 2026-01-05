@@ -27,18 +27,44 @@ export default {
       passcode: '',
       authError: '',
       isAuthenticating: false,
+      resizeTimeout: null,
     };
   },
 
   created() {
+    axios.interceptors.response.use(
+      (response) => response,
+      (error) => {
+        if (error.response && error.response.status === 401) {
+          this.logout();
+        }
+        return Promise.reject(error);
+      }
+    );
+
     const token = localStorage.getItem("fzvis_token");
     if (token) {
       axios.defaults.headers.common['Authorization'] = `Bearer ${token}`;
-      this.isAuthenticated = true;
+      // Verify token validity
+      axios.get('/api/verify')
+        .then(() => {
+          this.isAuthenticated = true;
+        })
+        .catch(() => {
+          // If verification fails, the interceptor will handle logout
+        });
     }
   },
 
   methods: {
+    logout() {
+      this.isAuthenticated = false;
+      this.passcode = '';
+      localStorage.removeItem('fzvis_token');
+      delete axios.defaults.headers.common['Authorization'];
+      this.$store.commit('setStatus', { type: 'warning', message: 'Session expired. Please login again.' });
+    },
+
     async handleLogin() {
       this.isAuthenticating = true;
       this.authError = '';
@@ -65,6 +91,14 @@ export default {
       } finally {
         this.isAuthenticating = false;
       }
+    },
+
+    // Reduce the frequency of resize events
+    debouncedResize() {
+      clearTimeout(this.resizeTimeout);
+      this.resizeTimeout = setTimeout(() => {
+        this.onSplitResize();
+      }, 150);
     },
 
     onSplitResize() {

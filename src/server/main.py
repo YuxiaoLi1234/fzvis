@@ -7,7 +7,7 @@ import json
 import jwt
 from datetime import datetime, timedelta
 from functools import wraps
-import libpressio
+import libpressio as lp
 import math
 import numpy as np
 import netCDF4 as nc
@@ -17,6 +17,7 @@ from pprint import pprint
 import threading 
 from openai import OpenAI
 from dotenv import load_dotenv
+from collections import deque
 
 load_dotenv()
 
@@ -66,24 +67,24 @@ def token_required(f):
 # Get the file size in a human readable format
 def get_human_readable_size(filepath): 
     if os.path.isfile(filepath):
-        file_size = os.path.getsize(filepath)
+        fileSize = os.path.getsize(filepath)
         for unit in ['B', 'KB', 'MB', 'GB', 'TB', 'PB']:
-            if file_size < 1024.0:
-                return f"{file_size:.2f} {unit}"
-            file_size /= 1024.0
+            if fileSize < 1024.0:
+                return f"{fileSize:.2f} {unit}"
+            fileSize /= 1024.0
 
 
 # Read input data from the file
 def read_input_data(dataset):
     global input_data
-    filepath = upload_dir / dataset["name"]
+    filePath = upload_dir / dataset["name"]
     width = int(dataset["width"])
     height = int(dataset["height"])
     depth = int(dataset["depth"])
     if dataset["precision"] == 'd': 
-        input_data = np.fromfile(filepath, dtype=np.float64)
+        input_data = np.fromfile(filePath, dtype=np.float64)
     elif dataset["precision"] == 'f': 
-        input_data = np.fromfile(filepath, dtype=np.float32)
+        input_data = np.fromfile(filePath, dtype=np.float32)
 
     if len(input_data) > depth*height*width: 
         input_data = input_data[len(input_data)- depth*height*width:]
@@ -93,44 +94,44 @@ def read_input_data(dataset):
 
 
 # Read NetCDF file
-def read_netcdf_file(filename, variable, slice_params=None):
-    filepath = upload_dir / filename
-    with nc.Dataset(filepath) as dataset:
+def read_netcdf_file(filename, variable, sliceParams=None):
+    filePath = upload_dir / filename
+    with nc.Dataset(filePath) as dataSet:
         if variable == "metadata":
             return {
-                var_name: {
-                    "shape": dataset.variables[var_name].shape,
-                    "dimensions": dataset.variables[var_name].dimensions,
-                    "dtype": str(dataset.variables[var_name].dtype),
+                varName: {
+                    "shape": dataSet.variables[varName].shape,
+                    "dimensions": dataSet.variables[varName].dimensions,
+                    "dtype": str(dataSet.variables[varName].dtype),
                 }
-                for var_name in dataset.variables
+                for varName in dataSet.variables
             }
         elif variable == "all":
-            var_data = {}
-            for var_name in dataset.variables:
-                var = dataset.variables[var_name]
-                data = np.nan_to_num(var[:], nan=0)
-                var_data[var_name] = data.flatten().tolist()
-            return var_data
+            varData = {}
+            for varName in dataSet.variables:
+                netCdfVar = dataSet.variables[varName]
+                data = np.nan_to_num(netCdfVar[:], nan=0)
+                varData[varName] = data.flatten().tolist()
+            return varData
         else:
             # update the input_data
             global input_data
-            var_data = dataset.variables[variable][:]
-            print(variable,"dimensions:", dataset.variables[variable].dimensions)
+            varData = dataSet.variables[variable][:]
+            print(variable,"dimensions:", dataSet.variables[variable].dimensions)
             # if slicing needs to be applied
-            if slice_params:
+            if sliceParams:
                 slices = []
-                for dim_slice in slice_params:
+                for dimSlice in sliceParams:
                     sl = slice(
-                        dim_slice.get("start", 0),
-                        dim_slice.get("end", None),
-                        dim_slice.get("step", 1)
+                        dimSlice.get("start", 0),
+                        dimSlice.get("end", None),
+                        dimSlice.get("step", 1)
                     )
                     slices.append(sl)
-                input_data = var_data[tuple(slices)]
+                input_data = varData[tuple(slices)]
                 print("nan locations:", np.where(np.isnan(input_data)))
             else: 
-                input_data = var_data
+                input_data = varData
             return input_data
 
 
@@ -153,6 +154,12 @@ def login():
     return jsonify({'error': 'Invalid passcode'}), 401
 
 
+@app.route("/api/verify", methods=["GET"])
+@token_required
+def verify_token():
+    return jsonify({'message': 'Token is valid'}), 200
+
+
 # Route to get the list of uploaded datasets
 @app.route("/api/listDatasets", methods=["GET", "POST"])
 @token_required
@@ -164,24 +171,24 @@ def get_uploaded_datasets():
 @app.route("/api/download", methods=["GET", "POST"])
 @token_required
 def send_data_file(): 
-    filename = request.args.get("filename")
-    filetype = request.args.get("filetype")
+    fileName = request.args.get("filename")
+    fileType = request.args.get("filetype")
 
     # Check if the file exists first
-    filepath = upload_dir / filename
-    if not filepath.exists():
+    filePath = upload_dir / fileName
+    if not filePath.exists():
         return jsonify({"error": "File not found"}), 404
     
     # Handle different file types
-    if filetype == "plain":
-        return send_file(filepath, as_attachment=False)
-    elif filetype == "netcdf":
+    if fileType == "plain":
+        return send_file(filePath, as_attachment=False)
+    elif fileType == "netcdf":
         variable = request.args.get("variable")
         slices = request.args.get("slices")
-        slice_params = json.loads(slices) if slices else None
-        var_data = read_netcdf_file(filename, variable, slice_params)
+        sliceParams = json.loads(slices) if slices else None
+        varData = read_netcdf_file(fileName, variable, sliceParams)
         # Send the array as bytes
-        return Response(var_data.tobytes(), mimetype="application/octet-stream")
+        return Response(varData.tobytes(), mimetype="application/octet-stream")
 
 
 # Route to handle file upload
@@ -190,51 +197,51 @@ def send_data_file():
 def upload_file():
     try:
         result = {}
-        dataset_metadata = {}
-        read_data_file = False
-        filepath = ""
+        datasetMetadata = {}
+        readDataFile = False
+        filePath = ""
         # Uploading a new dataset 
         if "file" in request.files: 
-            file = request.files["file"]
-            if file.filename == "":
+            uploadedFile = request.files["file"]
+            if uploadedFile.filename == "":
                 return jsonify({"error" : "No file selected"}), 400
 
             # Save file
-            filename = file.filename
-            filepath = upload_dir / filename
-            file.save(filepath)
+            fileName = uploadedFile.filename
+            filePath = upload_dir / fileName
+            uploadedFile.save(filePath)
 
             # Use the filename as the key for now as we don't allow two duplicate files
-            dataset_metadata["name"] = filename
-            dataset_metadata["size"] = get_human_readable_size(filepath)
-            read_data_file = True
+            datasetMetadata["name"] = fileName
+            datasetMetadata["size"] = get_human_readable_size(filePath)
+            readDataFile = True
             
         # Updating an existing dataset
         elif request.form.get("filename"):
-            filename = request.form.get("filename")
-            dataset_metadata = saved_datasets[filename]
+            fileName = request.form.get("filename")
+            datasetMetadata = saved_datasets[fileName]
 
         # Handle different file types
-        file_type = request.form.get("type")
-        dataset_metadata["type"] = file_type
+        fileType = request.form.get("type")
+        datasetMetadata["type"] = fileType
 
-        if file_type == "netcdf":
-            if read_data_file:
-                dataset = nc.Dataset(filepath)
-                variable_keys = dataset.variables.keys()
-                dataset_metadata["vars"] = read_netcdf_file(dataset_metadata["name"], "metadata")
+        if fileType == "netcdf":
+            if readDataFile:
+                dataSet = nc.Dataset(filePath)
+                variableKeys = dataSet.variables.keys()
+                datasetMetadata["vars"] = read_netcdf_file(datasetMetadata["name"], "metadata")
         
-        elif file_type == "plain":
-            dataset_metadata["width"] = request.form.get("width")
-            dataset_metadata["height"] = request.form.get("height")
-            dataset_metadata["depth"] = request.form.get("depth")
-            dataset_metadata["precision"] = request.form.get("precision")
-            if read_data_file:
-                threading.Thread(target=read_input_data, args=(dataset_metadata,)).start()
+        elif fileType == "plain":
+            datasetMetadata["width"] = request.form.get("width")
+            datasetMetadata["height"] = request.form.get("height")
+            datasetMetadata["depth"] = request.form.get("depth")
+            datasetMetadata["precision"] = request.form.get("precision")
+            if readDataFile:
+                threading.Thread(target=read_input_data, args=(datasetMetadata,)).start()
 
         # Save metadata to a json file
-        saved_datasets[filename] = dataset_metadata
-        result["dataset"] = dataset_metadata
+        saved_datasets[fileName] = datasetMetadata
+        result["dataset"] = datasetMetadata
         with open(metadata_file, 'w') as f:
             json.dump(saved_datasets, f, indent=4)
         return jsonify(result), 200
@@ -261,9 +268,9 @@ def update_datasets():
             deletedDatasets = json.loads(request.form["deletedDatasets"])
             print("deletedDatasets: ", deletedDatasets)
             for d in deletedDatasets:
-                filepath = upload_dir / saved_datasets[d].get("name")
-                if os.path.isfile(filepath):
-                    os.remove(filepath)
+                filePath = upload_dir / saved_datasets[d].get("name")
+                if os.path.isfile(filePath):
+                    os.remove(filePath)
                 saved_datasets.pop(d)
             # Update the metadata file
             with open(metadata_file, 'w') as f:
@@ -279,7 +286,7 @@ def update_datasets():
 @token_required
 def get_available_compressors():
     try: 
-        c = libpressio.PressioCompressor("pressio", name="pressio")
+        c = lp.PressioCompressor("pressio", name="pressio")
         compressors = c.get_configuration()["pressio"]["pressio:compressor"]
         compressors.remove("pressio")
         return jsonify({"compressors" : compressors}), 200
@@ -312,15 +319,16 @@ def indexlist():
                 global input_data
                 # print("arguments: ", arguments)
 
-                configs = {
-                    "compressor_id": arguments["compressor_id"],
-                }
-                if "early_config" in arguments:
-                    configs["early_config"] = {
-                        "pressio:metric": "composite",
-                        "composite:plugins": arguments["early_config"].get("composite:plugins", []),
-                    }
-                configs["compressor_config"] = arguments["compressor_config"]
+                # No need to manually construct the configs dictionary, as we expect the full config from the front end
+                # configs = {
+                #     "compressor_id": arguments["compressor_id"],
+                # }
+                # if "early_config" in arguments:
+                #     configs["early_config"] = {
+                #         "pressio:metric": "composite",
+                #         "composite:plugins": arguments["early_config"].get("composite:plugins", []),
+                #     }
+                # configs["compressor_config"] = arguments["compressor_config"]
                 # pprint(configs)
 
                 def run_compressor(args):
@@ -332,19 +340,40 @@ def indexlist():
                     # }
                     # if "early_config" in args:
                     #     compressor_config_dict["early_config"] = args["early_config"]
-                    compressor = libpressio.PressioCompressor.from_config(args)
-                    decomp_data = input_data.copy()
-                    comp_data = compressor.encode(input_data)
-                    decomp_data = compressor.decode(comp_data, decomp_data)
+                    # If selected compressor is roibin, ensure roi_size matches input_data shape
+                    patched_args = args.copy()
+                    try:
+                        selectedCompressor = patched_args.get("compressor_id")
+                        if selectedCompressor == "pressio":
+                            selectedCompressor = (
+                                patched_args.get("early_config", {})
+                                .get("pressio", {})
+                                .get("pressio:compressor")
+                            )
+                        if selectedCompressor == "roibin" and input_data is not None:
+                            # Inject roibin:roi_size under pressio early_config
+                            ec = patched_args.setdefault("early_config", {})
+                            ec_pressio = ec.setdefault("pressio", {})
+                            # Only set if not already provided
+                            if "roibin:roi_size" not in ec_pressio:
+                                ec_pressio["roibin:roi_size"] = np.asarray(input_data.shape, dtype=np.int32)
+                    except Exception as _e:
+                        # Fallback to original args if any issue arises
+                        patched_args = args
+                    
+                    compressor = lp.PressioCompressor.from_config(patched_args)
+                    decompData = input_data.copy()
+                    compData = compressor.encode(input_data)
+                    decompData = compressor.decode(compData, decompData)
                     metrics = compressor.get_metrics()
                     metrics1 = replace_unsupported_values(metrics)
                     
                     return {
                         "compressor_id": args["compressor_id"],
                         "metrics": metrics1,
-                        "decp_data": decomp_data.flatten().tolist(),
+                        "decp_data": decompData.flatten().tolist(),
                     }
-                result = run_compressor(configs)
+                result = run_compressor(arguments)
                 return result
             
             if input_data is None:
@@ -362,23 +391,227 @@ def indexlist():
             return result, 200
         
         elif option == 1:
-            # pprint(libpressio.PressioCompressor("roibin", {"roibin:roi": "sz3"}).get_configuration())
-            compressor_id = request.form["compressor_id"]
-            compressor = libpressio.PressioCompressor(compressor_id)
+            # pprint(lp.PressioCompressor("roibin", {"roibin:roi": "sz3"}).get_configuration())
+            compressorId = request.form["compressor_id"]
+            compressor = lp.PressioCompressor(compressorId)
             options = compressor.get_configuration()
             doc = compressor.get_documentation()
             highlevel = []
             if "pressio:highlevel" in options:
                 highlevel = options["pressio:highlevel"]
             # print("options:", json.dumps(options, indent=4, sort_keys=True))
-            module_slots = {k: options[k] for k in options if k.startswith(compressor_id)}
+            moduleSlots = {k: options[k] for k in options if k.startswith(compressorId)}
             # print("highlevel:", highlevel)
-            # print("options:", module_slots)
+            # print("options:", moduleSlots)
             
-            return jsonify({"doc": doc, "highlevel" : highlevel, "options" : module_slots}), 200 
+            return jsonify({"doc": doc, "highlevel" : highlevel, "options" : moduleSlots}), 200 
     
     except Exception as e:
         print("Error in indexlist():", e)
+        return jsonify({"error": str(e)}), 500
+
+# Route to get progressive configuration options for a compressor
+@app.route("/api/progressiveOptions", methods=["POST"])
+@token_required
+def get_progressive_config():
+    try:
+        configs = request.get_json() or {}
+        
+        if not configs:
+            return jsonify({"error": "configuration is empty"}), 400
+        
+        def traverse_config(data, keyFilter=None, stripKey=False, detailed=False, filterNoop=False):
+            """
+            Function to traverse and extract info from configuration data.
+            
+            Args:
+                data: Configuration dictionary to traverse
+                keyFilter: Optional function to filter keys (e.g., lambda x: x == "pressio:highlevel")
+                stripKey: If True, strip the matched key from the path
+                detailed: If True, return detailed info with slot, options, type for list values
+                filterNoop: If True, filter out any keys/paths containing 'noop'
+            
+            Returns:
+                Dictionary mapping paths to values (or detailed info if detailed=True)
+            """
+            results = {}
+            q = deque([(data, "")])
+            
+            while q:
+                node, path = q.popleft()
+                if isinstance(node, dict):
+                    for k, v in node.items():
+                        currPath = f"{path}/{k}" if path else k
+                        
+                        # Skip if filtering noop and path contains noop
+                        if filterNoop and ('noop' in currPath or k == 'noop'):
+                            continue
+                        
+                        # Check if this key matches the filter
+                        if keyFilter is None or keyFilter(k):
+                            if stripKey:
+                                # Strip the trailing key from the path
+                                resultKey = currPath.rsplit(f'/{k}', 1)[0] if currPath.endswith(f'/{k}') else currPath
+                            else:
+                                resultKey = currPath
+                            
+                            if detailed and isinstance(v, list):
+                                filteredList = [item for item in v if not (filterNoop and ('noop' in str(item) or item == 'noop'))] if filterNoop else v
+                                if not filteredList and filterNoop:
+                                    continue  # Skip empty lists
+                                
+                                # Return detailed info
+                                ptype = 'metric' if 'metric' in k else 'compressor'
+                                results[resultKey] = {
+                                    'slot': k,
+                                    'options': list(dict.fromkeys(filteredList)) if stripKey else filteredList,  # Deduplicate if stripKey
+                                    'type': ptype
+                                }
+                            elif isinstance(v, list):
+                                filteredList = [item for item in v if not (filterNoop and ('noop' in str(item) or item == 'noop'))] if filterNoop else v
+                                if not filteredList and filterNoop:
+                                    continue  # Skip empty lists
+                                
+                                # Deduplicate if stripKey is True
+                                results[resultKey] = list(dict.fromkeys(filteredList)) if stripKey else filteredList
+                            elif not detailed:
+                                # For non-list values, only include if not in detailed mode
+                                results[resultKey] = v
+                        
+                        # Continue traversal for dict values
+                        if isinstance(v, dict):
+                            q.append((v, currPath))
+            
+            return results
+
+        compressor = lp.PressioCompressor.from_config(configs)
+        configurationData = compressor.get_configuration()
+        # print("Configuration data:")
+        # pprint(configurationData)
+
+        doc = compressor.get_documentation()
+        
+        # Get options with type information
+        optionsData = compressor.get_options()
+        
+        # Extract type information for each option
+        def get_option_types(options):
+            """Extract type information from pressio options dictionary by inferring from values"""
+            type_info = {}
+            
+            def infer_type(value):
+                """Infer the type string from a Python value"""
+                if value is None:
+                    return 'unset'
+                elif isinstance(value, bool):
+                    return 'bool'
+                elif isinstance(value, int):
+                    return 'int'
+                elif isinstance(value, float):
+                    return 'double'
+                elif isinstance(value, str):
+                    return 'string'
+                elif isinstance(value, (list, tuple)):
+                    return 'string_array' if all(isinstance(x, str) for x in value) else 'data'
+                elif hasattr(value, 'dtype'):
+                    # numpy array
+                    dtype_str = str(value.dtype)
+                    if 'int8' in dtype_str:
+                        return 'int8'
+                    elif 'int16' in dtype_str:
+                        return 'int16'
+                    elif 'int32' in dtype_str:
+                        return 'int32'
+                    elif 'int64' in dtype_str:
+                        return 'int64'
+                    elif 'uint8' in dtype_str:
+                        return 'uint8'
+                    elif 'uint16' in dtype_str:
+                        return 'uint16'
+                    elif 'uint32' in dtype_str:
+                        return 'uint32'
+                    elif 'uint64' in dtype_str:
+                        return 'uint64'
+                    elif 'float32' in dtype_str:
+                        return 'float'
+                    elif 'float64' in dtype_str:
+                        return 'double'
+                    else:
+                        return 'data'
+                else:
+                    return 'unknown'
+            
+            def traverse(obj, path=''):
+                """Recursively traverse the options dictionary"""
+                if isinstance(obj, dict):
+                    for key, value in obj.items():
+                        current_path = f"{path}/{key}" if path else key
+                        if isinstance(value, dict):
+                            # Recurse into nested dictionaries
+                            traverse(value, current_path)
+                        else:
+                            # This is a leaf value, infer its type
+                            type_info[key] = infer_type(value)
+            
+            traverse(options)
+            return type_info
+        
+        optionTypes = get_option_types(optionsData)
+        # print("Extracted option types:")
+        # pprint(optionTypes)
+
+        allHighlevels = traverse_config(configurationData, keyFilter=lambda x: x=="pressio:highlevel", stripKey=True, filterNoop=True)
+        children = traverse_config(configurationData, keyFilter=lambda x: x=="pressio:children", stripKey=True, filterNoop=True)
+
+        # Only keep high-level entries that are exactly one level below pressio (e.g., pressio/roibin)
+        def is_top_level(entryPath: str) -> bool:
+            return entryPath.startswith("pressio/") and entryPath.count('/') == 1 and not entryPath.endswith('/noop')
+
+        highlevel = {
+            path: options
+            for path, options in allHighlevels.items()
+            if is_top_level(path)
+        }
+
+        # Get all option lists with detailed info
+        optionLists = traverse_config(configurationData, detailed=True)
+
+        filteredOptionLists = {}
+        for k, v in optionLists.items():
+            if v['type'] == 'metric':
+                # Only keep top-level pressio:metric
+                if k.count('/') == 1 and v['slot'] == 'pressio:metric':
+                    # Remove 'composite' from the options
+                    filtered_options = [opt for opt in v['options'] if opt != 'composite']
+                    if filtered_options:
+                        filteredOptionLists[k] = {
+                            'slot': v['slot'],
+                            'options': filtered_options,
+                            'type': v['type']
+                        }
+            else:
+                # Keep all non-metric options as-is
+                filteredOptionLists[k] = v
+        
+        optionLists = filteredOptionLists
+
+        # print("highlevel options:")
+        # pprint(highlevel)
+        # print("children options:")
+        # pprint(children)
+        # print("Option lists with paths:")
+        # pprint(optionLists)
+
+        return jsonify({
+            "doc": doc,
+            "highlevel": highlevel,
+            "children": children,
+            "optionLists": optionLists,
+            "optionTypes": optionTypes,
+        }), 200
+    
+    except Exception as e:
+        print("Error in get_progressive_config():", e)
         return jsonify({"error": str(e)}), 500
 
 # Route to get AI response
@@ -403,7 +636,7 @@ def get_ai_response():
 
         # Stream the response back to the client
         def generate():
-            full_response = ""
+            fullResponse = ""
             for chunk in response:
                 if chunk.choices:
                     delta = chunk.choices[0].delta
@@ -411,14 +644,14 @@ def get_ai_response():
                     content = delta.content or ""
 
                     if content:
-                        full_response += content
+                        fullResponse += content
                     
                     payload = {
                         "reasoning_content": reasoning,
                         "content": content
                     }
                     yield f"data: {json.dumps(payload)}\n\n"
-            conversation_history.append({"role": "assistant", "content": full_response})
+            conversation_history.append({"role": "assistant", "content": fullResponse})
             yield "data: [DONE]\n\n"
         
         return Response(
@@ -434,11 +667,8 @@ def get_ai_response():
 @app.route('/', defaults={'path': ''})
 @app.route('/<path:path>')
 def serve_frontend(path):
-    print(f"Requested path: {path}")
-    print(f"dist_dir: {dist_dir}")
-    full_path = os.path.join(dist_dir, path)
-    print(f"Full path: {full_path}")
-    if os.path.isfile(full_path):
+    fullPath = os.path.join(dist_dir, path)
+    if os.path.isfile(fullPath):
         return send_from_directory(dist_dir, path)
     else:
         return send_from_directory(dist_dir, 'index.html')
@@ -458,16 +688,16 @@ if __name__ == '__main__':
     parser.add_argument('--HOST', nargs='?', help='HOST_address', default="0.0.0.0")
     parser.add_argument('--PORT', nargs='?', help='PORT_address', default="10080")
     parser.add_argument('--configfile', nargs='?', help='your_config_file', default=None)
-    input = parser.parse_args()
+    cmdInput = parser.parse_args()
 
-    if not any(vars(input).values()):
+    if not any(vars(cmdInput).values()):
         parser.print_help()
-    api_host = input.HOST
-    api_port = input.PORT
+    apiHost = cmdInput.HOST
+    apiPort = cmdInput.PORT
     
     # Read uploaded datasets from the metadata file
     if metadata_file.exists():
         with open(metadata_file, 'r') as f:
             saved_datasets = json.load(f)
 
-    app.run(host=api_host, port=api_port, debug=True, threaded=True)
+    app.run(host=apiHost, port=apiPort, debug=True, threaded=True)
