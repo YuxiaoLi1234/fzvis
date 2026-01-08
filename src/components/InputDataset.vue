@@ -1,6 +1,6 @@
 <template>
   <div class="container align-items-center">
-    <h1 class="h3 px-2 mt-3">Dataset Settings
+    <h1 class="h4 px-2 mt-3">Dataset Settings
       <i type="button" class="bi bi-info-circle ms-2 fs-5" data-bs-container="body" data-bs-toggle="popover" data-bs-placement="right" data-bs-html="true" data-bs-content="Currently support <b>raw</b> and <b>NetCDF</b> file formats."></i>
     </h1>
     
@@ -66,10 +66,10 @@
     </button>
     <!-- Button trigger modal -->
     <button id="viewDatasetsBtn" type="button" class="btn btn-info ms-2 my-1" @click="viewDatasets" title="View all uploaded datasets">View datasets</button>
-    <div v-if="currentDataset == null" class="text-danger mt-1">
+    <div v-if="currentDataset == null" class="alert alert-danger mt-1">
       No dataset selected for processing.
     </div>
-    <div v-else class="text-success mt-1">
+    <div v-else class="alert alert-success mt-1">
       Current dataset: 
       <strong >{{ currentDataset.name }}</strong>
     </div>
@@ -147,7 +147,6 @@
       </div>
 
     </div>
-    
     <!-- Dataset modal -->
     <div id="datasetModal" class="modal fade" data-bs-backdrop="static" tabindex="-1" aria-labelledby="datasetModalLabel" aria-hidden="true">
       <div class="modal-dialog modal-dialog-scrollable">
@@ -217,9 +216,8 @@
 </template>
 
 <script>
-
 import axios from 'axios';
-import { Modal, Tooltip } from 'bootstrap';
+import { Modal, Tooltip, Popover } from 'bootstrap';
 
 export default {
   name: 'InputDataset',
@@ -233,7 +231,6 @@ export default {
       precision: "",
       fileContent: "",
       file: null,
-      currentDataset: null,
       datasetToChange: null,
       isLoadingDatasets: false,
       uploadedDatasets: [],
@@ -248,6 +245,10 @@ export default {
   computed: {
     hasDatasets() {
       return Object.keys(this.uploadedDatasets).length > 0;
+    },
+
+    currentDataset() {
+      return this.$store?.state?.dataset || null;
     },
 
     // Check if all form fields are filled before allowing emission
@@ -280,6 +281,7 @@ export default {
       }
     },
     currentDataset(newVal, oldVal) {
+      this.fillFieldsFromDataset();
       if (newVal && newVal !== oldVal) {
         this.$store.commit('addHistory', {
           kind: 'dataset',
@@ -290,16 +292,56 @@ export default {
     }
   },
 
+  mounted() {
+    this.initializeTooltips();
+    this.initializePopovers();
+    this.fillFieldsFromDataset();
+  },
+
   updated() {
     this.initializeTooltips();
+    this.initializePopovers();
   },
   
   methods:{
+    fillFieldsFromDataset() {
+      const ds = this.currentDataset;
+      if (!ds) {
+        this.isNetCDF = false;
+        this.precision = "";
+        this.width = null;
+        this.height = null;
+        this.depth = null;
+        return;
+      }
+      this.isNetCDF = ds.type === 'netcdf';
+      if (ds.type === 'plain') {
+        const dims = Array.isArray(ds.dimensions)
+          ? ds.dimensions
+          : [ds.width, ds.height, ds.depth];
+        this.width = Number(dims?.[0]) || null;
+        this.height = Number(dims?.[1]) || null;
+        this.depth = Number(dims?.[2]) || null;
+        if (ds.precision) this.precision = ds.precision;
+      }
+    },
     // Initialize tooltips in the DOM
     initializeTooltips() {
       document.querySelectorAll('[data-bs-toggle="tooltip"]')
         .forEach(tooltip => {
           new Tooltip(tooltip);
+        });
+    },
+
+    // Initialize popovers in the DOM
+    initializePopovers() {
+      document.querySelectorAll('[data-bs-toggle="popover"]').
+        forEach(el => {
+          // Avoid duplicating instances if re-initialized
+          const instance = Popover.getInstance(el);
+          if (!instance) {
+            Popover.getOrCreateInstance(el);
+          }
         });
     },
 
@@ -350,11 +392,16 @@ export default {
     },
 
     emitFileData() {
-      // console.log("fileContent:", this.fileContent);
       this.$store.commit("setFileData", {
-        content: this.fileContent,
-        dimensions: [Number(this.width), Number(this.height), Number(this.depth)],
-        precision: this.precision,
+        dataset: {
+          name: this.currentDataset?.name || null,
+          type: this.isNetCDF ? 'netcdf' : 'plain',
+          content: this.fileContent,
+          dimensions: [Number(this.width), Number(this.height), Number(this.depth)],
+          precision: this.precision,
+          vars: this.currentDataset?.vars || undefined,
+          size: this.currentDataset?.size || undefined,
+        }
       });
       this.$store.commit("setComparisonData", null);
     },
@@ -390,16 +437,41 @@ export default {
             this.$store.commit("setProgress", { active: true, percent, message: `Uploading... ${percent}%` });
           }
         }
-      })
-      .then(response => {
-        this.currentDataset = response.data["dataset"];
+      }).then(response => {
+        const serverDataset = response.data["dataset"] || {};
         this.$store.commit("setProgress", { active: false, percent: 100, message: "Upload complete" });
         this.$store.commit("setStatus", { type: "success", message: "Uploaded file successfully!" });
         // update the cached dataset list
-        if (this.uploadedDatasets) {
-          this.uploadedDatasets[this.currentDataset.name] = this.currentDataset;
+        if (this.uploadedDatasets && serverDataset?.name) {
+          this.uploadedDatasets[serverDataset.name] = serverDataset;
         }
-        this.emitFileData();
+        // Persist dataset in store (avoid local copy)
+        if (this.isNetCDF) {
+          this.$store.commit("setFileData", {
+            dataset: {
+              name: serverDataset?.name || null,
+              type: "netcdf",
+              content: null,
+              dimensions: serverDataset?.dimensions || null,
+              precision: serverDataset?.precision || "",
+              vars: serverDataset?.vars || undefined,
+              size: serverDataset?.size || undefined,
+            }
+          });
+        } else {
+          this.$store.commit("setFileData", {
+            dataset: {
+              name: serverDataset?.name || null,
+              type: "plain",
+              content: this.fileContent,
+              dimensions: [Number(this.width), Number(this.height), Number(this.depth)],
+              precision: this.precision,
+              // vars will be cleared in the store for plain datasets
+              vars: undefined,
+              size: undefined,
+            }
+          });
+        }
       })
       .catch(error => {
         this.$store.commit("setProgress", { active: false, percent: 0, message: "Upload failed" });
@@ -439,8 +511,18 @@ export default {
             this.isNetCDF = false;
             this.ncSelectedVar = "";
             this.fileContent = response.data;
-            this.emitFileData();
-            this.currentDataset = this.datasetToChange;
+            // Persist downloaded dataset in store
+            this.$store.commit("setFileData", {
+              dataset: {
+                name: this.datasetToChange.name,
+                type: "plain",
+                content: this.fileContent,
+                dimensions: [Number(this.width), Number(this.height), Number(this.depth)],
+                precision: this.precision,
+                vars: undefined,
+                size: undefined,
+              }
+            });
             this.$store.commit("setProgress", { active: false, percent: 100, message: "Download complete" });
             this.$store.commit("setStatus", { type: "success", message: "Downloaded file successfully!" });
           }).catch(error => {
@@ -452,7 +534,17 @@ export default {
         else if(this.datasetToChange.type === "netcdf") {
           this.ncSelectedVar = "";
           this.isNetCDF = true;
-          this.currentDataset = this.datasetToChange;
+          this.$store.commit("setFileData", {
+            dataset: {
+              name: this.datasetToChange.name,
+              type: "netcdf",
+              content: null,
+              dimensions: this.datasetToChange.dimensions || null,
+              precision: this.datasetToChange.precision || "",
+              vars: this.datasetToChange.vars || undefined,
+              size: this.datasetToChange.size || undefined,
+            }
+          });
         }
       }
         

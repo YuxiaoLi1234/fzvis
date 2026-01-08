@@ -356,7 +356,7 @@ export default {
     async submitConfigurations() {
       const alertBox = document.getElementById("compressorAlert");
       const alertMessage = document.getElementById("compressorAlertMessage");
-      const fileData = this.$store.state.fileData;
+      const fileData = this.$store.state.dataset?.content;
       if (!fileData) {
         if (alertBox && alertMessage) {
           alertBox.classList.remove("alert-success", "alert-secondary");

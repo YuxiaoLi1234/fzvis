@@ -3,8 +3,8 @@ import axios from 'axios';
 import { Modal } from 'bootstrap';
 import Multiselect from 'vue-multiselect';
 import ConfigGraph from './ConfigGraph.vue';
-import PipelineView from './PipelineView.vue';
-import ProgressiveComposition from './ProgressiveComposition.vue';
+import PipelineView from './config/PipelineView.vue';
+import ProgressiveComposition from './config/ProgressiveComposition.vue';
 
 export default {
   components: {
@@ -66,7 +66,7 @@ export default {
     },
 
     fileData() {
-      return this.$store.state.fileData;
+      return this.$store.state.dataset?.content;
     }
   },
 

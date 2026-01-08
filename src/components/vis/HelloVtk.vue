@@ -29,9 +29,9 @@ export default {
   setup() {
     const store = useStore();
     const isMounted = ref(false);
-    const fileData = computed(() => store.state.fileData);
-    const dimensions = computed(() => store.state.dimensions);
-    const precision = computed(() => store.state.precision);
+    const fileData = computed(() => store.state.dataset?.content);
+    const dimensions = computed(() => store.state.dataset?.dimensions);
+    const precision = computed(() => store.state.dataset?.precision);
     const isTimeVarying = computed(() => store.state.isTimeVarying);
     
     const sliceId = ref(0);

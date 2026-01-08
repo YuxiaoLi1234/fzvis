@@ -1,19 +1,19 @@
 <script>
 import AppHeader from './components/AppHeader.vue'
-import InputDataset from './components/InputDataset.vue'
-import CustomizeCompressor from './components/CustomizeCompressor.vue'
-import HelloVtk from './components/HelloVtk.vue'
-import MetricVis from './components/MetricVis.vue'
+import HelloVtk from './components/vis/HelloVtk.vue'
+import MetricVis from './components/vis/MetricVis.vue'
 import AppFooter from './components/AppFooter.vue'
 import { Splitpanes, Pane } from 'splitpanes'
 import axios from 'axios';
+import PipelineBrowser from './components/PipelineBrowser.vue'
+import ConfigGraph from './components/ConfigGraph.vue'
 
 export default {
   name: 'App',
   components: {
     AppHeader,
-    InputDataset,
-    CustomizeCompressor,
+    PipelineBrowser,
+    ConfigGraph,
     HelloVtk,
     MetricVis,
     AppFooter,
@@ -148,26 +148,15 @@ export default {
       <div class="d-flex flex-grow-1 overflow-hidden mb-3">
         <Splitpanes class="default-theme w-100 h-100" :dbl-click-splitter="false" @resized="debouncedResize">
           <Pane :size="30" min-size="25" class="h-100 overflow-auto">
-            <div class="p-2 d-flex flex-column">
-              <ul class="nav nav-tabs mb-2" role="tablist">
-                <li class="nav-item" role="presentation">
-                  <button class="nav-link active" id="inputdataset-tab" data-bs-toggle="tab" data-bs-target="#inputdataset-pane" type="button" role="tab" aria-selected="true">
-                    <i class="bi bi-upload me-2"></i>Input Data
-                  </button>
-                </li>
-                <li class="nav-item" role="presentation">
-                  <button class="nav-link" id="customizecompressor-tab" data-bs-toggle="tab" data-bs-target="#customizecompressor-pane" type="button" role="tab" aria-selected="false">
-                    <i class="bi bi-sliders me-2"></i>Compressor
-                  </button>
-                </li>
-              </ul>
-              <div class="tab-content flex-grow-1 overflow-auto">
-                <div id="inputdataset-pane" class="tab-pane fade show active h-100" role="tabpanel" aria-labelledby="inputdataset-tab">
-                  <InputDataset />
-                </div>
-                <div id="customizecompressor-pane" class="tab-pane fade h-100" role="tabpanel" aria-labelledby="customizecompressor-tab">
-                  <CustomizeCompressor />
-                </div>
+            <div class="p-2 d-flex flex-column h-100">
+              <PipelineBrowser />
+              <div v-if="$store.state.showConfigGraphInPane" class="mt-3">
+                <ConfigGraph
+                  :baseConfigurations="$store.state.baseConfigurations"
+                  :derivedConfigurations="$store.state.derivedConfigurations"
+                  :savedConfigurations="$store.state.savedConfigurations"
+                  :compressorOptions="$store.state.compressorOptions"
+                />
               </div>
             </div>
           </Pane>
@@ -205,46 +194,88 @@ export default {
       <AppFooter />
 
       <!-- Offcanvas HTML -->
-      <div class="offcanvas offcanvas-end m-2 py-0" tabindex="-1" id="showMore" aria-labelledby="showMoreLabel">
-        <div class="offcanvas-header">
-          <h4 class="offcanvas-title" id="showMoreLabel">About FZ-VIS</h4>
+      <div class="offcanvas offcanvas-end m-2 py-0" tabindex="-1" id="showMore" aria-labelledby="showMoreLabel" style="--bs-offcanvas-width: 420px;">
+        <div class="offcanvas-header border-bottom">
+          <h4 class="offcanvas-title d-flex align-items-center gap-2" id="showMoreLabel">
+            <i class="bi bi-info-circle text-primary"></i>
+            About FZ-VIS
+          </h4>
           <button type="button" class="btn-close text-reset" data-bs-dismiss="offcanvas" aria-label="Close"></button>
         </div>
         <div class="offcanvas-body">
-          <div>
-            FZ-VIS is a web-based visualization tool for the FZ project. The tool allows users to configure, apply, and compare the performance of multiple compression algorithms on the dataset.
-          </div>
-          <div class="mt-2">
-            <h5>Tutorial</h5>
-            <div class="mx-2">
-              Please check out <a class="text-info" data-bs-toggle="tooltip" data-bs-placement="top" title="To be updated">this page</a> for text tutorial and <a class="text-info" data-bs-toggle="tooltip" data-bs-placement="right" title="To be updated">this video</a> for video tutorial.
+          <div class="d-flex flex-column gap-3">
+            <!-- Overview -->
+            <div class="card border-0 bg-light">
+              <div class="card-body py-3">
+                <h6 class="text-uppercase text-muted mb-2">Overview</h6>
+                <p class="mb-0">
+                  FZ-VIS is a web-based visualization tool for the FZ project. The tool allows users to configure,
+                  apply, and compare the performance of multiple compression algorithms on the dataset.
+                </p>
+              </div>
             </div>
-          </div>
-          <div class="mt-2">
-            <h5>Contributors</h5>
-            <div class="mx-2">
-              <p class="fw-bold my-1">The Ohio State University</p>
-              <ul class="my-0">
-                <li class="fw-bold fst-italic"><a href="https://cse.osu.edu/people/guo.2154" target="_blank">PI: Hanqi Guo</a></li>
-                <li><a href="https://github.com/YuxiaoLi1234" target="_blank">Yuxiao Li</a></li>
-                <li><a href="https://cse.osu.edu/people/liu.12722" target="_blank">Guoxi Liu</a></li>
-                <li><a href="https://github.com/hrithikdevaiah-999" target="_blank">Hrithik Devaiah Bollachettira Ajithkumar</a></li>
-              </ul>
-              <p class="fw-bold my-1">Argonne National Laboratory</p>
-              <ul class="my-0">
-                <li><a href="https://www.anl.gov/profile/robert-underwood" target="_blank">Robert Underwood</a></li>
-              </ul>
+
+            <!-- Tutorial -->
+            <div class="card border-0">
+              <div class="card-body py-3">
+                <h5 class="fw-semibold mb-2"><i class="bi bi-book me-2"></i>Tutorial</h5>
+                <ul class="list-group list-group-flush">
+                  <li class="list-group-item px-0 d-flex justify-content-between align-items-center">
+                    <div>
+                      <div class="fw-semibold">Text tutorial</div>
+                      <div class="text-muted small">Step-by-step walkthrough</div>
+                    </div>
+                    <a class="btn btn-sm btn-outline-info disabled" data-bs-toggle="tooltip" data-bs-placement="top" title="To be updated">
+                      <i class="bi bi-file-text me-1"></i>View
+                    </a>
+                  </li>
+                  <li class="list-group-item px-0 d-flex justify-content-between align-items-center">
+                    <div>
+                      <div class="fw-semibold">Video tutorial</div>
+                      <div class="text-muted small">Quick start overview</div>
+                    </div>
+                    <a class="btn btn-sm btn-outline-info disabled" data-bs-toggle="tooltip" data-bs-placement="right" title="To be updated">
+                      <i class="bi bi-film me-1"></i>Watch
+                    </a>
+                  </li>
+                </ul>
+              </div>
+            </div>
+
+            <!-- Contributors -->
+            <div class="card border-0">
+              <div class="card-body py-3">
+                <h5 class="fw-semibold mb-2"><i class="bi bi-people me-2"></i>Contributors</h5>
+                <div class="mb-3">
+                  <p class="fw-bold my-1">The Ohio State University</p>
+                  <ul class="list-unstyled mb-0">
+                    <li class="mb-1"><i class="bi bi-person-badge me-2 text-secondary"></i><a href="https://cse.osu.edu/people/guo.2154" target="_blank">PI: Hanqi Guo</a></li>
+                    <li class="mb-1"><i class="bi bi-person me-2 text-secondary"></i><a href="https://cse.osu.edu/people/liu.12722" target="_blank">Guoxi Liu</a></li>
+                    <li class="mb-1"><i class="bi bi-person me-2 text-secondary"></i><a href="https://github.com/YuxiaoLi1234" target="_blank">Yuxiao Li</a></li>
+                    <li class="mb-1"><i class="bi bi-person me-2 text-secondary"></i><a href="https://github.com/hrithikdevaiah-999" target="_blank">Hrithik Devaiah Bollachettira Ajithkumar</a></li>
+                  </ul>
+                </div>
+                <div>
+                  <p class="fw-bold my-1">Argonne National Laboratory</p>
+                  <ul class="list-unstyled mb-0">
+                    <li class="mb-1"><i class="bi bi-person me-2 text-secondary"></i><a href="https://www.anl.gov/profile/robert-underwood" target="_blank">Robert Underwood</a></li>
+                  </ul>
+                </div>
+              </div>
             </div>
           </div>
         </div>
-        <div class="offcanvas-footer px-2 pb-5">
-          <p class="text-muted">Powered by <a href="https://getbootstrap.com/" target="_blank"><svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" class="bi bi-bootstrap me-1 mb-1" viewBox="0 0 16 16">
-            <path d="M5.062 12h3.475c1.804 0 2.888-.908 2.888-2.396 0-1.102-.761-1.916-1.904-2.034v-.1c.832-.14 1.482-.93 1.482-1.816 0-1.3-.955-2.11-2.542-2.11H5.062zm1.313-4.875V4.658h1.78c.973 0 1.542.457 1.542 1.237 0 .802-.604 1.23-1.764 1.23zm0 3.762V8.162h1.822c1.236 0 1.887.463 1.887 1.348 0 .896-.627 1.377-1.811 1.377z"/>
-            <path d="M0 4a4 4 0 0 1 4-4h8a4 4 0 0 1 4 4v8a4 4 0 0 1-4 4H4a4 4 0 0 1-4-4zm4-3a3 3 0 0 0-3 3v8a3 3 0 0 0 3 3h8a3 3 0 0 0 3-3V4a3 3 0 0 0-3-3z"/>
-          </svg>BootStrap</a> and <a href="https://vuejs.org/" target="_blank"><svg width="16" height="16" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg" class="bi me-1 mb-1">
-            <path d="M2 4L16 28L30 4H24.5L16 18.5L7.5 4H2Z" fill="#41B883"/>
-            <path d="M7.5 4L16 18.5L24.5 4H19.5L16.0653 10.0126L12.5 4H7.5Z" fill="#35495E"/>
-          </svg>Vue.js</a>. <br>Licensed MIT.</p>
+        <div class="offcanvas-footer px-3 border-top">
+          <p class="text-muted text-center mt-2">Powered by
+            <a href="https://getbootstrap.com/" target="_blank"><svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" class="bi bi-bootstrap me-1 mb-1" viewBox="0 0 16 16">
+              <path d="M5.062 12h3.475c1.804 0 2.888-.908 2.888-2.396 0-1.102-.761-1.916-1.904-2.034v-.1c.832-.14 1.482-.93 1.482-1.816 0-1.3-.955-2.11-2.542-2.11H5.062zm1.313-4.875V4.658h1.78c.973 0 1.542.457 1.542 1.237 0 .802-.604 1.23-1.764 1.23zm0 3.762V8.162h1.822c1.236 0 1.887.463 1.887 1.348 0 .896-.627 1.377-1.811 1.377z"/>
+              <path d="M0 4a4 4 0 0 1 4-4h8a4 4 0 0 1 4 4v8a4 4 0 0 1-4 4H4a4 4 0 0 1-4-4zm4-3a3 3 0 0 0-3 3v8a3 3 0 0 0 3 3h8a3 3 0 0 0 3-3V4a3 3 0 0 0-3-3z"/>
+            </svg>BootStrap</a> and
+            <a href="https://vuejs.org/" target="_blank"><svg width="16" height="16" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg" class="bi me-1 mb-1">
+              <path d="M2 4L16 28L30 4H24.5L16 18.5L7.5 4H2Z" fill="#41B883"/>
+              <path d="M7.5 4L16 18.5L24.5 4H19.5L16.0653 10.0126L12.5 4H7.5Z" fill="#35495E"/>
+            </svg>Vue.js</a>. <br>Licensed MIT.
+          </p>
         </div>
       </div>
 

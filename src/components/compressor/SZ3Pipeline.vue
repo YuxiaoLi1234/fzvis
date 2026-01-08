@@ -1,6 +1,9 @@
 <script>
+import BaseCompressorConfig from './BaseCompressorConfig.vue';
+
 export default {
   name: 'PipelineView',
+  extends: BaseCompressorConfig,
   emits: ['moduleSelected', 'pipeline-modules-updated'],
   data() {
     return {
@@ -47,6 +50,12 @@ export default {
       unsupportedModalType: '',
     };
   },
+  created() {
+    // Ensure base lifecycle still runs
+    if (typeof BaseCompressorConfig?.created === 'function') {
+      BaseCompressorConfig.created.call(this);
+    }
+  },
   computed: {
     unsupportedModalTitle() {
       if (this.unsupportedModalType === 'unsupported') {
@@ -58,6 +67,9 @@ export default {
     }
   },
   methods: {
+    getCurrentModules() {
+      return this.compressor.modules;
+    },
     selectCompressorModule(idxObj) {
       const { moduleIdx } = idxObj;
       if (this.selectedModule &&
@@ -113,7 +125,8 @@ export default {
       }
       if (dragging && dragging.moduleId === targetModuleId && optionObj.state !== 'unavailable') {
         this.compressor.modules[idxObj.moduleIdx].value = { [optionObj.label]: optionObj.value };
-        this.$emit('pipeline-modules-updated', this.compressor.modules);
+        // Notify via base helper to also set status/history
+        this.onModulesUpdated(this.compressor.modules);
       }
       this.draggingOption = null;
     },
@@ -170,7 +183,7 @@ export default {
 
     removeModuleValue(moduleIdx) {
       this.compressor.modules[moduleIdx].value = {};
-      this.$emit('pipeline-modules-updated', this.compressor.modules);
+      this.onModulesUpdated(this.compressor.modules);
     },
   },
 };

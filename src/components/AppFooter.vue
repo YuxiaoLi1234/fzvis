@@ -8,6 +8,12 @@
         <span v-if="history.length" class="badge bg-secondary ms-2">{{ history.length }}</span>
       </button>
 
+      <!-- Config Graph button -->
+      <button class="btn btn-sm btn-outline-primary d-flex align-items-center" @click="toggleConfigGraphPane">
+        <i class="bi bi-diagram-3 me-2"></i>
+        Config Graph
+      </button>
+
       <!-- Status (center) -->
       <div class="flex-grow-1 text-center d-flex justify-content-center align-items-center gap-2">
         <template v-if="progress.active">
@@ -24,10 +30,12 @@
         </template>
       </div>
 
-      <!-- AI Assistant button (right) -->
-      <button class="btn btn-sm btn-primary" @click="toggleChat">
-        <i class="bi bi-robot me-2"></i> Assistant
-      </button>
+      <!-- Right-side buttons -->
+      <div class="ms-auto d-flex align-items-center gap-2">
+        <button class="btn btn-sm btn-primary" @click="toggleChat">
+          <i class="bi bi-robot me-2"></i> Assistant
+        </button>
+      </div>
     </div>
 
     <!-- Floating Chat Panel -->
@@ -187,6 +195,10 @@ export default {
     },
     toggleHistory() {
       this.showHistory = !this.showHistory;
+    },
+    toggleConfigGraphPane() {
+      const next = !this.$store.state.showConfigGraphInPane;
+      this.$store.commit('setShowConfigGraphInPane', next);
     },
     clearHistory() {
       this.$store.commit('clearHistory');
