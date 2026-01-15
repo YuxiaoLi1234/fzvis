@@ -1,10 +1,10 @@
 <template>
   <div class="data-clipping card shadow-sm">
-    <div class="card-body">
-      <div class="d-flex flex-column flex-md-row justify-content-between align-items-md-center gap-2 mb-3">
+    <div class="card-body pt-2">
+      <div class="d-flex flex-column flex-md-row justify-content-between align-items-md-center gap-2 mb-2">
         <div>
-          <h5 class="card-title mb-1">Clip Dataset</h5>
-          <p class="card-subtitle text-muted small mb-0">Specify inclusive index ranges per axis.</p>
+          <h5 class="card-title mb-2">Clip Dataset</h5>
+          <p class="card-subtitle text-muted small mb-0">Specify index ranges per dimension.<br/>[start, end)</p>
         </div>
         <div v-if="datasetSummary" class="text-muted small">
           Original size: {{ datasetSummary.width }} × {{ datasetSummary.height }} × {{ datasetSummary.depth }}
@@ -26,7 +26,7 @@
               <div class="d-flex justify-content-between align-items-baseline mb-2">
                 <span class="fw-semibold">{{ field.label }}</span>
                 <span class="text-muted small">
-                  0 – {{ field.size > 0 ? field.size - 1 : 0 }}
+                  [0 – {{ field.size > 0 ? field.size : 0 }})
                 </span>
               </div>
               <div class="mb-2">
@@ -41,18 +41,18 @@
                 >
               </div>
               <div>
-                <label class="form-label form-label-sm mb-1">End (inclusive)</label>
+                <label class="form-label form-label-sm mb-1">End (exclusive)</label>
                 <input
                   type="number"
                   class="form-control form-control-sm"
                   :min="0"
-                  :max="Math.max(field.size - 1, 0)"
+                  :max="field.size"
                   v-model.number="ranges[field.key].end"
                   @input="onRangeInput(field.key)"
                 >
               </div>
               <div class="text-muted small mt-3">
-                Selection length: {{ Math.max(field.outputLength, 0) }}
+                Length: {{ Math.max(field.outputLength, 0) }}
               </div>
             </div>
           </div>
@@ -107,6 +107,7 @@ export default {
       default: 'Clipping',
     },
   },
+
   data() {
     return {
       ranges: {
@@ -118,14 +119,15 @@ export default {
       originalDimensions: null,
     };
   },
+
   computed: {
     dimensionFields() {
       const summary = this.datasetSummary;
       const normalized = this.normalizedRanges;
       const base = [
-        { key: 'width', label: 'Width (X)' },
-        { key: 'height', label: 'Height (Y)' },
-        { key: 'depth', label: 'Depth (Z)' },
+        { key: 'width', label: 'Width' },
+        { key: 'height', label: 'Height' },
+        { key: 'depth', label: 'Depth' },
       ];
       return base.map((entry) => {
         const size = summary ? Number(summary[entry.key]) || 0 : 0;
@@ -137,6 +139,7 @@ export default {
         };
       });
     },
+
     normalizedRanges() {
       if (!this.datasetSummary) return null;
       return {
@@ -145,6 +148,7 @@ export default {
         depth: this.normalizeRange(this.ranges.depth, this.datasetSummary.depth),
       };
     },
+
     clippedDimensions() {
       if (!this.normalizedRanges) return null;
       return {
@@ -153,6 +157,7 @@ export default {
         depth: this.normalizedRanges.depth.length,
       };
     },
+
     validationError() {
       if (!this.datasetSummary) {
         return 'No dataset loaded.';
@@ -170,13 +175,15 @@ export default {
       }
       return issues.length ? issues[0] : '';
     },
+
     canApply() {
       return Boolean(this.datasetSummary) && !this.validationError && !this.isApplying;
     },
   },
+
   watch: {
     datasetSummary: {
-      handler(summary) {
+      handler(summary, oldSummary) {
         // Save the first seen dataset dimensions as the original baseline
         if (summary && !this.originalDimensions) {
           this.originalDimensions = {
@@ -184,11 +191,17 @@ export default {
             height: Number(summary.height) || 0,
             depth: Number(summary.depth) || 0,
           };
+          this.resetRanges();
+        } else if (summary && oldSummary) {
+          // Dataset changed (e.g., after applying filter) - update range limits but keep current values
+          this.adjustRangesToNewDimensions(summary);
+        } else if (summary && !oldSummary) {
+          this.resetRanges();
         }
-        this.resetRanges();
       },
       immediate: true,
     },
+
     ranges: {
       deep: true,
       handler() {
@@ -199,6 +212,7 @@ export default {
       },
     },
   },
+
   methods: {
     onRangeInput(key) {
       if (!['width', 'height', 'depth'].includes(key)) return;
@@ -210,6 +224,7 @@ export default {
         this.markDirty();
       }
     },
+
     resetRanges(summaryOverride) {
       // Prefer original dimensions if available; else use provided summary or current
       const base = this.originalDimensions || summaryOverride || this.datasetSummary;
@@ -221,9 +236,9 @@ export default {
       this.isUpdatingRanges = true;
       try {
         const defaults = {
-          width: summary ? Math.max(Number(summary.width) - 1, 0) : 0,
-          height: summary ? Math.max(Number(summary.height) - 1, 0) : 0,
-          depth: summary ? Math.max(Number(summary.depth) - 1, 0) : 0,
+          width: summary ? Math.max(Number(summary.width), 0) : 0,
+          height: summary ? Math.max(Number(summary.height), 0) : 0,
+          depth: summary ? Math.max(Number(summary.depth), 0) : 0,
         };
         for (const key of ['width', 'height', 'depth']) {
           if (!this.ranges[key]) {
@@ -238,11 +253,41 @@ export default {
       }
       this.clearDirty();
     },
+
+    adjustRangesToNewDimensions(summary) {
+      // Adjust ranges if new dimensions are smaller than current values
+      const newDims = {
+        width: Number(summary.width) || 0,
+        height: Number(summary.height) || 0,
+        depth: Number(summary.depth) || 0,
+      };
+      
+      this.isUpdatingRanges = true;
+      try {
+        for (const key of ['width', 'height', 'depth']) {
+          const newSize = newDims[key];
+          if (this.ranges[key]) {
+            // Clamp end to new size if needed
+            if (this.ranges[key].end > newSize) {
+              this.ranges[key].end = newSize;
+            }
+            // Clamp start if needed
+            if (this.ranges[key].start >= newSize) {
+              this.ranges[key].start = Math.max(0, newSize - 1);
+            }
+          }
+        }
+      } finally {
+        this.isUpdatingRanges = false;
+      }
+    },
+
     toSafeIndex(value) {
       const num = Number(value);
       if (!Number.isFinite(num)) return 0;
       return Math.max(0, Math.floor(num));
     },
+
     normalizeRange(range, size) {
       const sizeInt = Math.max(Number(size) || 0, 0);
       if (sizeInt <= 0) {
@@ -252,12 +297,13 @@ export default {
       const rawStart = this.toSafeIndex(range?.start ?? 0);
       const rawEnd = this.toSafeIndex(range?.end ?? maxIndex);
       const clampedStart = Math.min(Math.max(rawStart, 0), maxIndex);
-      const clampedEnd = Math.min(Math.max(rawEnd, 0), maxIndex);
+      const clampedEnd = Math.min(Math.max(rawEnd, 0), sizeInt);
       const start = Math.min(clampedStart, clampedEnd);
       const end = Math.max(clampedStart, clampedEnd);
-      const length = end - start + 1;
+      const length = end - start;
       return { start, end, length };
     },
+
     cloneRanges(ranges) {
       if (!ranges) return null;
       return {
@@ -266,8 +312,23 @@ export default {
         depth: { ...ranges.depth },
       };
     },
+
     applyClipping() {
       if (!this.canApply || !this.normalizedRanges) return;
+      
+      // Store original dataset if this is the first filter operation
+      if (!this.$store.state.originalDataset && this.$store.state.dataset) {
+        this.$store.commit('setOriginalDataset', {
+          name: this.$store.state.dataset.name,
+          type: this.$store.state.dataset.type,
+          content: this.$store.state.dataset.content,
+          dimensions: this.$store.state.dataset.dimensions,
+          precision: this.$store.state.dataset.precision,
+          size: this.$store.state.dataset.size,
+          vars: this.$store.state.dataset.vars,
+        });
+      }
+      
       const context = {
         ranges: this.cloneRanges(this.normalizedRanges),
         originalDimensions: this.datasetSummary
@@ -278,6 +339,7 @@ export default {
         console.error('Failed to apply clipping:', error);
       });
     },
+
     getTypedArrayConstructor(precision) {
       const map = {
         f: Float32Array,
@@ -291,6 +353,7 @@ export default {
       };
       return map[precision] || null;
     },
+
     validateOperation(context) {
       if (!this.datasetSummary) {
         return 'No dataset loaded.';
@@ -304,6 +367,7 @@ export default {
       }
       return true;
     },
+
     async performOperation(context) {
       if (!this.datasetSummary) {
         throw new Error('Dataset summary unavailable.');
@@ -338,9 +402,9 @@ export default {
       const rowStride = width;
       const sliceStride = width * height;
 
-      for (let z = depthRange.start; z <= depthRange.end; z += 1) {
+      for (let z = depthRange.start; z < depthRange.end; z += 1) {
         const sliceBase = z * sliceStride;
-        for (let y = heightRange.start; y <= heightRange.end; y += 1) {
+        for (let y = heightRange.start; y < heightRange.end; y += 1) {
           const rowBase = sliceBase + y * rowStride + widthRange.start;
           const rowEnd = rowBase + clippedWidth;
           result.set(source.subarray(rowBase, rowEnd), destOffset);
@@ -353,6 +417,7 @@ export default {
         content: result.buffer,
         dimensions: newDimensions,
         precision,
+        isFilterResult: true, // Mark as filter result to prevent clearing original dataset
       });
       if (this.$store?.state?.comparisonData) {
         this.$store.commit('setComparisonData', null);
@@ -364,6 +429,7 @@ export default {
         originalDimensions: context.originalDimensions,
       };
     },
+
     formatDimensions(dimensions) {
       if (!dimensions) return '';
       if (Array.isArray(dimensions)) {
@@ -373,6 +439,7 @@ export default {
         .map((val) => `${val ?? '?'}`)
         .join('×');
     },
+
     buildHistoryEntry(result, context) {
       const original = context?.originalDimensions || result?.originalDimensions;
       const newDims = result?.dimensions;
@@ -394,6 +461,7 @@ export default {
         },
       };
     },
+
     buildSuccessStatusMessage(result) {
       const dims = result?.dimensions;
       if (dims) {
@@ -406,9 +474,6 @@ export default {
 </script>
 
 <style scoped>
-.data-clipping .card-title {
-  font-size: 1rem;
-}
 .range-card {
   background-color: #f8f9fa;
 }

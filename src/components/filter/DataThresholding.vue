@@ -1,9 +1,12 @@
 <template>
-  <div class="card border-0">
-    <div class="card-body p-0">
+  <div class="card shadow-sm">
+    <div class="card-body">
       <div class="mb-3">
-        <label class="form-label fw-semibold">Threshold mode</label>
-        <div class="btn-group" role="group" aria-label="Threshold mode">
+        <div class="gap-2 mb-2">
+          <h5 class="card-title mb-2">Thresholding</h5>
+          <p class="card-subtitle text-muted small mb-0">Choose a threshold mode.</p>
+        </div>
+        <div class="btn-group w-100 flex-wrap" role="group" aria-label="Threshold mode">
           <input
             type="radio"
             class="btn-check"
@@ -53,7 +56,7 @@
             :value="lower"
             @input="onLowerInput($event.target.value)"
             :disabled="mode === 'above'"
-            placeholder="e.g., 0.0"
+            placeholder="0.0"
           />
         </div>
         <div class="col-6">
@@ -66,7 +69,7 @@
             :value="upper"
             @input="onUpperInput($event.target.value)"
             :disabled="mode === 'below'"
-            placeholder="e.g., 1.0"
+            placeholder="1.0"
           />
         </div>
       </div>
@@ -83,14 +86,14 @@
         <div class="d-flex align-items-center gap-2">
           <button
             type="button"
-            class="btn btn-outline-secondary btn-sm"
+            class="btn btn-outline-secondary"
             @click="resetForm"
           >
             Reset
           </button>
           <button
             type="button"
-            class="btn btn-primary btn-sm"
+            class="btn btn-primary"
             :disabled="!hasDataset || isApplying || !isFormValid"
             @click="applyOperation({ mode, lower, upper })"
           >
@@ -264,7 +267,7 @@ export default {
 </script>
 
 <style scoped>
-.card-body :deep(.btn-group .btn) {
-  min-width: 8rem;
+.btn-group :deep(.btn) {
+  min-width: 0;
 }
 </style>

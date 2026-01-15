@@ -227,6 +227,18 @@ export default {
         this.lastRunResult = result ?? null;
         this.clearDirty();
 
+        // Track this filter operation in the store for undo functionality
+        if (this.$store && this.filterType === 'filter') {
+          this.$store.commit('addFilterOperation', {
+            nodeId: this.$attrs['data-node-id'] || `${this.filterType}-${Date.now()}`,
+            filterType: this.filterType,
+            filterName: this.filterName,
+            context: context || null,
+            result: result || null,
+            timestamp: Date.now(),
+          });
+        }
+
         const historyEntry = this.buildHistoryEntry(result, context);
         this.recordHistoryEntry(historyEntry);
 

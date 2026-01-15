@@ -5,15 +5,13 @@ import MetricVis from './components/vis/MetricVis.vue'
 import AppFooter from './components/AppFooter.vue'
 import { Splitpanes, Pane } from 'splitpanes'
 import axios from 'axios';
-import PipelineBrowser from './components/PipelineBrowser.vue'
-import ConfigGraph from './components/ConfigGraph.vue'
+import DataFlowWorkbench from './components/dataflow/DataFlowWorkbench.vue'
 
 export default {
   name: 'App',
   components: {
     AppHeader,
-    PipelineBrowser,
-    ConfigGraph,
+    DataFlowWorkbench,
     HelloVtk,
     MetricVis,
     AppFooter,
@@ -28,6 +26,7 @@ export default {
       authError: '',
       isAuthenticating: false,
       resizeTimeout: null,
+      rightPaneVisible: true,
     };
   },
 
@@ -104,6 +103,13 @@ export default {
     onSplitResize() {
       window.dispatchEvent(new Event('resize'));
     },
+
+    toggleRightPane() {
+      this.rightPaneVisible = !this.rightPaneVisible;
+      this.$nextTick(() => {
+        window.dispatchEvent(new Event('resize'));
+      });
+    },
   }
 }
 </script>
@@ -145,24 +151,18 @@ export default {
     <div v-else class="d-flex flex-column vh-100 overflow-hidden pt-2 px-3">
       <AppHeader />
 
-      <div class="d-flex flex-grow-1 overflow-hidden mb-3">
+      <div class="d-flex flex-grow-1 overflow-hidden mb-3 position-relative">
         <Splitpanes class="default-theme w-100 h-100" :dbl-click-splitter="false" @resized="debouncedResize">
-          <Pane :size="30" min-size="25" class="h-100 overflow-auto">
-            <div class="p-2 d-flex flex-column h-100">
-              <PipelineBrowser />
-              <div v-if="$store.state.showConfigGraphInPane" class="mt-3">
-                <ConfigGraph
-                  :baseConfigurations="$store.state.baseConfigurations"
-                  :derivedConfigurations="$store.state.derivedConfigurations"
-                  :savedConfigurations="$store.state.savedConfigurations"
-                  :compressorOptions="$store.state.compressorOptions"
-                />
-              </div>
+          <!-- Left: DataFlow Workbench -->
+          <Pane :size="rightPaneVisible ? 50 : 100" min-size="35" class="h-100 overflow-auto">
+            <div class="d-flex flex-column h-100">
+              <DataFlowWorkbench />
             </div>
           </Pane>
 
-          <Pane :size="70" min-size="50" class="h-100 overflow-auto">
-            <div class="d-flex flex-column h-100 ms-3 main-right">
+          <!-- Right: Visualization Tabs -->
+          <Pane v-if="rightPaneVisible" :size="50" min-size="35" class="h-100 overflow-auto">
+            <div class="d-flex flex-column h-100 main-right">
               <ul class="nav nav-tabs" role="tablist">
                 <li class="nav-item" role="presentation">
                   <button class="nav-link active" id="datavis-tab" data-bs-toggle="tab" data-bs-target="#datavis" type="button" role="tab" aria-selected="true"><i class="bi bi-eye me-1"></i>Data Visualization</button>

@@ -18,6 +18,8 @@ export default createStore({
   state: {
     comparisonData: null,
     dataset: null,
+    originalDataset: null, // Store the original unfiltered dataset
+    filterOperations: [], // Stack of applied filter operations
     isTimeVarying: false,
     status: { type: 'secondary', message: 'Idle' },
     history: [],
@@ -28,8 +30,26 @@ export default createStore({
     savedConfigurations: {},
     compressorOptions: {},
   },
-  
+
   mutations: {
+    setOriginalDataset(state, payload) {
+      // Store the original dataset when first loaded
+      if (!payload) {
+        state.originalDataset = null;
+        return;
+      }
+      state.originalDataset = {
+        name: payload.name ?? null,
+        type: payload.type ?? 'plain',
+        content: payload.content ?? null,
+        dimensions: payload.dimensions ?? null,
+        precision: payload.precision ?? null,
+        size: payload.size,
+        vars: payload.vars,
+      };
+      // Also clear filter operations
+      state.filterOperations = [];
+    },
     setComparisonData(state, payload) {
       if (payload) {
         for (const key in payload) {
@@ -66,7 +86,41 @@ export default createStore({
       if ((next?.type === 'plain' || next?.type === undefined) && payload?.vars === undefined) {
         next.vars = undefined;
       }
+      
+      // Check if this is a new dataset being loaded (not a filter operation result)
+      // Clear original dataset and filter operations when loading new data
+      const isNewDataset = payload.content && 
+                          (!state.dataset || 
+                           payload.content !== state.dataset.content ||
+                           payload.name !== state.dataset.name);
+      
+      if (isNewDataset && !payload.isFilterResult) {
+        state.originalDataset = null;
+        state.filterOperations = [];
+      }
+      
       state.dataset = next;
+    },
+    clearFileData(state) {
+      state.dataset = null;
+      state.originalDataset = null;
+      state.filterOperations = [];
+    },
+    addFilterOperation(state, operation) {
+      // Add a filter operation to the stack
+      // operation should contain: { nodeId, filterType, context, result }
+      if (!operation) return;
+      state.filterOperations.push(operation);
+    },
+    removeFilterOperation(state, nodeId) {
+      // Remove a filter operation by nodeId
+      const index = state.filterOperations.findIndex(op => op.nodeId === nodeId);
+      if (index !== -1) {
+        state.filterOperations.splice(index, 1);
+      }
+    },
+    clearFilterOperations(state) {
+      state.filterOperations = [];
     },
     setTimeVarying(state, payload) {
       state.isTimeVarying = payload;
@@ -105,7 +159,7 @@ export default createStore({
       state.showConfigGraphInPane = Boolean(payload);
     },
   },
-  
+
   actions: {},
   modules: {}
 });
