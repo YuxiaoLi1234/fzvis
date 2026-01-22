@@ -180,7 +180,7 @@ def send_data_file():
         return jsonify({"error": "File not found"}), 404
     
     # Handle different file types
-    if fileType == "plain":
+    if fileType == "raw":
         return send_file(filePath, as_attachment=False)
     elif fileType == "netcdf":
         variable = request.args.get("variable")
@@ -231,7 +231,7 @@ def upload_file():
                 variableKeys = dataSet.variables.keys()
                 datasetMetadata["vars"] = read_netcdf_file(datasetMetadata["name"], "metadata")
         
-        elif fileType == "plain":
+        elif fileType == "raw":
             datasetMetadata["width"] = request.form.get("width")
             datasetMetadata["height"] = request.form.get("height")
             datasetMetadata["depth"] = request.form.get("depth")
@@ -260,7 +260,7 @@ def update_datasets():
         if request.form.get("currentDataset"):
             currentDataset = json.loads(request.form["currentDataset"])
             # print("currentDataset:", currentDataset)
-            if currentDataset["type"] == "plain":
+            if currentDataset["type"] == "raw":
                 threading.Thread(target=read_input_data, args=(currentDataset,)).start()
 
         # Remove the files if deleted datasets are provided

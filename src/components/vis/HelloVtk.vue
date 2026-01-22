@@ -244,7 +244,7 @@ export default {
         });
 
         const renderer = fullScreenRenderer.getRenderer();
-        renderer.setBackground(0.1, 0.2, 0.3);
+        renderer.setBackground(0.439, 0.502, 0.565);
         const renderWindow = fullScreenRenderer.getRenderWindow();
         const lookupTable = vtkColorTransferFunction.newInstance();
 
@@ -274,7 +274,7 @@ export default {
           });
           
           const renderer = fullScreenRenderer.getRenderer();
-          renderer.setBackground(0.1, 0.2, 0.3);
+          renderer.setBackground(0.439, 0.502, 0.565);
           const renderWindow = fullScreenRenderer.getRenderWindow();
           const lookupTable = vtkColorTransferFunction.newInstance();
 

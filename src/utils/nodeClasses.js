@@ -206,10 +206,10 @@ export class ModuleNode extends BaseNode {
 /**
  * Compression Node: The main processing module or compressor.
  */
-export class CompressionNode extends BaseNode {
+export class CompressorNode extends BaseNode {
   constructor(id, label, icon = 'bi-cpu', compressorId = null) {
     super(id, label, icon, 1, 1);
-    this.type = 'compression';
+    this.type = 'compressor';
     this.initializePorts('Data In', 'Compressed Data');
 
     // Map compressor IDs to their respective components
@@ -218,6 +218,11 @@ export class CompressionNode extends BaseNode {
       'testing': 'TestingPipeline' // Example
     };
     this.editorComponent = componentMap[compressorId] || null;
+    
+    // Expansion state for showing internal pipeline modules
+    this.expanded = false;
+    this.modules = []; // Pipeline modules from the compressor component
+    this.selectedModuleIdx = null; // Track which module is selected for detail view
   }
 
   static canAdd(existingNodes) {
@@ -243,7 +248,7 @@ export class NodeFactory {
       case 'module':
         return new ModuleNode(id, label, icon, defId, config);
       case 'compressor':
-        return new CompressionNode(id, label, icon, defId);
+        return new CompressorNode(id, label, icon, defId);
       default:
         return new BaseNode(id, label, icon);
     }
@@ -254,8 +259,7 @@ export class NodeFactory {
       case 'source': return DataSourceNode;
       case 'filter': return FilterNode;
       case 'module': return ModuleNode;
-      case 'compressor':
-      case 'compression': return CompressionNode;
+      case 'compressor': return CompressorNode;
       default: return BaseNode;
     }
   }

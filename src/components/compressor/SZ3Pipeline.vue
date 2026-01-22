@@ -4,6 +4,16 @@ import BaseCompressorConfig from './BaseCompressorConfig.vue';
 export default {
   name: 'PipelineView',
   extends: BaseCompressorConfig,
+  props: {
+    focusedModuleIdx: {
+      type: Number,
+      default: null,
+    },
+    modules: {
+      type: Array,
+      default: null,
+    },
+  },
   emits: ['moduleSelected', 'pipeline-modules-updated'],
   data() {
     return {
@@ -20,6 +30,8 @@ export default {
       selectedModule: null,
       hoverModuleIdx: null,
       draggingOption: null,
+      selectedOption: null,
+      pendingChanges: false,
       moduleOptions: {
         predictor: [
           { label: 'Bypass', state: 'available', value: 'ALGO_NOPRED' },
@@ -55,6 +67,23 @@ export default {
     if (typeof BaseCompressorConfig?.created === 'function') {
       BaseCompressorConfig.created.call(this);
     }
+    if (this.modules && this.modules.length) {
+      this.compressor.modules = this.modules;
+    }
+  },
+  mounted() {
+    // Emit initial modules so the parent can show the expand button
+    this.$emit('pipeline-modules-updated', this.compressor.modules);
+  },
+  watch: {
+    modules: {
+      handler(newModules) {
+        if (newModules && newModules.length) {
+          this.compressor.modules = newModules;
+        }
+      },
+      deep: true,
+    },
   },
   computed: {
     unsupportedModalTitle() {
@@ -185,6 +214,47 @@ export default {
       this.compressor.modules[moduleIdx].value = {};
       this.onModulesUpdated(this.compressor.modules);
     },
+
+    selectOption(option) {
+      if (option.state === 'unavailable') {
+        this.unsupportedModalMessage = `Option '<strong>${option.label}</strong>' is <strong>not supported</strong> for <strong>${this.compressor.modules[this.focusedModuleIdx].label}</strong>.`;
+        this.unsupportedModalType = 'unsupported';
+        this.showUnsupportedModal = true;
+        return;
+      }
+      if (option.state === 'experimental') {
+        this.unsupportedModalMessage = `Option '<strong>${option.label}</strong>' is currently in implementation for <strong>${this.compressor.modules[this.focusedModuleIdx].label}</strong>. Use with caution.`;
+        this.unsupportedModalType = 'experimental';
+        this.showUnsupportedModal = true;
+      }
+      this.selectedOption = option;
+      this.pendingChanges = true;
+    },
+
+    applyConfiguration() {
+      if (this.focusedModuleIdx === null || !this.selectedOption) return;
+      
+      this.compressor.modules[this.focusedModuleIdx].value = { 
+        [this.selectedOption.label]: this.selectedOption.value 
+      };
+      this.onModulesUpdated(this.compressor.modules);
+      this.pendingChanges = false;
+    },
+
+    getCurrentSelection() {
+      if (this.focusedModuleIdx === null) return null;
+      const moduleValue = this.compressor.modules[this.focusedModuleIdx].value;
+      if (!moduleValue || !Object.keys(moduleValue).length) return null;
+      const [label] = Object.keys(moduleValue);
+      return label;
+    },
+
+    isOptionSelected(option) {
+      if (this.pendingChanges) {
+        return this.selectedOption?.label === option.label;
+      }
+      return this.getCurrentSelection() === option.label;
+    },
   },
 };
 </script>
@@ -211,69 +281,62 @@ export default {
       <div class="modal-backdrop fade show"></div>
     </div>
 
-    <div class="row">
-      <div class="col-md-5">
-        <div class="vertical-pipeline d-flex flex-column align-items-start">
-          <template v-for="(module, moduleIdx) in compressor.modules" :key="module.id">
-            <div :class="['pipeline-item d-flex align-items-center', moduleIdx < compressor.modules.length - 1 ? 'mb-4' : 'mb-1']" style="position: relative;">
-              <div v-if="moduleIdx > 0" class="pipeline-vertical-connector"></div>
-              <div
-                class="pipeline-module card text-center border-2"
-                :class="{'border-primary shadow': selectedModule && selectedModule.type === 'compressor' && 
-                  selectedModule.idx && selectedModule.idx.moduleIdx === moduleIdx, 
-                  'border-secondary': !selectedModule || selectedModule.type !== 'compressor' || 
-                  !selectedModule.idx || selectedModule.idx.moduleIdx !== moduleIdx}"
-                style="min-width: 120px; cursor: pointer;"
-                @click="selectCompressorModule({moduleIdx})"
-                @dragover.prevent="onModuleDragOver(module.id, $event)"
-                @dragleave="onModuleDragLeave($event)"
-                @drop="onDropCompressorOption({moduleIdx}, $event)"
-                @mouseenter="onModuleMouseEnter(moduleIdx)"
-                @mouseleave="onModuleMouseLeave(moduleIdx)"
-              >
-                <div class="card-body d-flex flex-column justify-content-center">
-                  <span class="fw-bold" :title="module.label">{{ module.label }}</span>
-                  <div v-if="Object.keys(module.value).length" class="mt-2 position-relative">
-                    <div class="bg-light border rounded px-2 py-1 text-success w-100 d-flex align-items-center justify-content-center">
-                      <span class="small">{{ Object.keys(module.value)[0] }}</span>
-                      <button
-                        type="button"
-                        class="btn btn-link btn-sm text-danger ms-1 p-0"
-                        title="Remove option"
-                        @click.stop="removeModuleValue(moduleIdx)"
-                      >
-                        <span aria-hidden="true">&times;</span>
-                      </button>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            </div>
-          </template>
-        </div>
+    <!-- Show options panel only when a module is focused -->
+    <div v-if="focusedModuleIdx !== null">
+      <div class="alert alert-primary mb-3">
+        <i class="bi bi-bullseye me-2"></i>
+        <strong>Configuring:</strong> {{ compressor.modules[focusedModuleIdx]?.label }}
       </div>
-      <div class="col-md-7">
-        <div v-if="hoverModuleIdx !== null || (selectedModule && selectedModule.type === 'compressor')" class="options-panel card p-3">
-          <h6 class="fw-bold mb-3">Available Options</h6>
-          <div v-for="option in getOptionsForModule(compressor.modules[(selectedModule && selectedModule.type === 'compressor') ? selectedModule.idx.moduleIdx : hoverModuleIdx].id)" :key="option.label" class="option-item mb-2">
-            <span
-              class="badge px-3 py-2"
-              :class="{
-                'bg-info text-dark': option.state === 'available',
-                'bg-warning text-dark': option.state === 'experimental',
-                'bg-secondary': option.state === 'unavailable'
-              }"
-              draggable="true"
-              :style="option.state === 'unavailable' ? 'pointer-events:none;opacity:0.6;' : option.state === 'unavailable' ? '' : 'cursor:pointer;'"
-              @dragstart="option.state !== 'unavailable' && onOptionDragStart(option, compressor.modules[(selectedModule && selectedModule.type === 'compressor') ? selectedModule.idx.moduleIdx : hoverModuleIdx].id, $event)"
-            >{{ option.label }}
-              <span v-if="option.state === 'experimental'" class="small fst-italic">(experimental)</span>
-              <span v-if="option.state === 'unavailable'" class="small fst-italic">(not supported)</span>
+      
+      <div class="options-panel p-3">
+        <h6 class="fw-bold mb-2">Available Options</h6>
+        <p class="text-muted small mb-3">Select an option and click Apply to configure this module.</p>
+        
+        <div class="d-flex flex-wrap gap-2 mb-3">
+          <button
+            v-for="option in getOptionsForModule(compressor.modules[focusedModuleIdx].id)"
+            :key="option.label"
+            type="button"
+            class="btn"
+            :class="{
+              'btn-primary': isOptionSelected(option) && option.state === 'available',
+              'btn-outline-primary': !isOptionSelected(option) && option.state === 'available',
+              'btn-warning': isOptionSelected(option) && option.state === 'experimental',
+              'btn-outline-warning': !isOptionSelected(option) && option.state === 'experimental',
+              'btn-secondary': option.state === 'unavailable'
+            }"
+            :disabled="option.state === 'unavailable'"
+            @click="selectOption(option)"
+          >
+            {{ option.label }}
+            <span v-if="option.state === 'experimental'" class="small fst-italic"> (exp)</span>
+            <i v-if="isOptionSelected(option)" class="bi bi-check-lg ms-1"></i>
+          </button>
+        </div>
+
+        <div class="d-flex justify-content-between align-items-center">
+          <div class="text-muted small">
+            <span v-if="getCurrentSelection()">
+              Current: <strong>{{ getCurrentSelection() }}</strong>
+            </span>
+            <span v-else class="text-warning">
+              <i class="bi bi-exclamation-triangle me-1"></i>Not configured
             </span>
           </div>
+          <button
+            type="button"
+            class="btn btn-success"
+            :disabled="!pendingChanges"
+            @click="applyConfiguration"
+          >
+            <i class="bi bi-check-circle me-1"></i>Apply
+          </button>
         </div>
-        <div v-else class="text-muted">Select a module to view options.</div>
       </div>
+    </div>
+    <div v-else class="alert alert-info">
+      <i class="bi bi-info-circle me-2"></i>
+      <strong>Click the expand button</strong> on the compressor node in the graph to view and configure pipeline modules.
     </div>
   </div>
 </template>
@@ -300,13 +363,17 @@ export default {
   text-align: center;
 }
 .options-panel {
-  background: #f8f9fa;
+  background: #ffffff;
+  border: 1px solid #dee2e6;
   border-radius: 8px;
   box-shadow: 0 2px 8px rgba(0,0,0,0.04);
 }
-.option-item .badge {
-  white-space: normal;
-  word-break: break-word;
-  text-align: left;
+.options-panel .btn {
+  white-space: nowrap;
+}
+.options-panel .btn.btn-outline-primary:hover,
+.options-panel .btn.btn-outline-warning:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 2px 4px rgba(0,0,0,0.1);
 }
 </style>

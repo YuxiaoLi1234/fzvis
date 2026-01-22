@@ -37,21 +37,13 @@ export default {
       ],
       // Modules imported from PipelineBrowser definitions
       availableModules: [
-        {
-          id: 'testing',
-          label: 'Testing Module',
-          description: 'A simple testing module that accepts two inputs and generates two outputs.',
-          icon: 'bi-puzzle',
-          inputCount: 2, 
-          outputCount: 2,
-        },
         // Example: Add more modules with different configurations
         {
           id: 'merger',
           label: 'Data Merger',
           description: 'Merges three data streams into one.',
           icon: 'bi-bezier2',
-          inputCount: 3,
+          inputCount: 2,
           outputCount: 1,
         },
         {
@@ -62,8 +54,15 @@ export default {
           inputCount: 1,
           outputCount: 2,
         },
+        {
+          id: 'testing',
+          label: 'Testing Module',
+          description: 'A simple testing module that accepts two inputs and generates two outputs.',
+          icon: 'bi-puzzle',
+          inputCount: 2, 
+          outputCount: 2,
+        },
       ],
-      // Compressors imported from PipelineBrowser definitions
       availableCompressors: [
         {
           id: 'sz3',
@@ -172,7 +171,7 @@ export default {
       if (!paneEl) return;
       
       const rect = paneEl.getBoundingClientRect();
-      const availableWidth = Math.max(400, rect.width - 20);
+      const availableWidth = Math.max(400, rect.width - 15);
       let availableHeight = rect.height;
       
       if (this.selectedNode) {
@@ -546,7 +545,7 @@ export default {
         pending: 'Pending',
         stale: 'Stale',
         invalid: 'Needs Attention',
-        empty: 'No Dataset',
+        empty: 'No Data',
       };
       return textMap[status] || 'Idle';
     },
@@ -566,11 +565,124 @@ export default {
     },
     // Compressor pipeline updates
     handlePipelineModulesUpdated(mods) {
-      if (!this.selectedNode || this.selectedNode.type !== 'compression') return;
+      if (!this.selectedNode || this.selectedNode.type !== 'compressor') return;
+      
+      // Only update timestamp if modules actually changed
+      const hasChanged = !this.selectedNode.modules || 
+        JSON.stringify(this.selectedNode.modules) !== JSON.stringify(mods);
+      
       this.selectedNode.modules = mods;
-      this.selectedNode.lastUpdatedAt = Date.now();
+      if (hasChanged) {
+        this.selectedNode.lastUpdatedAt = Date.now();
+      }
+      
       const ready = mods && mods.every(m => m?.value && Object.keys(m.value).length);
       this.selectedNode.status = ready ? 'ready' : 'pending';
+    },
+    toggleCompressorExpansion(nodeId) {
+      const node = this.nodes.find(n => n.id === nodeId);
+      if (!node || node.type !== 'compressor') return;
+      node.expanded = !node.expanded;
+      if (!node.expanded) {
+        // Clear module selection when collapsing
+        node.selectedModuleIdx = null;
+      }
+      // Recalculate canvas size after expansion state changes
+      this.$nextTick(() => {
+        this.updateCanvasSize();
+      });
+    },
+    selectCompressorModule(nodeId, moduleIdx) {
+      const node = this.nodes.find(n => n.id === nodeId);
+      if (!node || node.type !== 'compressor') return;
+      
+      // Toggle selection: if same module clicked, deselect
+      if (node.selectedModuleIdx === moduleIdx) {
+        node.selectedModuleIdx = null;
+      } else {
+        node.selectedModuleIdx = moduleIdx;
+        // Ensure node is selected too
+        this.selectedNodeId = nodeId;
+      }
+    },
+    onModuleDragOver(nodeId, moduleIdx, moduleId, event) {
+      // Check if the dragged option matches this module
+      const draggedModuleId = event.dataTransfer.getData('module-id');
+      if (draggedModuleId && draggedModuleId !== moduleId) {
+        event.dataTransfer.dropEffect = 'none';
+        event.currentTarget.style.cursor = 'not-allowed';
+      } else {
+        event.dataTransfer.dropEffect = 'copy';
+        event.currentTarget.style.cursor = 'copy';
+      }
+    },
+    onModuleDragLeave(event) {
+      event.currentTarget.style.cursor = 'pointer';
+    },
+    onModuleDrop(nodeId, moduleIdx, moduleId, event) {
+      const node = this.nodes.find(n => n.id === nodeId);
+      if (!node || node.type !== 'compressor') return;
+      
+      // Get the dragged option data
+      const optionLabel = event.dataTransfer.getData('text/plain');
+      const draggedModuleId = event.dataTransfer.getData('module-id');
+      
+      if (!optionLabel || draggedModuleId !== moduleId) {
+        event.currentTarget.style.cursor = 'pointer';
+        return;
+      }
+      
+      // Find the option value from the component's data
+      // We need to get this from the SZ3Pipeline component
+      // For now, we'll emit an event that the component can handle
+      if (this.selectedNode && this.selectedNode.editorComponent) {
+        // Update the module value directly
+        const module = node.modules[moduleIdx];
+        if (module && module.id === moduleId) {
+          // We need to get the actual option value
+          // This is a simplified version - in production you'd look it up properly
+          const moduleOptions = this.getModuleOptionsForId(node.definitionId, moduleId);
+          const option = moduleOptions?.find(opt => opt.label === optionLabel);
+          
+          if (option && option.state !== 'unavailable') {
+            module.value = { [optionLabel]: option.value };
+            node.lastUpdatedAt = Date.now();
+            
+            // Check if all modules are configured
+            const ready = node.modules.every(m => m?.value && Object.keys(m.value).length);
+            node.status = ready ? 'ready' : 'pending';
+          }
+        }
+      }
+      
+      event.currentTarget.style.cursor = 'pointer';
+    },
+    getModuleOptionsForId(compressorId, moduleId) {
+      // Return the options for a specific module based on compressor type
+      // This is hardcoded for SZ3 but should be made dynamic for extensibility
+      if (compressorId === 'sz3') {
+        const sz3Options = {
+          predictor: [
+            { label: 'Bypass', state: 'available', value: 'ALGO_NOPRED' },
+            { label: 'Interpolation', state: 'available', value: 'ALGO_INTERP' },
+            { label: 'Lorenzo', state: 'available', value: 'ALGO_INTERP_LORENZO' },
+            { label: 'Adaptive', state: 'available', value: 'ALGO_LORENZO_REG' },
+          ],
+          quantizer: [
+            { label: 'Linear-scaling', state: 'available', value: 65536 },
+          ],
+          encoder: [
+            { label: 'Bypass', state: 'available', value: '0' },
+            { label: 'Huffman', state: 'available', value: '1' },
+          ],
+          lossless: [
+            { label: 'Bypass', state: 'available', value: '0' },
+            { label: 'Zstd', state: 'available', value: '1' },
+          ],
+        };
+        return sz3Options[moduleId] || [];
+      }
+      return [];
     },
     updateCanvasSize() {
       if (!this.nodes.length) {
@@ -586,7 +698,7 @@ export default {
       let minHeight = 600;
       
       if (rect) {
-        minWidth = Math.max(400, rect.width - 20);
+        minWidth = Math.max(400, rect.width - 15);
         if (this.selectedNode) {
           minHeight = Math.max(400, rect.height * 0.6);
         } else {
@@ -599,8 +711,29 @@ export default {
       let maxY = minHeight;
       
       this.nodes.forEach(node => {
-        const nodeWidth = 420; // max node width from CSS
-        const nodeHeight = 200; // estimated max node height
+        // Calculate dynamic node width based on type and state
+        let nodeWidth = 420; // default max node width from CSS
+        
+        if (node.type === 'compressor' && node.modules && node.modules.length) {
+          // Compressor nodes are narrower when collapsed
+          nodeWidth = node.expanded ? 420 : 350;
+        }
+        
+        // Calculate dynamic node height based on type and state
+        let nodeHeight = 200; // base height
+        
+        if (node.type === 'compressor' && node.expanded && node.modules && node.modules.length) {
+          // Each module box is ~60px
+          // Add instruction text (~30px) and pipeline container padding (~20px)
+          const moduleCount = node.modules.length;
+          const moduleHeight = moduleCount * 60 + (moduleCount - 1) * 6; // 6px margin between modules
+          nodeHeight = 150 + moduleHeight + 50; // base content + modules + padding
+        } else if (node.type === 'compressor' && node.modules && node.modules.length) {
+          // Collapsed view with module list
+          const moduleCount = node.modules.length;
+          nodeHeight = 180 + (moduleCount * 20); // base + list items
+        }
+        
         const rightEdge = (node.x || 0) + nodeWidth + 50; // 50px padding
         const bottomEdge = (node.y || 0) + nodeHeight + 50; // 50px padding
         
@@ -669,7 +802,7 @@ export default {
     <Splitpanes class="default-theme w-100 h-100" :dbl-click-splitter="false" @resized="onSplitResize">
       <!-- Left: Node Palette -->
       <Pane :size="30" min-size="20" max-size="30" class="h-100 overflow-auto">
-        <div class="card shadow-sm h-100">
+        <div class="card shadow-sm">
           <div class="card-header d-flex align-items-center justify-content-between py-2">
             <span class="fw-semibold">Pipeline Components</span>
           </div>
@@ -860,14 +993,25 @@ export default {
                 @click.stop="selectNode(node.id)"
               >
                 <div class="card-header py-1 d-flex align-items-center justify-content-between">
-                  <div class="d-flex align-items-center gap-2 flex-wrap">
+                  <div class="d-flex align-items-center gap-2 flex-wrap flex-grow-1">
                     <i :class="['bi', node.icon]" aria-hidden="true"></i>
                     <span class="fw-semibold">{{ node.label }}</span>
-                    <span class="badge rounded-pill ms-1" :class="getStatusBadgeClass(node.status)">{{ getStatusLabel(node.status) }}</span>
+                    <span class="badge rounded-pill" :class="getStatusBadgeClass(node.status)">{{ getStatusLabel(node.status) }}</span>
                   </div>
-                  <button type="button" class="btn btn-sm btn-outline-danger ms-2" title="Delete node" @click.stop="removeNode(node.id)">
-                    <i class="bi bi-trash"></i>
-                  </button>
+                  <div class="d-flex align-items-center gap-1 ms-2">
+                    <button 
+                      v-if="node.type === 'compressor' && node.modules && node.modules.length"
+                      type="button"
+                      class="btn btn-sm btn-outline-secondary"
+                      @click.stop="toggleCompressorExpansion(node.id)"
+                      :title="node.expanded ? 'Collapse pipeline view' : 'Expand pipeline view'"
+                    >
+                      <i class="bi" :class="node.expanded ? 'bi-chevron-up' : 'bi-chevron-down'"></i>
+                    </button>
+                    <button type="button" class="btn btn-sm btn-outline-danger" title="Delete node" @click.stop="removeNode(node.id)">
+                      <i class="bi bi-trash"></i>
+                    </button>
+                  </div>
                 </div>
                 <div class="card-body py-2 small text-muted">
                   <div v-if="node.type === 'source'">
@@ -878,7 +1022,6 @@ export default {
                     </div>
                   </div>
                   <template v-else-if="node.type === 'filter'">
-                    <div class="mb-1">Status: <b>{{ getStatusLabel(node.status) }}</b></div>
                     <div v-if="node.lastRunAt">Last run: {{ formatTimestamp(node.lastRunAt) }}</div>
                     <div v-if="node.lastResult?.dimensions">
                       Output dimensions: {{ node.lastResult.dimensions.join('×') }}
@@ -893,9 +1036,39 @@ export default {
                       <i class="bi bi-plug"></i> Connect {{ node.inputs.length }} data sources to process.
                     </div>
                   </template>
-                  <template v-else-if="node.type === 'compression'">
-                    <div class="mb-1">Status: <b>{{ getStatusLabel(node.status) }}</b></div>
-                    <div v-if="Array.isArray(node.modules) && node.modules.length">
+                  <template v-else-if="node.type === 'compressor'">
+                    <!-- Expandable Module Pipeline View -->
+                    <div v-if="node.expanded && node.modules && node.modules.length" class="module-pipeline mt-2 mb-2">
+                      <div class="small text-muted mb-2">
+                        <i class="bi bi-info-circle me-1"></i>
+                        Click a module to configure it in the properties pane below.
+                      </div>
+                      <div 
+                        v-for="(module, idx) in node.modules" 
+                        :key="module.id"
+                        class="module-box"
+                        :class="{'selected': node.selectedModuleIdx === idx}"
+                        @click.stop="selectCompressorModule(node.id, idx)"
+                        @dragover.prevent="onModuleDragOver(node.id, idx, module.id, $event)"
+                        @dragleave="onModuleDragLeave($event)"
+                        @drop.stop="onModuleDrop(node.id, idx, module.id, $event)"
+                      >
+                        <div class="module-header">
+                          <i class="bi bi-gear-fill me-1"></i>
+                          <span class="fw-semibold">{{ module.label }}</span>
+                        </div>
+                        <div v-if="module.value && Object.keys(module.value).length" class="module-value">
+                          <span class="badge bg-success">{{ Object.keys(module.value)[0] }}</span>
+                        </div>
+                        <div v-else class="module-value">
+                          <span class="badge bg-secondary">Not Set</span>
+                        </div>
+                        <div v-if="idx < node.modules.length - 1" class="module-connector"></div>
+                      </div>
+                    </div>
+                    
+                    <!-- Collapsed summary view -->
+                    <div v-if="!node.expanded && Array.isArray(node.modules) && node.modules.length">
                       <div class="fw-semibold mt-1">Modules</div>
                       <ul class="list-unstyled mb-0">
                         <li v-for="m in node.modules" :key="m.id" class="d-flex justify-content-between align-items-center">
@@ -904,7 +1077,7 @@ export default {
                         </li>
                       </ul>
                     </div>
-                    <div v-else>No module selections yet.</div>
+                    <div v-if="!node.modules || !node.modules.length">No module selections yet.</div>
                     <div v-if="node.lastUpdatedAt" class="text-muted mt-2">Last updated: {{ formatTimestamp(node.lastUpdatedAt) }}</div>
                     <div v-if="node.description" class="text-muted small mt-2">{{ node.description }}</div>
                   </template>
@@ -1004,37 +1177,27 @@ export default {
                 <p v-else class="text-muted small mb-0">No module UI available.</p>
               </template>
 
-              <template v-else-if="selectedNode.type === 'compression'">
+              <template v-else-if="selectedNode.type === 'compressor'">
                 <div class="mb-3" v-if="selectedNode.definitionId">
-                  <label for="compressorSelection" class="form-label fw-semibold">Compressor</label>
-                  <select
-                    id="compressorSelection"
-                    class="form-select"
-                    :value="selectedNode.definitionId"
-                    :disabled="availableCompressors.length <= 1"
-                    @change="(e) => addNode('compressor', selectedNode.x, selectedNode.y, e.target.value)"
-                  >
-                    <option v-for="compressor in availableCompressors" :key="compressor.id" :value="compressor.id">
-                      {{ compressor.label }}
-                    </option>
-                  </select>
-                  <p class="text-muted small mt-2 mb-0">
-                    {{ availableCompressors.find(c => c.id === selectedNode.definitionId)?.description || '' }}
+                  <label class="form-label fw-semibold">
+                    Compressor: {{ selectedNode.label }}
+                  </label>
+                  <p class="text-muted small mb-0">
+                    {{ selectedNode.description }}
                   </p>
                 </div>
                 <template v-if="selectedNode.editorComponent">
                   <keep-alive>
                     <component
                       :is="selectedNode.editorComponent"
-                      :key="`compressor-${selectedNode.id}`"
+                      :key="`compressor-${selectedNode.id}-${selectedNode.selectedModuleIdx ?? 'all'}`"
+                      :focused-module-idx="selectedNode.selectedModuleIdx"
+                      :modules="selectedNode.modules"
                       @pipeline-modules-updated="handlePipelineModulesUpdated"
                     />
                   </keep-alive>
                 </template>
                 <p v-else class="text-muted small mb-0">No compressor UI available.</p>
-                <p class="alert alert-light border small mt-3 mb-0" v-if="selectedNode.editorComponent">
-                  Drag module options onto each stage. Once every stage has a selection the compressor will be marked as ready.
-                </p>
               </template>
 
               <template v-else>
@@ -1060,8 +1223,8 @@ export default {
 }
 
 .properties-card {
-  flex: 0 0 40%; /* occupy 40% of the right pane height */
-  min-height: 0; /* critical for nested overflow to work in flex columns */
+  flex: 0 1 auto; /* Don't grow, allow shrink, size based on content */
+  max-height: 40%;
   display: flex;
   flex-direction: column;
 }
@@ -1150,5 +1313,68 @@ export default {
 .port:hover {
   background-color: #e9ecef;
   border-color: #0d6efd;
+}
+
+/* Expandable Module Pipeline Styles */
+.compressor-expanded {
+  max-width: 520px !important; /* Allow more width when expanded */
+}
+
+.module-pipeline {
+  background: #f8f9fa;
+  border-radius: 6px;
+  padding: 8px;
+  border: 1px solid #dee2e6;
+}
+
+.module-box {
+  position: relative;
+  background: white;
+  border: 2px solid #dee2e6;
+  border-radius: 4px;
+  padding: 8px 12px;
+  margin-bottom: 8px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.module-box:hover {
+  border-color: #0d6efd;
+  box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+}
+
+.module-box.selected {
+  border-color: #0d6efd;
+  background-color: #e7f1ff;
+  box-shadow: 0 0 0 2px rgba(13, 110, 253, 0.25);
+}
+
+.module-box:last-child {
+  margin-bottom: 0;
+}
+
+.module-header {
+  font-size: 0.875rem;
+  margin-bottom: 4px;
+  color: #495057;
+}
+
+.module-value {
+  font-size: 0.75rem;
+}
+
+.module-value .badge {
+  font-size: 0.7rem;
+}
+
+.module-connector {
+  position: absolute;
+  left: 50%;
+  bottom: -8px;
+  transform: translateX(-50%);
+  width: 2px;
+  height: 8px;
+  background-color: #dee2e6;
+  z-index: -1;
 }
 </style>

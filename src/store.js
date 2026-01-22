@@ -40,7 +40,7 @@ export default createStore({
       }
       state.originalDataset = {
         name: payload.name ?? null,
-        type: payload.type ?? 'plain',
+        type: payload.type ?? 'raw',
         content: payload.content ?? null,
         dimensions: payload.dimensions ?? null,
         precision: payload.precision ?? null,
@@ -68,7 +68,7 @@ export default createStore({
       } else {
         next = {
           name: payload.name ?? state.dataset?.name ?? null,
-          type: payload.type ?? state.dataset?.type ?? 'plain',
+          type: payload.type ?? state.dataset?.type ?? 'raw',
           content: payload.content ?? state.dataset?.content ?? null,
           dimensions: payload.dimensions ?? state.dataset?.dimensions ?? null,
           precision: payload.precision ?? state.dataset?.precision ?? null,
@@ -82,8 +82,8 @@ export default createStore({
           next.size = formatBytes(byteLength);
         }
       } catch (_) { /* no-op */ }
-      // If the dataset is plain and no vars explicitly provided, clear vars
-      if ((next?.type === 'plain' || next?.type === undefined) && payload?.vars === undefined) {
+      // If the dataset is raw and no vars explicitly provided, clear vars
+      if ((next?.type === 'raw' || next?.type === undefined) && payload?.vars === undefined) {
         next.vars = undefined;
       }
       

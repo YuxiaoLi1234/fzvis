@@ -154,22 +154,22 @@ export default {
       <div class="d-flex flex-grow-1 overflow-hidden mb-3 position-relative">
         <Splitpanes class="default-theme w-100 h-100" :dbl-click-splitter="false" @resized="debouncedResize">
           <!-- Left: DataFlow Workbench -->
-          <Pane :size="rightPaneVisible ? 50 : 100" min-size="35" class="h-100 overflow-auto">
+          <Pane :size="rightPaneVisible ? 60 : 100" min-size="45" class="h-100 overflow-auto">
             <div class="d-flex flex-column h-100">
               <DataFlowWorkbench />
             </div>
           </Pane>
 
           <!-- Right: Visualization Tabs -->
-          <Pane v-if="rightPaneVisible" :size="50" min-size="35" class="h-100 overflow-auto">
+          <Pane v-if="rightPaneVisible" :size="40" min-size="30" class="h-100 overflow-auto">
             <div class="d-flex flex-column h-100 main-right">
               <ul class="nav nav-tabs" role="tablist">
                 <li class="nav-item" role="presentation">
                   <button class="nav-link active" id="datavis-tab" data-bs-toggle="tab" data-bs-target="#datavis" type="button" role="tab" aria-selected="true"><i class="bi bi-eye me-1"></i>Data Visualization</button>
                 </li>
                 <li class="nav-item" role="presentation">
-                  <button class="nav-link" id="metrics-tab" data-bs-toggle="tab" data-bs-target="#metrics" type="button" role="tab" aria-selected="true">
-                    <i class="bi bi-bar-chart-line me-1"></i>Metrics
+                  <button class="nav-link" id="metrics-tab" data-bs-toggle="tab" data-bs-target="#metrics" type="button" role="tab" aria-selected="false">
+                    <i class="bi bi-bar-chart-line me-1"></i>Metrics & Analysis
                   </button>
                 </li>
               </ul>
@@ -180,7 +180,7 @@ export default {
                   </div>
                 </div>
                 <div id="metrics" class="tab-pane fade h-100" role="tabpanel" aria-labelledby="metrics-tab">
-                  <div class="h-100 overflow-auto">
+                  <div class="h-100 overflow-hidden">
                     <MetricVis />
                   </div>
                 </div>

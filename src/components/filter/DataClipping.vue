@@ -218,8 +218,15 @@ export default {
       if (!['width', 'height', 'depth'].includes(key)) return;
       const range = this.ranges[key];
       if (!range) return;
-      range.start = this.toSafeIndex(range.start);
-      range.end = this.toSafeIndex(range.end);
+      const safeStart = this.toSafeIndex(range.start);
+      const safeEnd = this.toSafeIndex(range.end);
+      
+      // Force reactive update by reassigning the entire range object
+      this.ranges[key] = {
+        start: safeStart,
+        end: safeEnd,
+      };
+      
       if (!this.isUpdatingRanges) {
         this.markDirty();
       }
@@ -399,16 +406,20 @@ export default {
 
       const result = new ctor(resultLength);
       let destOffset = 0;
-      const rowStride = width;
-      const sliceStride = width * height;
+      
+      // Data is stored in row-major order as [depth, height, width]
+      // So the strides are: width is fastest, then height, then depth
+      const widthStride = 1;
+      const heightStride = width;
+      const depthStride = width * height;
 
       for (let z = depthRange.start; z < depthRange.end; z += 1) {
-        const sliceBase = z * sliceStride;
         for (let y = heightRange.start; y < heightRange.end; y += 1) {
-          const rowBase = sliceBase + y * rowStride + widthRange.start;
-          const rowEnd = rowBase + clippedWidth;
-          result.set(source.subarray(rowBase, rowEnd), destOffset);
-          destOffset += clippedWidth;
+          for (let x = widthRange.start; x < widthRange.end; x += 1) {
+            const sourceIndex = z * depthStride + y * heightStride + x * widthStride;
+            result[destOffset] = source[sourceIndex];
+            destOffset += 1;
+          }
         }
       }
 

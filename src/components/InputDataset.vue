@@ -163,11 +163,11 @@
                 <div class="ms-2 me-auto">
                   <div :class="['fw-bold', 'text-break', { 'text-decoration-line-through': datasetsToDelete.includes(key) }]">
                     {{ dataset.name }}
-                    <span class="badge bg-secondary" v-if="dataset.type === 'plain' && dataset.precision === 'f'">float32</span>
-                    <span class="badge bg-secondary" v-if="dataset.type === 'plain' && dataset.precision === 'd'">float64</span>
+                    <span class="badge bg-secondary" v-if="dataset.type === 'raw' && dataset.precision === 'f'">float32</span>
+                    <span class="badge bg-secondary" v-if="dataset.type === 'raw' && dataset.precision === 'd'">float64</span>
                     <span class="badge bg-info ms-1">{{ dataset.size }}</span>
                   </div>
-                  <div v-if="dataset.type === 'plain'">
+                  <div v-if="dataset.type === 'raw'">
                     dimensions: ({{ dataset.width }} &times; {{ dataset.height }} &times; {{ dataset.depth }})
                   </div>
                   <div v-else-if="dataset.type === 'netcdf'">
@@ -315,7 +315,7 @@ export default {
         return;
       }
       this.isNetCDF = ds.type === 'netcdf';
-      if (ds.type === 'plain') {
+      if (ds.type === 'raw') {
         const dims = Array.isArray(ds.dimensions)
           ? ds.dimensions
           : [ds.width, ds.height, ds.depth];
@@ -395,7 +395,7 @@ export default {
       this.$store.commit("setFileData", {
         dataset: {
           name: this.currentDataset?.name || null,
-          type: this.isNetCDF ? 'netcdf' : 'plain',
+          type: this.isNetCDF ? 'netcdf' : 'raw',
           content: this.fileContent,
           dimensions: [Number(this.width), Number(this.height), Number(this.depth)],
           precision: this.precision,
@@ -423,7 +423,7 @@ export default {
         formData.append("type", "netcdf");
       }
       else {
-        formData.append("type", "plain");
+        formData.append("type", "raw");
         formData.append("width", this.width);
         formData.append("height", this.height);
         formData.append("depth", this.depth);
@@ -462,11 +462,11 @@ export default {
           this.$store.commit("setFileData", {
             dataset: {
               name: serverDataset?.name || null,
-              type: "plain",
+              type: "raw",
               content: this.fileContent,
               dimensions: [Number(this.width), Number(this.height), Number(this.depth)],
               precision: this.precision,
-              // vars will be cleared in the store for plain datasets
+              // vars will be cleared in the store for raw datasets
               vars: undefined,
               size: undefined,
             }
@@ -489,7 +489,7 @@ export default {
         formData.append("currentDataset", JSON.stringify(this.datasetToChange));
         this.file = null;   // reset the file if the user has previously selected one
         // Handle different data file types
-        if (this.datasetToChange.type === "plain") {
+        if (this.datasetToChange.type === "raw") {
           this.width = this.datasetToChange.width;
           this.height = this.datasetToChange.height;
           this.depth = this.datasetToChange.depth;
@@ -515,7 +515,7 @@ export default {
             this.$store.commit("setFileData", {
               dataset: {
                 name: this.datasetToChange.name,
-                type: "plain",
+                type: "raw",
                 content: this.fileContent,
                 dimensions: [Number(this.width), Number(this.height), Number(this.depth)],
                 precision: this.precision,
