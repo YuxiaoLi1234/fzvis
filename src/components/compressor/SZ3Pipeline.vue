@@ -13,8 +13,12 @@ export default {
       type: Array,
       default: null,
     },
+    status: {
+      type: String,
+      default: 'pending',
+    },
   },
-  emits: ['moduleSelected', 'pipeline-modules-updated'],
+  emits: ['moduleSelected', 'pipeline-modules-updated', 'run-compressor'],
   data() {
     return {
       compressor: {
@@ -51,6 +55,14 @@ export default {
           { label: 'Zstd', state: 'available', value: '1' },
         ],
       },
+      errorBoundMode: 'ABS',
+      errorBoundValue: 1e-3,
+      errorBoundOptions: [
+        { label: 'Absolute (ABS)', value: 'ABS' },
+        { label: 'Relative (REL)', value: 'REL' },
+        { label: 'PSNR', value: 'PSNR' },
+      ],
+      nthreads: 1,
       uploadedDatasets: [],
       datasetToChange: null,
       datasetsToDelete: [],
@@ -93,11 +105,63 @@ export default {
         return 'Experimental Option';
       }
       return 'Option Info';
+    },
+    isReadyToRun() {
+      const modulesReady = this.compressor.modules && this.compressor.modules.length > 0 && 
+             this.compressor.modules.every(m => m.value && Object.keys(m.value).length > 0);
+      const errorBoundReady = this.errorBoundValue !== null && this.errorBoundValue !== '';
+      return modulesReady && errorBoundReady;
+    },
+    isRunning() {
+      return this.status === 'running';
     }
   },
   methods: {
     getCurrentModules() {
       return this.compressor.modules;
+    },
+    runCompressor() {
+      const compressorConfig = {};
+      this.compressor.modules.forEach(m => {
+        if (m.value && Object.keys(m.value).length) {
+          const [label] = Object.keys(m.value);
+          compressorConfig[m.key] = m.value[label];
+        }
+      });
+
+      // Add error bound configuration
+      if (this.errorBoundMode && this.errorBoundValue !== null) {
+        compressorConfig['sz3:error_bound_mode_str'] = this.errorBoundMode;
+        if (this.errorBoundMode === 'ABS') {
+          compressorConfig['sz3:abs_error_bound'] = this.errorBoundValue;
+        } else if (this.errorBoundMode === 'REL') {
+          compressorConfig['sz3:rel_error_bound'] = this.errorBoundValue;
+        } else if (this.errorBoundMode === 'PSNR') {
+          compressorConfig['sz3:psnr_error_bound'] = this.errorBoundValue;
+        }
+      }
+      
+      // Add nthreads
+      if (this.nthreads) {
+        compressorConfig['pressio:nthreads'] = this.nthreads;
+      }
+
+      const config = {
+        compressor_id: this.compressor.id,
+        compressor_config: compressorConfig,
+        data_key: this.$store?.state?.dataset?.data_key || null,
+        dataset_meta: {
+          name: this.$store?.state?.dataset?.name,
+          dimensions: this.$store?.state?.dataset?.dimensions,
+          precision: this.$store?.state?.dataset?.precision,
+        },
+        early_config: {
+          'pressio:metric': 'composite',
+          'composite:plugins': ['time', 'size', 'error_stat'],
+        }
+      };
+      
+      this.$emit('run-compressor', config);
     },
     selectCompressorModule(idxObj) {
       const { moduleIdx } = idxObj;
@@ -334,9 +398,59 @@ export default {
         </div>
       </div>
     </div>
-    <div v-else class="alert alert-info">
-      <i class="bi bi-info-circle me-2"></i>
-      <strong>Click the expand button</strong> on the compressor node in the graph to view and configure pipeline modules.
+    <div v-else>
+      <!-- Global Settings Section -->
+      <div class="options-panel p-3 mb-3">
+        <h6 class="fw-bold mb-3 d-flex align-items-center">
+          <i class="bi bi-sliders me-2"></i>Global Settings
+        </h6>
+        <div class="row g-3">
+          <div class="col-md-5">
+            <label class="form-label small fw-semibold text-muted mb-1">Error Bound Mode</label>
+            <select class="form-select form-select-sm" v-model="errorBoundMode">
+              <option v-for="opt in errorBoundOptions" :key="opt.value" :value="opt.value">
+                {{ opt.label }}
+              </option>
+            </select>
+          </div>
+          <div class="col-md-4">
+            <label class="form-label small fw-semibold text-muted mb-1">Value</label>
+            <input 
+              type="number" 
+              class="form-control form-control-sm" 
+              v-model.number="errorBoundValue" 
+              step="0.0001" 
+              min="0"
+            >
+          </div>
+          <div class="col-md-3">
+            <label class="form-label small fw-semibold text-muted mb-1">Threads</label>
+            <input 
+              type="number" 
+              class="form-control form-control-sm" 
+              v-model.number="nthreads" 
+              min="1"
+            >
+          </div>
+        </div>
+      </div>
+
+      <div class="alert alert-info d-flex justify-content-between align-items-center">
+        <div>
+          <i class="bi bi-info-circle me-2"></i>
+          <strong>Click the expand button</strong> on the compressor node in the graph to view and configure pipeline modules.
+        </div>
+        <button 
+          type="button"
+          class="btn btn-primary shadow-sm px-4"
+          :disabled="!isReadyToRun || isRunning"
+          @click="runCompressor"
+        >
+          <span v-if="isRunning" class="spinner-border spinner-border-sm me-1" role="status" aria-hidden="true"></span>
+          <i v-else class="bi bi-play-fill me-1"></i>
+          {{ isRunning ? 'Running...' : 'Run' }}
+        </button>
+      </div>
     </div>
   </div>
 </template>

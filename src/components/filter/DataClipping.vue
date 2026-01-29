@@ -481,6 +481,67 @@ export default {
       return `${this.filterName} completed successfully.`;
     },
   },
+  
+  /**
+   * Static method for pipeline replay.
+   * Pure function that applies clipping without side effects.
+   * @param {Object} dataset - Current dataset { content, dimensions, precision }
+   * @param {Object} params - Filter parameters { ranges: {width, height, depth} }
+   * @returns {Promise<Object>} Filtered dataset
+   */
+  applyFilter: async function(dataset, params) {
+    const { ranges } = params;
+    const [origWidth, origHeight] = dataset.dimensions;
+    
+    // Extract clipping ranges
+    const widthRange = ranges.width;
+    const heightRange = ranges.height;
+    const depthRange = ranges.depth;
+    
+    const clippedWidth = widthRange.length;
+    const clippedHeight = heightRange.length;
+    const clippedDepth = depthRange.length;
+    
+    // Get TypedArray constructor
+    const precisionMap = {
+      f: Float32Array,
+      d: Float64Array,
+      i8: Int8Array,
+      u8: Uint8Array,
+      i16: Int16Array,
+      u16: Uint16Array,
+      i32: Int32Array,
+      u32: Uint32Array,
+    };
+    const TypedArray = precisionMap[dataset.precision] || Float32Array;
+    
+    const sourceData = new TypedArray(dataset.content);
+    const resultLength = clippedWidth * clippedHeight * clippedDepth;
+    const resultData = new TypedArray(resultLength);
+    
+    // Perform clipping
+    let destIdx = 0;
+    const widthStride = 1;
+    const heightStride = origWidth;
+    const depthStride = origWidth * origHeight;
+    
+    for (let z = depthRange.start; z < depthRange.end; z++) {
+      for (let y = heightRange.start; y < heightRange.end; y++) {
+        for (let x = widthRange.start; x < widthRange.end; x++) {
+          const srcIdx = z * depthStride + y * heightStride + x * widthStride;
+          resultData[destIdx++] = sourceData[srcIdx];
+        }
+      }
+    }
+    
+    return {
+      content: resultData.buffer,
+      dimensions: [clippedWidth, clippedHeight, clippedDepth],
+      precision: dataset.precision,
+      name: dataset.name,
+      type: dataset.type,
+    };
+  },
 };
 </script>
 

@@ -389,8 +389,22 @@ export default {
         formData.append("configurations", JSON.stringify({ [key]: config }));
         try {
           const response = await axios.post(`/api/indexlist`, formData);
+          const result = response.data[key] || response.data;
+          
+          // Fetch the actual decompressed binary data using the data_key
+          if (result.data_key) {
+            try {
+              const dataResp = await axios.get(`/api/decompressed/${result.data_key}`, {
+                responseType: 'arraybuffer'
+              });
+              result.decp_data = dataResp.data;
+            } catch (err) {
+              console.error(`Failed to fetch decompressed data for ${key}:`, err);
+            }
+          }
+
           this.configStatus[key] = "success";
-          this.compressionResults[key] = response.data[key] || response.data;
+          this.compressionResults[key] = result;
         } catch (error) {
           this.configStatus[key] = "error";
           this.compressionResults[key] = { error: error.response ? error.response.data.error : error.toString() };

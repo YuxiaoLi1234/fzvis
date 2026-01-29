@@ -86,19 +86,28 @@ export default createStore({
       if ((next?.type === 'raw' || next?.type === undefined) && payload?.vars === undefined) {
         next.vars = undefined;
       }
-      
+
       // Check if this is a new dataset being loaded (not a filter operation result)
-      // Clear original dataset and filter operations when loading new data
-      const isNewDataset = payload.content && 
-                          (!state.dataset || 
-                           payload.content !== state.dataset.content ||
-                           payload.name !== state.dataset.name);
-      
+      // Set original dataset and clear filter operations when loading new data
+      const isNewDataset = payload.content &&
+        (!state.dataset ||
+          payload.content !== state.dataset.content ||
+          payload.name !== state.dataset.name);
+
       if (isNewDataset && !payload.isFilterResult) {
-        state.originalDataset = null;
+        // Store as original dataset
+        state.originalDataset = {
+          name: next.name,
+          type: next.type,
+          content: next.content,
+          dimensions: next.dimensions,
+          precision: next.precision,
+          size: next.size,
+          vars: next.vars,
+        };
         state.filterOperations = [];
       }
-      
+
       state.dataset = next;
     },
     clearFileData(state) {
@@ -160,6 +169,59 @@ export default createStore({
     },
   },
 
-  actions: {},
+  actions: {
+    /**
+     * Replay the entire filter pipeline from the original dataset.
+     * This is called when a filter is removed or the pipeline needs to be rebuilt.
+     * @param {Object} context - Vuex action context
+     * @param {Object} options - { filterComponents: Map<filterType, ComponentClass> }
+     */
+    async replayFilterPipeline({ state, commit }, options = {}) {
+      const { filterComponents = new Map() } = options;
+
+      // Start from original dataset
+      if (!state.originalDataset || !state.originalDataset.content) {
+        console.warn('No original dataset available for replay');
+        return;
+      }
+
+      // Reset to original
+      commit('setFileData', {
+        content: state.originalDataset.content,
+        dimensions: state.originalDataset.dimensions,
+        precision: state.originalDataset.precision,
+        name: state.originalDataset.name,
+        type: state.originalDataset.type,
+        isFilterResult: true,
+      });
+
+      // Replay each filter operation in sequence
+      for (const op of state.filterOperations) {
+        const component = filterComponents.get(op.filterType);
+        if (!component || typeof component.applyFilter !== 'function') {
+          console.warn(`Cannot replay filter ${op.filterType}: no static applyFilter method`);
+          continue;
+        }
+
+        try {
+          // Call the static apply method with stored parameters
+          const result = await component.applyFilter(state.dataset, op.params);
+
+          // Update dataset with filtered result
+          commit('setFileData', {
+            content: result.content,
+            dimensions: result.dimensions,
+            precision: result.precision,
+            name: result.name || state.dataset.name,
+            type: result.type || state.dataset.type,
+            isFilterResult: true,
+          });
+        } catch (error) {
+          console.error(`Failed to replay filter ${op.filterType}:`, error);
+          // Continue with remaining filters despite error
+        }
+      }
+    },
+  },
   modules: {}
 });

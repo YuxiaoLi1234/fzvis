@@ -9,6 +9,13 @@ export default {
   name: 'BaseDataFilter',
   props: {
     /**
+     * Unique node identifier for tracking in the filter pipeline.
+     */
+    nodeId: {
+      type: String,
+      required: false,
+    },
+    /**
      * Human readable label for the operation.
      */
     filterName: {
@@ -227,13 +234,12 @@ export default {
         this.lastRunResult = result ?? null;
         this.clearDirty();
 
-        // Track this filter operation in the store for undo functionality
-        if (this.$store && this.filterType === 'filter') {
+        // Track this filter operation in the store for pipeline replay
+        if (this.$store && this.nodeId) {
           this.$store.commit('addFilterOperation', {
-            nodeId: this.$attrs['data-node-id'] || `${this.filterType}-${Date.now()}`,
-            filterType: this.filterType,
-            filterName: this.filterName,
-            context: context || null,
+            nodeId: this.nodeId,
+            filterType: this.filterName.toLowerCase().replace(/\s+/g, '_'),
+            params: context || {},
             result: result || null,
             timestamp: Date.now(),
           });

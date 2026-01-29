@@ -7,6 +7,7 @@ import json
 import jwt
 from datetime import datetime, timedelta
 from functools import wraps
+import hashlib
 import libpressio as lp
 import math
 import numpy as np
@@ -15,9 +16,11 @@ import os
 from pathlib import Path
 from pprint import pprint
 import threading 
+import time
 from openai import OpenAI
 from dotenv import load_dotenv
 from collections import deque
+from analysis_metrics import METRIC_HANDLERS
 
 load_dotenv()
 
@@ -35,13 +38,15 @@ work_dir.mkdir(parents=True, exist_ok=True)
 upload_dir.mkdir(parents=True, exist_ok=True)
 metadata_file = upload_dir / "metadata.json"
 saved_datasets = {}
+decompressed_data_cache = {}  # Cache for decompressed data
+input_data_cache = {}     # Cache for analysis datasets indexed by client-provided keys
 
 # Create Large Language Model (LLM) client
 # You can request a free API key from NVIDIA at
 # https://build.nvidia.com/models
 client = OpenAI(
     base_url = "https://integrate.api.nvidia.com/v1",
-    api_key = os.environ.get("LLM_API_KEY", ""),
+    api_key = os.environ.get("NVIDIA_API_KEY", ""),
 )
 conversation_history = [{"role": "system", "content": DEFAULT_SYSTEM_CONFIG_PROMPT}]
 
@@ -74,25 +79,6 @@ def get_human_readable_size(filepath):
             fileSize /= 1024.0
 
 
-# Read input data from the file
-def read_input_data(dataset):
-    global input_data
-    filePath = upload_dir / dataset["name"]
-    width = int(dataset["width"])
-    height = int(dataset["height"])
-    depth = int(dataset["depth"])
-    if dataset["precision"] == 'd': 
-        input_data = np.fromfile(filePath, dtype=np.float64)
-    elif dataset["precision"] == 'f': 
-        input_data = np.fromfile(filePath, dtype=np.float32)
-
-    if len(input_data) > depth*height*width: 
-        input_data = input_data[len(input_data)- depth*height*width:]
-    
-    input_data = input_data.reshape(depth, height, width)
-    # input_data = np.nan_to_num(input_data, nan=0)
-
-
 # Read NetCDF file
 def read_netcdf_file(filename, variable, sliceParams=None):
     filePath = upload_dir / filename
@@ -114,11 +100,8 @@ def read_netcdf_file(filename, variable, sliceParams=None):
                 varData[varName] = data.flatten().tolist()
             return varData
         else:
-            # update the input_data
-            global input_data
             varData = dataSet.variables[variable][:]
             print(variable,"dimensions:", dataSet.variables[variable].dimensions)
-            # if slicing needs to be applied
             if sliceParams:
                 slices = []
                 for dimSlice in sliceParams:
@@ -128,18 +111,9 @@ def read_netcdf_file(filename, variable, sliceParams=None):
                         dimSlice.get("step", 1)
                     )
                     slices.append(sl)
-                input_data = varData[tuple(slices)]
-                print("nan locations:", np.where(np.isnan(input_data)))
-            else: 
-                input_data = varData
-            return input_data
-
-
-# Save metadata to the disk
-def save_metadata_to_file(filekey, metadata):
-    saved_datasets[filekey] = metadata
-    with open(metadata_file, 'w') as f:
-        json.dump(saved_datasets, f, indent=4)
+                varData = varData[tuple(slices)]
+            print("nan locations:", np.where(np.isnan(varData)))
+            return varData
 
 
 @app.route("/api/login", methods=["POST"])
@@ -236,8 +210,6 @@ def upload_file():
             datasetMetadata["height"] = request.form.get("height")
             datasetMetadata["depth"] = request.form.get("depth")
             datasetMetadata["precision"] = request.form.get("precision")
-            if readDataFile:
-                threading.Thread(target=read_input_data, args=(datasetMetadata,)).start()
 
         # Save metadata to a json file
         saved_datasets[fileName] = datasetMetadata
@@ -260,8 +232,6 @@ def update_datasets():
         if request.form.get("currentDataset"):
             currentDataset = json.loads(request.form["currentDataset"])
             # print("currentDataset:", currentDataset)
-            if currentDataset["type"] == "raw":
-                threading.Thread(target=read_input_data, args=(currentDataset,)).start()
 
         # Remove the files if deleted datasets are provided
         if request.form.get("deletedDatasets"):
@@ -294,6 +264,22 @@ def get_available_compressors():
         print("Error in get_available_compressors():", e)
         return jsonify({"error": str(e)}), 500
 
+@app.route("/api/decompressed/<data_key>", methods=["GET"])
+@token_required
+def get_decompressed_data(data_key):
+    """Serve decompressed data as binary blob"""
+    try:
+        if data_key not in decompressed_data_cache:
+            return jsonify({"error": "Data not found or expired"}), 404
+        
+        data = decompressed_data_cache[data_key]
+        data_bytes = data.tobytes()
+        return Response(data_bytes, mimetype="application/octet-stream")
+    except Exception as e:
+        print(f"Error in get_decompressed_data(): {e}")
+        return jsonify({"error": str(e)}), 500
+
+
 @app.route("/api/indexlist", methods=["POST"])
 @token_required
 def indexlist():
@@ -301,7 +287,6 @@ def indexlist():
         option = int(request.form.get("get_options"))
         # Run all submitted compressors and compare the results
         if(option == 0):
-            global input_data
             def replace_unsupported_values(obj):
                 if isinstance(obj, dict):
                     return {k: replace_unsupported_values(v) for k, v in obj.items()}
@@ -316,8 +301,36 @@ def indexlist():
                 else:
                     return obj
             def comparing_compressor(arguments):
-                global input_data
-                # print("arguments: ", arguments)
+                # Expect a dataset cache key and metadata
+                dataset_key = arguments.get("data_key")
+                meta = arguments.get("dataset_meta") or {}
+                
+                # Fallback to name if data_key is missing
+                if not dataset_key:
+                    dataset_key = meta.get("name")
+                
+                if not dataset_key:
+                    raise ValueError("Missing data_key or dataset name for compression request")
+                cached = input_data_cache.get(dataset_key)
+                if cached is None:
+                    return {"error": "DATA_KEY_NOT_FOUND"}
+                input_array = cached
+                dimensions = meta.get("dimensions")
+                precision = meta.get("precision", 'f')
+                if input_array is None and meta.get("name"):
+                    filePath = upload_dir / meta["name"]
+                    dtype = np.float64 if precision == 'd' else np.float32
+                    buffer = np.fromfile(filePath, dtype=dtype)
+                    if dimensions and len(dimensions) == 3:
+                        width, height, depth = map(int, dimensions)
+                        expected = width * height * depth
+                        if len(buffer) > expected:
+                            buffer = buffer[len(buffer) - expected:]
+                        buffer = buffer.reshape(depth, height, width)
+                    input_array = buffer
+                    input_data_cache[dataset_key] = input_array
+                if input_array is None:
+                    return {"error": "Dataset unavailable for compression"}
 
                 # No need to manually construct the configs dictionary, as we expect the full config from the front end
                 # configs = {
@@ -331,8 +344,7 @@ def indexlist():
                 # configs["compressor_config"] = arguments["compressor_config"]
                 # pprint(configs)
 
-                def run_compressor(args):
-                    global input_data
+                def run_compressor(args, dataset):
                     # Check if the configuration is valid
                     # compressor_config_dict = {
                     #     "compressor_id": args["compressor_id"],
@@ -340,7 +352,7 @@ def indexlist():
                     # }
                     # if "early_config" in args:
                     #     compressor_config_dict["early_config"] = args["early_config"]
-                    # If selected compressor is roibin, ensure roi_size matches input_data shape
+                    # If selected compressor is roibin, ensure roi_size matches dataset shape
                     patched_args = args.copy()
                     try:
                         selectedCompressor = patched_args.get("compressor_id")
@@ -350,20 +362,20 @@ def indexlist():
                                 .get("pressio", {})
                                 .get("pressio:compressor")
                             )
-                        if selectedCompressor == "roibin" and input_data is not None:
+                        if selectedCompressor == "roibin" and dataset is not None:
                             # Inject roibin:roi_size under pressio early_config
                             ec = patched_args.setdefault("early_config", {})
                             ec_pressio = ec.setdefault("pressio", {})
                             # Only set if not already provided
                             if "roibin:roi_size" not in ec_pressio:
-                                ec_pressio["roibin:roi_size"] = np.asarray(input_data.shape, dtype=np.int32)
+                                ec_pressio["roibin:roi_size"] = np.asarray(dataset.shape, dtype=np.int32)
                     except Exception as _e:
                         # Fallback to original args if any issue arises
                         patched_args = args
                     
                     compressor = lp.PressioCompressor.from_config(patched_args)
-                    decompData = input_data.copy()
-                    compData = compressor.encode(input_data)
+                    decompData = dataset.copy()
+                    compData = compressor.encode(dataset)
                     decompData = compressor.decode(compData, decompData)
                     metrics = compressor.get_metrics()
                     metrics1 = replace_unsupported_values(metrics)
@@ -371,13 +383,17 @@ def indexlist():
                     return {
                         "compressor_id": args["compressor_id"],
                         "metrics": metrics1,
-                        "decp_data": decompData.flatten().tolist(),
+                        "decompressed_data": decompData,  # Return the numpy array
                     }
-                result = run_compressor(arguments)
+                result = run_compressor(arguments, input_array)
+                # Extract decompressed data and store it in cache
+                decompData = result.pop("decompressed_data")
+                # Generate a unique key for this result
+                key = hashlib.md5(f"{arguments.get('compressor_id')}_{time.time()}".encode()).hexdigest()
+                result["data_key"] = key
+                decompressed_data_cache[key] = decompData
                 return result
             
-            if input_data is None:
-                return jsonify({"error": "No input dataset at backend!"}), 400
             configurations = json.loads(request.form.get("configurations"))
             # pprint(configurations)
             result = {}
@@ -385,10 +401,14 @@ def indexlist():
                 print("Running compressor: ", name)
                 if(config["compressor_id"] != ''):
                     output = comparing_compressor(config)
+                    if "error" in output:
+                        # If it's a cache miss, return 404 so frontend can retry
+                        status_code = 404 if output["error"] == "DATA_KEY_NOT_FOUND" else 500
+                        return jsonify(output), status_code
                     result[name] = output
-                    # print("original data non-zero values:", np.count_nonzero(input_data))
+                    # print("original data non-zero values:", np.count_nonzero(input_array))
                     # print("decompressed data non-zero values:", np.count_nonzero(output["decp_data"]))
-            return result, 200
+            return jsonify(result), 200
         
         elif option == 1:
             # pprint(lp.PressioCompressor("roibin", {"roibin:roi": "sz3"}).get_configuration())
@@ -663,6 +683,108 @@ def get_ai_response():
         return jsonify({"error": str(e)}), 500
 
 
+@app.route("/api/analysis/compute", methods=["POST"])
+@token_required
+def compute_analysis_metric():
+    """
+    Compute various Quantities of Interest (QoI) metrics on the dataset.
+    Accepts binary data, metric type, and parameters.
+    """
+    try:
+        # Get the metric type and parameters
+        metric_type = request.form.get('metric_type')
+        parameters = json.loads(request.form.get('parameters', '{}'))
+
+        # Fast path: use cached dataset via client-provided key
+        data_key = request.form.get('data_key')
+        data_array = None
+        if data_key:
+            data_array = input_data_cache.get(data_key)
+            if data_array is None:
+                return jsonify({"error": "DATA_KEY_NOT_FOUND"}), 404
+        else:
+            # Fallback: read uploaded data file directly
+            data_file = request.files.get('data')
+            if not data_file:
+                return jsonify({"error": "No data file or data_key provided"}), 400
+
+            # Read binary data based on precision
+            precision = parameters.get('precision', 'f')
+            dtype = np.float64 if precision == 'd' else np.float32
+            data_array = np.frombuffer(data_file.read(), dtype=dtype)
+
+            # Get dimensions and reshape
+            dimensions = parameters.get('dimensions', [])
+            if len(dimensions) == 3:
+                width, height, depth = dimensions
+                data_array = data_array.reshape(depth, height, width)  # (D, H, W)
+            elif len(dimensions) == 2:
+                width, height = dimensions
+                data_array = data_array.reshape(height, width)
+            # 1D data stays flat
+
+        # Find and run metric handler
+        handler = METRIC_HANDLERS.get(metric_type)
+        if not handler:
+            return jsonify({"error": f"Unknown metric type: {metric_type}"}), 400
+
+        result = handler(data_array, parameters)
+        return jsonify({"result": result}), 200
+    
+    except Exception as e:
+        print(f"Error in compute_analysis_metric(): {e}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
+
+
+# Upload-and-compute fallback: store dataset under client-provided key, then compute
+@app.route("/api/analysis/compute/upload", methods=["POST"])
+@token_required
+def upload_and_compute_metric():
+    try:
+        metric_type = request.form.get('metric_type')
+        parameters = json.loads(request.form.get('parameters', '{}'))
+        data_key = request.form.get('data_key')
+        if not data_key:
+            return jsonify({"error": "Missing data_key"}), 400
+
+        data_file = request.files.get('data')
+        if not data_file:
+            return jsonify({"error": "No data file provided"}), 400
+
+        # Decode binary into numpy array
+        precision = parameters.get('precision', 'f')
+        dtype = np.float64 if precision == 'd' else np.float32
+        data_array = np.frombuffer(data_file.read(), dtype=dtype)
+
+        # Reshape according to provided dimensions
+        dimensions = parameters.get('dimensions', [])
+        if len(dimensions) == 3:
+            width, height, depth = dimensions
+            data_array = data_array.reshape(depth, height, width)
+        elif len(dimensions) == 2:
+            width, height = dimensions
+            data_array = data_array.reshape(height, width)
+        # 1D stays flat
+
+        # Store into cache under key (overwrite allowed)
+        input_data_cache[data_key] = data_array
+
+        handler = METRIC_HANDLERS.get(metric_type)
+        if not handler:
+            return jsonify({"error": f"Unknown metric type: {metric_type}"}), 400
+
+        result = handler(data_array, parameters)
+        return jsonify({"result": result, "data_key": data_key, "stored": True}), 200
+
+    except Exception as e:
+        print(f"Error in upload_and_compute_metric(): {e}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
+
+
 # Catch-all route to serve the Vue frontend's index.html
 @app.route('/', defaults={'path': ''})
 @app.route('/<path:path>')
@@ -676,12 +798,6 @@ def serve_frontend(path):
 
 # Main entry of the server program
 if __name__ == '__main__':
-
-    # Initialize necessary data
-    input_data = None
-    width = -1
-    height = -1
-    depth = -1
 
     # Parsing command line arguments
     parser = ArgumentParser(description="enter your HOST/POST.", usage="path/to/main.py [OPTIONAL ARGUMENTS] <HOST> <PORT> <configfile>")

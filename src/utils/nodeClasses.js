@@ -38,12 +38,12 @@ export class BaseNode {
   initializePorts(inputLabel = 'Data In', outputLabel = 'Data Out') {
     this.inputs = [];
     for (let i = 0; i < this.inputCount; i++) {
-      const label = this.inputCount > 1 
+      const label = this.inputCount > 1
         ? inputLabel.replace('{i}', String(i + 1))
         : inputLabel.replace('{i}', '').trim();
       this.inputs.push(new Port(`in-${i}`, label, 'input'));
     }
-    
+
     this.outputs = [];
     for (let i = 0; i < this.outputCount; i++) {
       const label = this.outputCount > 1
@@ -135,8 +135,9 @@ export class FilterNode extends BaseNode {
 
     // Map filter IDs to their respective components
     const componentMap = {
-      'clipping': 'DataClipping',
-      'thresholding': 'DataThresholding'
+      clipping: 'DataClipping',
+      threshold_mask: 'DataThresholdMask',
+      normalization: 'DataNormalization',
     };
     this.editorComponent = componentMap[filterId] || null;
   }
@@ -152,24 +153,28 @@ export class FilterNode extends BaseNode {
   }
 
   onDestroy(context) {
-    // Remove this filter's operation from the stack and reapply remaining filters
+    // Remove this filter's operation from the stack
     if (context?.store) {
-      context.store.commit('removeFilterOperation', this.id);
-      
-      // Restore to original dataset
-      const original = context.store.state.originalDataset;
-      if (original && original.content) {
-        context.store.commit('setFileData', {
-          content: original.content,
-          dimensions: original.dimensions,
-          precision: original.precision,
-          name: original.name,
-          type: original.type,
-        });
+      const operations = context.store.state.filterOperations || [];
+      const opIndex = operations.findIndex(op => op.nodeId === this.id);
+
+      if (opIndex !== -1) {
+        // Remove this filter and all subsequent filters
+        context.store.commit('removeFilterOperation', this.id);
+
+        // Remove all filters that came after this one
+        const remainingOps = operations.slice(0, opIndex);
+        context.store.state.filterOperations = remainingOps;
+
+        // Replay the pipeline from the beginning with remaining filters
+        if (context.filterComponents) {
+          context.store.dispatch('replayFilterPipeline', {
+            filterComponents: context.filterComponents,
+          }).catch(error => {
+            console.error('Failed to replay filter pipeline:', error);
+          });
+        }
       }
-      
-      // TODO: Reapply remaining filters in sequence
-      // This would require the filter components to expose a static apply method
     }
   }
 }
@@ -181,7 +186,7 @@ export class ModuleNode extends BaseNode {
   constructor(id, label, icon = 'bi-puzzle', moduleId = null, config = {}) {
     const inputCount = config.inputCount || 1;
     const outputCount = config.outputCount || 1;
-    
+
     super(id, label, icon, inputCount, outputCount);
     this.type = 'module';
     this.initializePorts('Data In {i}', 'Processed Data {i}');
@@ -218,7 +223,7 @@ export class CompressorNode extends BaseNode {
       'testing': 'TestingPipeline' // Example
     };
     this.editorComponent = componentMap[compressorId] || null;
-    
+
     // Expansion state for showing internal pipeline modules
     this.expanded = false;
     this.modules = []; // Pipeline modules from the compressor component

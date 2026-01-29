@@ -1,8 +1,11 @@
 
 <script>
+import { markRaw } from 'vue';
+import axios from 'axios';
 import InputDataset from '../InputDataset.vue';
 import DataClipping from '../filter/DataClipping.vue';
-import DataThresholding from '../filter/DataThresholding.vue';
+import DataThresholdMask from '../filter/DataThresholdMask.vue';
+import DataNormalization from '../filter/DataNormalization.vue';
 import SZ3Pipeline from '../compressor/SZ3Pipeline.vue';
 import { Splitpanes, Pane } from 'splitpanes';
 import { NodeFactory } from '../../utils/nodeClasses';
@@ -12,7 +15,8 @@ export default {
   components: { 
     InputDataset,
     DataClipping,
-    DataThresholding,
+    DataThresholdMask,
+    DataNormalization,
     SZ3Pipeline,
     Splitpanes,
     Pane
@@ -29,10 +33,16 @@ export default {
           icon: 'bi-crop',
         },
         {
-          id: 'thresholding',
-          label: 'Threshold',
-          description: 'Filter data using lower/upper threshold values.',
+          id: 'threshold_mask',
+          label: 'Threshold Mask',
+          description: 'Mask data by replacing values outside your thresholds.',
           icon: 'bi-sliders',
+        },
+        {
+          id: 'normalization',
+          label: 'Normalize',
+          description: 'Scale values into a custom range using min-max normalization.',
+          icon: 'bi-arrows-expand',
         },
       ],
       // Modules imported from PipelineBrowser definitions
@@ -75,6 +85,12 @@ export default {
       selectedNodeId: null,
       counters: { source: 0, filter: 0, module: 0, compressor: 0 },
       dragging: { active: false, nodeId: null, offsetX: 0, offsetY: 0 },
+      // Map of filter types to component classes for pipeline replay
+      filterComponents: new Map([
+        ['clipping', DataClipping],
+        ['threshold_mask', DataThresholdMask],
+        ['normalization', DataNormalization],
+      ]),
       paletteState: {
         filters: true,
         modules: true,
@@ -277,14 +293,15 @@ export default {
 
       if (type === 'source') {
         node.status = this.datasetLoaded ? 'ready' : 'empty';
-        node.editorComponent = InputDataset;
+        node.editorComponent = markRaw(InputDataset);
       } else if (type === 'filter') {
-        if (defId === 'clipping') node.editorComponent = DataClipping;
-        else if (defId === 'thresholding') node.editorComponent = DataThresholding;
+        if (defId === 'clipping') node.editorComponent = markRaw(DataClipping);
+        else if (defId === 'threshold_mask') node.editorComponent = markRaw(DataThresholdMask);
+        else if (defId === 'normalization') node.editorComponent = markRaw(DataNormalization);
         else node.editorComponent = null;
         node.status = 'pending';
       } else if (type === 'compressor') {
-        if (defId === 'sz3') node.editorComponent = SZ3Pipeline;
+        if (defId === 'sz3') node.editorComponent = markRaw(SZ3Pipeline);
         else node.editorComponent = null;
         node.status = 'pending';
       }
@@ -399,7 +416,7 @@ export default {
       // Perform node-specific cleanup/reverse operations
       node.onDestroy({ 
         store: this.$store,
-        // Add other context items here if needed in the future
+        filterComponents: this.filterComponents,
       });
 
       const wasSelected = this.selectedNodeId === nodeId;
@@ -578,6 +595,92 @@ export default {
       
       const ready = mods && mods.every(m => m?.value && Object.keys(m.value).length);
       this.selectedNode.status = ready ? 'ready' : 'pending';
+    },
+    async computeDataKey() {
+      return crypto.randomUUID();
+    },
+    async handleRunCompressor(config) {
+      if (!this.selectedNode || this.selectedNode.type !== 'compressor') return;
+      
+      const nodeId = this.selectedNode.id;
+      this.setNodeStatus(nodeId, 'running', 'Compressing the data...');
+      
+      try {
+        // Ensure we have a data_key if possible
+        if (!config.data_key && this.$store.state.dataset?.content) {
+          const newKey = await this.computeDataKey();
+          config.data_key = newKey;
+          this.$store.commit('setFileData', { 
+            dataset: { ...this.$store.state.dataset, data_key: newKey } 
+          });
+        }
+
+        const executeCompression = async (conf) => {
+          const formData = new FormData();
+          formData.append("get_options", 0);
+          formData.append("configurations", JSON.stringify({ [nodeId]: conf }));
+          return await axios.post('/api/indexlist', formData);
+        };
+
+        let response;
+        try {
+          response = await executeCompression(config);
+        } catch (err) {
+          const serverMsg = err?.response?.data?.error;
+          // If data is missing from backend cache (404), upload it and retry
+          if (err?.response?.status === 404 && serverMsg?.includes('DATA_KEY_NOT_FOUND') && this.$store.state.dataset?.content) {
+            this.setNodeStatus(nodeId, 'running', 'Uploading data to server cache...');
+            
+            const uploadForm = new FormData();
+            uploadForm.append('metric_type', 'statistics'); // Dummy metric to trigger cache storage
+            uploadForm.append('parameters', JSON.stringify({
+              dimensions: config.dataset_meta.dimensions,
+              precision: config.dataset_meta.precision
+            }));
+            uploadForm.append('data_key', config.data_key);
+            const blob = new Blob([this.$store.state.dataset.content], { type: 'application/octet-stream' });
+            uploadForm.append('data', blob, config.dataset_meta.name || 'data.bin');
+            
+            await axios.post('/api/analysis/compute/upload', uploadForm);
+            
+            // Retry compression
+            this.setNodeStatus(nodeId, 'running', 'Compressing the data...');
+            response = await executeCompression(config);
+          } else {
+            throw err;
+          }
+        }
+
+        const nodeResult = response.data[nodeId];
+        
+        if (nodeResult.error) {
+          this.setNodeStatus(nodeId, 'error', nodeResult.error);
+        } else {
+          // Fetch the actual decompressed binary data using the data_key
+          if (nodeResult.data_key) {
+            try {
+              const dataResp = await axios.get(`/api/decompressed/${nodeResult.data_key}`, {
+                responseType: 'arraybuffer'
+              });
+              nodeResult.decp_data = dataResp.data;
+            } catch (err) {
+              console.error('Failed to fetch decompressed data:', err);
+            }
+          }
+
+          this.setNodeStatus(nodeId, 'success', 'Compression completed.');
+          this.selectedNode.lastResult = nodeResult;
+          this.selectedNode.lastRunAt = Date.now();
+          
+          if (this.$store) {
+            this.$store.commit('setComparisonData', { [nodeId]: nodeResult });
+          }
+        }
+      } catch (error) {
+        console.error('Error running compressor:', error);
+        const msg = error.response?.data?.error || error.message;
+        this.setNodeStatus(nodeId, 'error', msg);
+      }
     },
     toggleCompressorExpansion(nodeId) {
       const node = this.nodes.find(n => n.id === nodeId);
@@ -1143,6 +1246,7 @@ export default {
                     <component
                       :is="selectedNode.editorComponent"
                       :key="selectedNode.id"
+                      :nodeId="selectedNode.id"
                       v-bind="selectedNode.props"
                       @filter-start="() => handleFilterStart(selectedNode.id)"
                       @filter-success="($event) => handleFilterSuccess(selectedNode.id, $event)"
@@ -1193,7 +1297,9 @@ export default {
                       :key="`compressor-${selectedNode.id}-${selectedNode.selectedModuleIdx ?? 'all'}`"
                       :focused-module-idx="selectedNode.selectedModuleIdx"
                       :modules="selectedNode.modules"
+                      :status="selectedNode.status"
                       @pipeline-modules-updated="handlePipelineModulesUpdated"
+                      @run-compressor="handleRunCompressor"
                     />
                   </keep-alive>
                 </template>
