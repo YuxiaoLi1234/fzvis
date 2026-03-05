@@ -1,7 +1,7 @@
 <script>
 import AppHeader from './components/AppHeader.vue'
-import HelloVtk from './components/vis/HelloVtk.vue'
 import MetricVis from './components/vis/MetricVis.vue'
+import HelloThree from './components/vis/HelloThree.vue'
 import AppFooter from './components/AppFooter.vue'
 import { Splitpanes, Pane } from 'splitpanes'
 import axios from 'axios';
@@ -12,8 +12,8 @@ export default {
   components: {
     AppHeader,
     DataFlowWorkbench,
-    HelloVtk,
     MetricVis,
+    HelloThree,
     AppFooter,
     Splitpanes,
     Pane,
@@ -176,7 +176,7 @@ export default {
               <div class="tab-content flex-grow-1">
                 <div id="datavis" class="tab-pane fade show active h-100" role="tabpanel" aria-labelledby="datavis-tab">
                   <div class="h-100 overflow-hidden">
-                    <HelloVtk />
+                    <HelloThree />
                   </div>
                 </div>
                 <div id="metrics" class="tab-pane fade h-100" role="tabpanel" aria-labelledby="metrics-tab">

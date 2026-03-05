@@ -21,8 +21,22 @@ from openai import OpenAI
 from dotenv import load_dotenv
 from collections import deque
 from analysis_metrics import METRIC_HANDLERS
+import logging
+import traceback
+import sys
 
 load_dotenv()
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.FileHandler('server.log'),
+        logging.StreamHandler(sys.stdout)
+    ]
+)
+logger = logging.getLogger(__name__)
 
 # CONSTANTS
 DEFAULT_SYSTEM_CONFIG_PROMPT = "You are an expert in lossy compression with deep knowledge of scientific data. Please provide clear and concise answers to all questions. If you are not sure about the answer, please say so. Don't make up answers. Please always reply within 200 words if possible."
@@ -41,36 +55,36 @@ saved_datasets = {}
 decompressed_data_cache = {}  # Cache for decompressed data
 input_data_cache = {}     # Cache for analysis datasets indexed by client-provided keys
 
-# Create Large Language Model (LLM) client
-# You can request a free API key from NVIDIA at
-# https://build.nvidia.com/models
-client = OpenAI(
-    base_url = "https://integrate.api.nvidia.com/v1",
-    api_key = os.environ.get("NVIDIA_API_KEY", ""),
-)
-conversation_history = [{"role": "system", "content": DEFAULT_SYSTEM_CONFIG_PROMPT}]
+def _clean_data_array(data_array, operation_name="data processing"):
+    """
+    Clean a numpy array by replacing NaN/inf with finite values.
+    
+    Args:
+        data_array: The numpy array to clean
+        operation_name: Description of the operation for logging purposes
+        
+    Returns:
+        Cleaned numpy array (copy of original with NaN/inf replaced by 0.0)
+    """
+    arr_data = data_array.copy()
+    
+    if not np.isfinite(arr_data).all():
+        num_invalid = (~np.isfinite(arr_data)).sum()
+        logger.warning(f"Found {num_invalid} NaN/inf values in {operation_name}, replacing with 0.0")
+        arr_data = np.nan_to_num(arr_data, nan=0.0, posinf=0.0, neginf=0.0)
+    
+    return arr_data
 
-app = Flask(__name__)
-app.config['SECRET_KEY'] = os.getenv('FLASK_SECRET_KEY', 'default_secret_key')
-CORS(app)
-
-def token_required(f):
-    @wraps(f)
-    def decorated(*args, **kwargs):
-        token = None
-        if 'Authorization' in request.headers:
-            token = request.headers['Authorization'].split(" ")[1]
-        if not token:
-            return jsonify({'error': 'Token is missing!'}), 401
-        try:
-            data = jwt.decode(token, app.config['SECRET_KEY'], algorithms=["HS256"])
-        except:
-            return jsonify({'error': 'Token is invalid!'}), 401
-        return f(*args, **kwargs)
-    return decorated
+def _get_data_from_any_cache(data_key):
+    if not data_key:
+        return None
+    data = input_data_cache.get(data_key)
+    if data is None:
+        data = decompressed_data_cache.get(data_key)
+    return data
 
 # Get the file size in a human readable format
-def get_human_readable_size(filepath): 
+def _get_human_readable_size(filepath): 
     if os.path.isfile(filepath):
         fileSize = os.path.getsize(filepath)
         for unit in ['B', 'KB', 'MB', 'GB', 'TB', 'PB']:
@@ -78,9 +92,8 @@ def get_human_readable_size(filepath):
                 return f"{fileSize:.2f} {unit}"
             fileSize /= 1024.0
 
-
 # Read NetCDF file
-def read_netcdf_file(filename, variable, sliceParams=None):
+def _read_netcdf_file(filename, variable, sliceParams=None):
     filePath = upload_dir / filename
     with nc.Dataset(filePath) as dataSet:
         if variable == "metadata":
@@ -115,6 +128,58 @@ def read_netcdf_file(filename, variable, sliceParams=None):
             print("nan locations:", np.where(np.isnan(varData)))
             return varData
 
+
+# Create Large Language Model (LLM) client
+# You can request a free API key from NVIDIA at
+# https://build.nvidia.com/models
+client = OpenAI(
+    base_url = "https://integrate.api.nvidia.com/v1",
+    api_key = os.environ.get("NVIDIA_API_KEY", ""),
+)
+conversation_history = [{"role": "system", "content": DEFAULT_SYSTEM_CONFIG_PROMPT}]
+
+app = Flask(__name__)
+app.config['SECRET_KEY'] = os.getenv('FLASK_SECRET_KEY', 'default_secret_key')
+CORS(app)
+
+def token_required(f):
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        token = None
+        if 'Authorization' in request.headers:
+            token = request.headers['Authorization'].split(" ")[1]
+        
+        if not token:
+            print(f"Auth failed: Token missing for {request.path}")
+            return jsonify({'error': 'Token is missing!'}), 401
+        
+        try:
+            data = jwt.decode(token, app.config['SECRET_KEY'], algorithms=["HS256"])
+        except Exception as e:
+            print(f"Auth failed: Token invalid for {request.path}: {e}")
+            return jsonify({'error': 'Token is invalid!'}), 401
+        
+        return f(*args, **kwargs)
+    return decorated
+
+
+# Global error handlers to prevent server crashes
+@app.errorhandler(404)
+def not_found_error(error):
+    logger.warning(f"404 error: {request.url}")
+    return jsonify({"error": "Resource not found"}), 404
+
+@app.errorhandler(500)
+def internal_error(error):
+    logger.error(f"500 error: {error}")
+    logger.error(traceback.format_exc())
+    return jsonify({"error": "Internal server error", "message": str(error)}), 500
+
+@app.errorhandler(Exception)
+def handle_unexpected_error(error):
+    logger.error(f"Unexpected error: {error}")
+    logger.error(traceback.format_exc())
+    return jsonify({"error": "An unexpected error occurred", "message": str(error)}), 500
 
 @app.route("/api/login", methods=["POST"])
 def login():
@@ -160,7 +225,7 @@ def send_data_file():
         variable = request.args.get("variable")
         slices = request.args.get("slices")
         sliceParams = json.loads(slices) if slices else None
-        varData = read_netcdf_file(fileName, variable, sliceParams)
+        varData = _read_netcdf_file(fileName, variable, sliceParams)
         # Send the array as bytes
         return Response(varData.tobytes(), mimetype="application/octet-stream")
 
@@ -187,7 +252,7 @@ def upload_file():
 
             # Use the filename as the key for now as we don't allow two duplicate files
             datasetMetadata["name"] = fileName
-            datasetMetadata["size"] = get_human_readable_size(filePath)
+            datasetMetadata["size"] = _get_human_readable_size(filePath)
             readDataFile = True
             
         # Updating an existing dataset
@@ -203,7 +268,7 @@ def upload_file():
             if readDataFile:
                 dataSet = nc.Dataset(filePath)
                 variableKeys = dataSet.variables.keys()
-                datasetMetadata["vars"] = read_netcdf_file(datasetMetadata["name"], "metadata")
+                datasetMetadata["vars"] = _read_netcdf_file(datasetMetadata["name"], "metadata")
         
         elif fileType == "raw":
             datasetMetadata["width"] = request.form.get("width")
@@ -269,14 +334,54 @@ def get_available_compressors():
 def get_decompressed_data(data_key):
     """Serve decompressed data as binary blob"""
     try:
-        if data_key not in decompressed_data_cache:
-            return jsonify({"error": "Data not found or expired"}), 404
+        data = _get_data_from_any_cache(data_key)
+        if data is None:
+            return jsonify({"error": "DATA_KEY_NOT_FOUND", "missing_keys": [data_key]}), 404
         
-        data = decompressed_data_cache[data_key]
         data_bytes = data.tobytes()
         return Response(data_bytes, mimetype="application/octet-stream")
     except Exception as e:
         print(f"Error in get_decompressed_data(): {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/cache/upload", methods=["POST"])
+@token_required
+def upload_to_cache():
+    """General endpoint to upload binary data to server-side cache"""
+    try:
+        data_key = request.form.get('data_key')
+        metadata = json.loads(request.form.get('metadata', '{}'))
+        
+        data_file = request.files.get('data')
+        if not data_file or not data_key:
+            return jsonify({"error": "Missing data file or data_key"}), 400
+
+        # Decode binary into numpy array
+        precision = metadata.get('precision', 'f')
+        dtype = np.float64 if precision == 'd' else np.float32
+        logger.info(f"upload_to_cache: precision={precision}, dtype={dtype}, metadata={metadata}")
+        data_array = np.frombuffer(data_file.read(), dtype=dtype)
+
+        # Reshape according to provided dimensions
+        dimensions = metadata.get('dimensions', [])
+        if len(dimensions) == 3:
+            width, height, depth = map(int, dimensions)
+            data_array = data_array.reshape(depth, height, width)
+        elif len(dimensions) == 2:
+            width, height = map(int, dimensions)
+            data_array = data_array.reshape(height, width)
+
+        # Proactively clean data before storing in cache
+        data_array = _clean_data_array(data_array, "uploaded data to cache")
+
+        # Store into input_data_cache (general purpose)
+        input_data_cache[data_key] = data_array
+        
+        print(f"Stored uploaded data into cache under key: {data_key}")
+        return jsonify({"status": "success", "data_key": data_key}), 200
+    except Exception as e:
+        print(f"Error in upload_to_cache(): {e}")
         return jsonify({"error": str(e)}), 500
 
 
@@ -320,6 +425,7 @@ def indexlist():
                 if input_array is None and meta.get("name"):
                     filePath = upload_dir / meta["name"]
                     dtype = np.float64 if precision == 'd' else np.float32
+                    logger.info(f"indexlist: Loading file with precision={precision}, dtype={dtype}, meta={meta}")
                     buffer = np.fromfile(filePath, dtype=dtype)
                     if dimensions and len(dimensions) == 3:
                         width, height, depth = map(int, dimensions)
@@ -327,7 +433,7 @@ def indexlist():
                         if len(buffer) > expected:
                             buffer = buffer[len(buffer) - expected:]
                         buffer = buffer.reshape(depth, height, width)
-                    input_array = buffer
+                    input_array = _clean_data_array(buffer, "dataset loaded from file")
                     input_data_cache[dataset_key] = input_array
                 if input_array is None:
                     return {"error": "Dataset unavailable for compression"}
@@ -379,7 +485,7 @@ def indexlist():
                     decompData = compressor.decode(compData, decompData)
                     metrics = compressor.get_metrics()
                     metrics1 = replace_unsupported_values(metrics)
-                    
+
                     return {
                         "compressor_id": args["compressor_id"],
                         "metrics": metrics1,
@@ -388,6 +494,7 @@ def indexlist():
                 result = run_compressor(arguments, input_array)
                 # Extract decompressed data and store it in cache
                 decompData = result.pop("decompressed_data")
+                decompData = _clean_data_array(decompData, "decompressed data from compressor")
                 # Generate a unique key for this result
                 key = hashlib.md5(f"{arguments.get('compressor_id')}_{time.time()}".encode()).hexdigest()
                 result["data_key"] = key
@@ -699,9 +806,10 @@ def compute_analysis_metric():
         data_key = request.form.get('data_key')
         data_array = None
         if data_key:
-            data_array = input_data_cache.get(data_key)
+            data_array = _get_data_from_any_cache(data_key)
             if data_array is None:
-                return jsonify({"error": "DATA_KEY_NOT_FOUND"}), 404
+                return jsonify({"error": "DATA_KEY_NOT_FOUND", "missing_keys": [data_key]}), 404
+            logger.info(f"Using cached data for metric '{metric_type}': shape={data_array.shape}, size={data_array.size}, dtype={data_array.dtype}")
         else:
             # Fallback: read uploaded data file directly
             data_file = request.files.get('data')
@@ -717,11 +825,38 @@ def compute_analysis_metric():
             dimensions = parameters.get('dimensions', [])
             if len(dimensions) == 3:
                 width, height, depth = dimensions
+                expected_size = width * height * depth
+                if data_array.size != expected_size:
+                    logger.error(f"Size mismatch: expected {expected_size} but got {data_array.size}")
+                    return jsonify({"error": f"Data size mismatch: expected {expected_size} but got {data_array.size}"}), 400
                 data_array = data_array.reshape(depth, height, width)  # (D, H, W)
             elif len(dimensions) == 2:
                 width, height = dimensions
+                expected_size = width * height
+                if data_array.size != expected_size:
+                    logger.error(f"Size mismatch: expected {expected_size} but got {data_array.size}")
+                    return jsonify({"error": f"Data size mismatch: expected {expected_size} but got {data_array.size}"}), 400
                 data_array = data_array.reshape(height, width)
-            # 1D data stays flat
+            
+            # If a data_key was provided but not found, store the uploaded data now
+            if data_key:
+                data_array = _clean_data_array(data_array, "uploaded data in analysis compute")
+                input_data_cache[data_key] = data_array
+                print(f"Stored uploaded data into cache under key: {data_key}")
+
+        # If a comparison key is provided, fetch original data from cache
+        comparison_key = parameters.get('comparison_key')
+        if comparison_key:
+            print(f"Comparison key provided: {comparison_key}")
+            original_data = input_data_cache.get(comparison_key)
+            if original_data is None:
+                original_data = decompressed_data_cache.get(comparison_key)
+            
+            parameters['original_data'] = original_data
+            if original_data is not None:
+                print(f"Original data retrieved from cache for comparison.")
+            else:
+                print(f"Original data NOT found in cache for key: {comparison_key}")
 
         # Find and run metric handler
         handler = METRIC_HANDLERS.get(metric_type)
@@ -768,8 +903,24 @@ def upload_and_compute_metric():
             data_array = data_array.reshape(height, width)
         # 1D stays flat
 
+        data_array = _clean_data_array(data_array, "uploaded data in upload_and_compute")
+
         # Store into cache under key (overwrite allowed)
         input_data_cache[data_key] = data_array
+
+        # Handle comparison key if present
+        comparison_key = parameters.get('comparison_key')
+        if comparison_key:
+            print(f"Comparison key provided in upload: {comparison_key}")
+            original_data = input_data_cache.get(comparison_key)
+            if original_data is None:
+                original_data = decompressed_data_cache.get(comparison_key)
+            
+            parameters['original_data'] = original_data
+            if original_data is not None:
+                print(f"Original data retrieved from cache for comparison (upload path).")
+            else:
+                print(f"Original data NOT found in cache for key (upload path): {comparison_key}")
 
         handler = METRIC_HANDLERS.get(metric_type)
         if not handler:
@@ -780,6 +931,64 @@ def upload_and_compute_metric():
 
     except Exception as e:
         print(f"Error in upload_and_compute_metric(): {e}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/correction/critical_points", methods=["POST"])
+@token_required
+def apply_correction():
+    try:
+        original_key = request.form.get('original_key')
+        compressed_key = request.form.get('compressed_key')
+        config = json.loads(request.form.get('config', '{}'))
+        metadata = json.loads(request.form.get('metadata', '{}'))
+
+        print(f"Correction request received: original_key={original_key}, compressed_key={compressed_key}")
+        print(f"Config: {config}")
+
+        if not original_key or not compressed_key:
+            print("Error: Missing original_key or compressed_key")
+            return jsonify({"error": "Missing original_key or compressed_key"}), 400
+
+        # Retrieve data from cache
+        original_data = _get_data_from_any_cache(original_key)
+        decompressed_data = _get_data_from_any_cache(compressed_key)
+
+        missing = []
+        if original_data is None:
+            missing.append(original_key)
+        
+        if decompressed_data is None:
+            missing.append(compressed_key)
+        
+        if missing:
+            return jsonify({"error": "DATA_KEY_NOT_FOUND", "missing_keys": missing}), 404
+
+        # Run correction
+        handler = METRIC_HANDLERS.get('critical_points_correction')
+        parameters = {
+            'config': config,
+            'metadata': metadata
+        }
+        
+        result = handler(original_data, decompressed_data, parameters)
+
+        if 'error' in result:
+            return jsonify(result), 500
+
+        # Store corrected data in cache
+        corrected_data = result.pop('corrected_data')
+        corrected_data = _clean_data_array(corrected_data, "corrected data")
+        new_key = hashlib.md5(f"corrected_{compressed_key}_{time.time()}".encode()).hexdigest()
+        decompressed_data_cache[new_key] = corrected_data
+        
+        result['data_key'] = new_key
+        return jsonify(result), 200
+
+    except Exception as e:
+        print(f"Error in apply_correction(): {e}")
         import traceback
         traceback.print_exc()
         return jsonify({"error": str(e)}), 500
@@ -816,4 +1025,13 @@ if __name__ == '__main__':
         with open(metadata_file, 'r') as f:
             saved_datasets = json.load(f)
 
-    app.run(host=apiHost, port=apiPort, debug=True, threaded=True)
+    # Run the server with error handling
+    try:
+        logger.info(f"Starting server on {apiHost}:{apiPort}")
+        app.run(host=apiHost, port=apiPort, debug=True, threaded=True)
+    except KeyboardInterrupt:
+        logger.info("Server stopped by user")
+    except Exception as e:
+        logger.critical(f"Critical error starting server: {e}")
+        logger.critical(traceback.format_exc())
+        sys.exit(1)

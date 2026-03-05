@@ -1,7 +1,7 @@
 <script>
 import * as d3 from "d3";
 import { mapState } from 'vuex';
-import axios from 'axios';
+import { requestWithFallback } from '@/utils/datasetUtils';
 
 export default {
   name: "MetricVis",
@@ -11,6 +11,7 @@ export default {
       tooltip: null,
       activeSubTab: 'analysis', // 'compression' or 'analysis'
       // Analysis-related data
+      selectedSources: ['original'], // Default to original
       activeMetrics: {},
       availableMetrics: [
         {
@@ -36,6 +37,13 @@ export default {
           description: 'Compute and visualize frequency domain characteristics',
           parameters: [],
         },
+        {
+          id: 'critical_points',
+          name: 'Critical Points',
+          icon: 'bi bi-grid text-warning',
+          description: 'Compute critical points (minima, maxima, and saddles)',
+          parameters: [],
+        },
       ],
     };
   },
@@ -48,6 +56,15 @@ export default {
     canCompute() {
       return this.dataset && this.dataset.content;
     },
+    availableSources() {
+      const sources = [{ id: 'original', name: 'Original Data' }];
+      if (this.comparisonData) {
+        Object.keys(this.comparisonData).forEach(key => {
+          sources.push({ id: key, name: key });
+        });
+      }
+      return sources;
+    }
   },
   
   watch: {
@@ -64,6 +81,26 @@ export default {
       },
       deep: true,
     },
+    // Sync selectedSources when availableSources change (e.g. node removed)
+    availableSources: {
+      handler(newSources) {
+        const availableIds = newSources.map(s => s.id);
+        // Remove sources that are no longer available
+        this.selectedSources = this.selectedSources.filter(id => availableIds.includes(id));
+        
+        // Also remove results from active metrics for these sources
+        Object.values(this.activeMetrics).forEach(metric => {
+          if (metric.results) {
+            Object.keys(metric.results).forEach(sourceId => {
+              if (sourceId !== 'original' && !availableIds.includes(sourceId)) {
+                delete metric.results[sourceId];
+              }
+            });
+          }
+        });
+      },
+      deep: true
+    }
   },
 
   mounted() {
@@ -98,9 +135,20 @@ export default {
           parameters: metricTemplate.parameters ? 
             JSON.parse(JSON.stringify(metricTemplate.parameters)) : [],
           computing: false,
-          result: null,
+          results: {}, // Map of sourceId -> result
         };
         this.activeMetrics[metricTemplate.id] = metric;
+      }
+    },
+
+    toggleSource(sourceId) {
+      if (sourceId === 'original') return; // Original is always selected
+
+      const idx = this.selectedSources.indexOf(sourceId);
+      if (idx > -1) {
+        this.selectedSources.splice(idx, 1);
+      } else {
+        this.selectedSources.push(sourceId);
       }
     },
 
@@ -118,7 +166,10 @@ export default {
       }
 
       metric.computing = true;
-      metric.result = null;
+      // We don't necessarily want to clear all results, maybe just the selected ones
+      this.selectedSources.forEach(sourceId => {
+        metric.results[sourceId] = null;
+      });
 
       try {
         const params = {};
@@ -131,71 +182,101 @@ export default {
         params.dimensions = this.dataset.dimensions;
         params.precision = this.dataset.precision;
 
-        // Prefer fast path using data_key; fallback to upload-and-compute
-        let dataKey = this.dataset.data_key;
-        if (!dataKey && this.dataset.content instanceof ArrayBuffer) {
-          dataKey = await this.computeDataKey();
-          this.$store.commit('setFileData', { 
-            dataset: { ...this.dataset, data_key: dataKey } 
-          });
-        }
+        let originalDataKey = this.dataset.data_key;
 
-        let response;
-        if (dataKey) {
-          // Try fast path
-          const fastForm = new FormData();
-          fastForm.append('metric_type', metric.id);
-          fastForm.append('parameters', JSON.stringify(params));
-          fastForm.append('data_key', dataKey);
-          try {
-            response = await axios.post('/api/analysis/compute', fastForm);
-          } catch (err) {
-            const serverMsg = err?.response?.data?.error;
-            if (err?.response?.status === 404 && serverMsg === 'DATA_KEY_NOT_FOUND') {
-              // Fallback: upload and compute, also store under the same key
-              const uploadForm = new FormData();
-              uploadForm.append('metric_type', metric.id);
-              uploadForm.append('parameters', JSON.stringify(params));
-              uploadForm.append('data_key', dataKey);
-              const blob = new Blob([this.dataset.content], { type: 'application/octet-stream' });
-              uploadForm.append('data', blob, this.dataset.name || 'data.bin');
-              response = await axios.post('/api/analysis/compute/upload', uploadForm, {
-                headers: { 'Content-Type': 'multipart/form-data' },
+        // Create a copy and sort to ensure 'original' is first
+        const sortedSources = [...this.selectedSources].sort((a, b) => {
+          if (a === 'original') return -1;
+          if (b === 'original') return 1;
+          return 0;
+        });
+
+        // Loop through selected sources
+        for (const sourceId of sortedSources) {
+          let dataKey;
+          let currentDataset;
+
+          // Fresh parameters for this source request
+          const requestParams = {
+            ...params,
+            dimensions: this.dataset.dimensions,
+            precision: this.dataset.precision
+          };
+
+          if (sourceId === 'original') {
+            dataKey = this.dataset.data_key;
+            currentDataset = this.dataset;
+          } else {
+            const comp = this.comparisonData ? this.comparisonData[sourceId] : null;
+            if (!comp) {
+              console.warn(`Source ${sourceId} not found in comparisonData`);
+              continue;
+            }
+            dataKey = comp.data_key;
+            currentDataset = comp;
+            
+            // Add comparison key for compressed sources
+            if (originalDataKey) {
+              requestParams.comparison_key = originalDataKey;
+            }
+          }
+
+          if (!dataKey && currentDataset.content instanceof ArrayBuffer) {
+            dataKey = await this.computeDataKey();
+            if (sourceId === 'original') {
+              originalDataKey = dataKey; // Capture for others in this loop
+              this.$store.commit('setFileData', { 
+                dataset: { ...this.dataset, data_key: dataKey } 
               });
-              // Persist the data_key in store for subsequent calls
-              if (response?.data?.data_key) {
-                this.$store.commit('setFileData', { dataset: { ...this.dataset, data_key: response.data.data_key } });
-              } else if (dataKey) {
-                this.$store.commit('setFileData', { dataset: { ...this.dataset, data_key: dataKey } });
-              }
             } else {
-              throw err;
+              // Update comparison data in store with data_key
+              if (this.comparisonData && this.comparisonData[sourceId]) {
+                const newComp = { ...this.comparisonData[sourceId], data_key: dataKey };
+                const newComparisonData = { ...this.comparisonData, [sourceId]: newComp };
+                this.$store.commit('setComparisonData', newComparisonData);
+              }
+            }
+          }
+
+          if (dataKey) {
+            const formData = new FormData();
+            formData.append('metric_type', metric.id);
+            formData.append('parameters', JSON.stringify(requestParams));
+            formData.append('data_key', dataKey);
+            
+            // Prepare datasets map for fallback recovery
+            const datasetsMap = {};
+            if (originalDataKey) datasetsMap[originalDataKey] = this.dataset;
+            if (dataKey) datasetsMap[dataKey] = currentDataset;
+
+            const response = await requestWithFallback({
+              method: 'post',
+              url: '/api/analysis/compute',
+              data: formData
+            }, datasetsMap);
+
+            if (response?.data?.result) {
+              metric.results = { 
+                ...metric.results, 
+                [sourceId]: response.data.result 
+              };
+              console.log(`[MetricVis] Result stored for ${sourceId}:`, metric.results[sourceId]);
             }
           }
         }
 
-        // If fast path was not possible or not used, do direct compute upload (legacy)
-        if (!response) {
-          const formData = new FormData();
-          formData.append('metric_type', metric.id);
-          formData.append('parameters', JSON.stringify(params));
-          const blob = new Blob([this.dataset.content], { type: 'application/octet-stream' });
-          formData.append('data', blob, this.dataset.name || 'data.bin');
-          response = await axios.post('/api/analysis/compute', formData, {
-            headers: { 'Content-Type': 'multipart/form-data' },
-          });
-        }
-
-        metric.result = response?.data?.result;
-
         this.$store.commit('setStatus', { 
           type: 'success', 
-          message: `${metric.name} computed successfully` 
+          message: `${metric.name} computed for selected sources` 
         });
-        this.$store.commit('addHistory', { 
-          kind: 'analysis', 
-          text: `Computed ${metric.name}`, 
-          timestamp: Date.now() 
+        
+        // Redraw charts for visualizations
+        this.$nextTick(() => {
+          Object.keys(this.activeMetrics).forEach(id => {
+            if (id === 'histogram') this.drawHistogram(this.activeMetrics[id]);
+            else if (id === 'power_spectrum') this.drawPowerSpectrum(this.activeMetrics[id]);
+            else if (id === 'correlation') this.drawCorrelation(this.activeMetrics[id]);
+          });
         });
 
       } catch (error) {
@@ -208,6 +289,320 @@ export default {
         metric.computing = false;
       }
     },
+
+    drawHistogram(metric) {
+      const containerId = `histogram-chart-${metric.id}`;
+      const container = d3.select(`#${containerId}`);
+      if (!container.node()) return;
+      container.selectAll("*").remove();
+
+      const results = metric.results;
+      const sources = Object.entries(results).filter(([, res]) => res && res.type === 'histogram');
+      if (sources.length === 0) return;
+
+      const margin = { top: 30, right: 30, bottom: 40, left: 60 };
+      const width = container.node().clientWidth - margin.left - margin.right;
+      const height = 300 - margin.top - margin.bottom;
+
+      const svg = container.append("svg")
+        .attr("width", width + margin.left + margin.right)
+        .attr("height", height + margin.top + margin.bottom)
+        .append("g")
+        .attr("transform", `translate(${margin.left},${margin.top})`);
+
+      // Combine all bin data to find domains
+      const allBins = [];
+      sources.forEach(([, res]) => {
+        res.bins.forEach(b => allBins.push(b));
+      });
+
+      // Calculate typical bin width for domain padding and bar width
+      let maxBinDist = 0;
+      sources.forEach(([, res]) => {
+        if (res.bins.length > 1) {
+          maxBinDist = Math.max(maxBinDist, res.bins[1].x - res.bins[0].x);
+        }
+      });
+      
+      const xExtent = d3.extent(allBins, b => b.x);
+      // Pad domain if we have a bin width estimate
+      if (maxBinDist > 0) {
+        xExtent[0] -= maxBinDist / 2;
+        xExtent[1] += maxBinDist / 2;
+      }
+
+      const x = d3.scaleLinear()
+        .domain(xExtent)
+        .range([0, width]);
+
+      const y = d3.scaleLinear()
+        .domain([0, d3.max(allBins, b => b.count)])
+        .nice()
+        .range([height, 0]);
+
+      svg.append("g")
+        .attr("transform", `translate(0,${height})`)
+        .call(d3.axisBottom(x).ticks(10));
+
+      svg.append("g")
+        .call(d3.axisLeft(y).ticks(5, "~s"));
+      
+      // X axis label
+      svg.append("text")
+        .attr("text-anchor", "middle")
+        .attr("x", width / 2)
+        .attr("y", height + 35)
+        .text("Value")
+        .style("font-size", "12px");
+
+      const color = d3.scaleOrdinal(d3.schemeTableau10).domain(sources.map(s => s[0]));
+
+      // Calculate total width available for each bin
+      let totalBinWidth = 5;
+      if (sources[0][1].bins.length > 1) {
+        totalBinWidth = Math.abs(x(sources[0][1].bins[1].x) - x(sources[0][1].bins[0].x));
+      } else {
+        totalBinWidth = width / (metric.parameters.find(p => p.name === 'bins')?.value || 50);
+      }
+
+      // Create a sub-scale for sources within each bin
+      const x1 = d3.scaleBand()
+        .domain(sources.map(s => s[0]))
+        .range([0, totalBinWidth])
+        .padding(0.05);
+
+      sources.forEach(([id, res]) => {
+        svg.append("g")
+          .attr("class", `bars-${id}`)
+          .selectAll("rect")
+          .data(res.bins)
+          .enter()
+          .append("rect")
+          .attr("x", d => x(d.x) - totalBinWidth / 2 + x1(id))
+          .attr("y", d => y(d.count))
+          .attr("width", x1.bandwidth())
+          .attr("height", d => height - y(d.count))
+          .attr("fill", color(id))
+          .attr("stroke", color(id))
+          .attr("stroke-width", 0.5)
+          .on("mouseover", function() {
+            d3.select(this).attr("stroke-width", 1.5).attr("fill", d3.rgb(color(id)).brighter(0.5));
+          })
+          .on("mouseout", function() {
+            d3.select(this).attr("stroke-width", 0.5).attr("fill", color(id));
+          });
+      });
+
+      // Add legend
+      const legend = svg.append("g").attr("transform", `translate(${width - 120}, 0)`);
+      sources.forEach(([id], i) => {
+        const lg = legend.append("g").attr("transform", `translate(0, ${i * 20})`);
+        lg.append("rect").attr("width", 12).attr("height", 12).attr("fill", color(id));
+        lg.append("text").attr("x", 16).attr("y", 10).text(id).style("font-size", "11px").attr("alignment-baseline", "middle");
+      });
+    },
+
+    drawPowerSpectrum(metric) {
+      const containerId = `ps-chart-${metric.id}`;
+      const container = d3.select(`#${containerId}`);
+      if (!container.node()) return;
+      container.selectAll("*").remove();
+
+      const results = metric.results;
+      const sources = Object.entries(results).filter(([, res]) => res && res.type === 'power_spectrum');
+      if (sources.length === 0) return;
+
+      const margin = { top: 30, right: 30, bottom: 40, left: 60 };
+      const width = container.node().clientWidth - margin.left - margin.right;
+      const height = 300 - margin.top - margin.bottom;
+
+      const svg = container.append("svg")
+        .attr("width", width + margin.left + margin.right)
+        .attr("height", height + margin.top + margin.bottom)
+        .append("g")
+        .attr("transform", `translate(${margin.left},${margin.top})`);
+
+      const allData = [];
+      sources.forEach(([, res]) => {
+        res.data.forEach(d => allData.push(d));
+      });
+
+      const x = d3.scaleLog()
+        .domain(d3.extent(allData, d => d.k))
+        .range([0, width]);
+
+      const y = d3.scaleLog()
+        .domain(d3.extent(allData, d => d.p))
+        .range([height, 0]);
+
+      svg.append("g")
+        .attr("transform", `translate(0,${height})`)
+        .call(d3.axisBottom(x).ticks(5, "~s"));
+
+      svg.append("g")
+        .call(d3.axisLeft(y).ticks(5, "~s"));
+      
+      // Labels
+      svg.append("text").attr("text-anchor", "middle").attr("x", width/2).attr("y", height + 35).text("Wavenumber (k)").style("font-size", "12px");
+      svg.append("text").attr("text-anchor", "middle").attr("transform", "rotate(-90)").attr("y", -45).attr("x", -height/2).text("Power P(k)").style("font-size", "12px");
+
+      const color = d3.scaleOrdinal(d3.schemeTableau10).domain(sources.map(s => s[0]));
+
+      sources.forEach(([id, res]) => {
+        const line = d3.line()
+          .x(d => x(d.k))
+          .y(d => y(d.p));
+
+        svg.append("path")
+          .datum(res.data)
+          .attr("fill", "none")
+          .attr("stroke", color(id))
+          .attr("stroke-width", 2)
+          .attr("d", line);
+      });
+
+      const legend = svg.append("g").attr("transform", `translate(${width - 120}, 0)`);
+      sources.forEach(([id], i) => {
+        const lg = legend.append("g").attr("transform", `translate(0, ${i * 20})`);
+        lg.append("rect").attr("width", 12).attr("height", 12).attr("fill", color(id));
+        lg.append("text").attr("x", 16).attr("y", 10).text(id).style("font-size", "11px").attr("alignment-baseline", "middle");
+      });
+    },
+
+    drawCorrelation(metric) {
+      const containerId = `corr-chart-${metric.id}`;
+      const container = d3.select(`#${containerId}`);
+      if (!container.node()) return;
+      container.selectAll("*").remove();
+
+      const results = metric.results;
+      const sources = Object.entries(results).filter(([, res]) => res && res.type === 'correlation');
+      if (sources.length === 0) return;
+
+      const margin = { top: 30, right: 30, bottom: 40, left: 60 };
+      const width = container.node().clientWidth - margin.left - margin.right;
+      const height = 300 - margin.top - margin.bottom;
+
+      const svg = container.append("svg")
+        .attr("width", width + margin.left + margin.right)
+        .attr("height", height + margin.top + margin.bottom)
+        .append("g")
+        .attr("transform", `translate(${margin.left},${margin.top})`);
+
+      const allData = [];
+      sources.forEach(([, res]) => {
+        res.data.forEach(d => allData.push(d));
+      });
+
+      const x = d3.scaleLinear()
+        .domain(d3.extent(allData, d => d.lag))
+        .range([0, width]);
+
+      const y = d3.scaleLinear()
+        .domain([-1, 1])
+        .range([height, 0]);
+
+      svg.append("g")
+        .attr("transform", `translate(0,${height})`)
+        .call(d3.axisBottom(x).ticks(10));
+
+      svg.append("g")
+        .call(d3.axisLeft(y).ticks(5));
+      
+      // Zero line
+      svg.append("line")
+        .attr("x1", 0).attr("y1", y(0))
+        .attr("x2", width).attr("y2", y(0))
+        .attr("stroke", "#eee")
+        .attr("stroke-dasharray", "4");
+
+      svg.append("text").attr("text-anchor", "middle").attr("x", width/2).attr("y", height + 35).text("Lag").style("font-size", "12px");
+      svg.append("text").attr("text-anchor", "middle").attr("transform", "rotate(-90)").attr("y", -45).attr("x", -height/2).text("Autocorrelation").style("font-size", "12px");
+
+      const color = d3.scaleOrdinal(d3.schemeTableau10).domain(sources.map(s => s[0]));
+
+      sources.forEach(([id, res]) => {
+        const line = d3.line()
+          .x(d => x(d.lag))
+          .y(d => y(d.value));
+
+        svg.append("path")
+          .datum(res.data)
+          .attr("fill", "none")
+          .attr("stroke", color(id))
+          .attr("stroke-width", 2)
+          .attr("d", line);
+        
+        svg.selectAll(`.dot-${id}`)
+          .data(res.data)
+          .enter().append("circle")
+          .attr("cx", d => x(d.lag))
+          .attr("cy", d => y(d.value))
+          .attr("r", 3)
+          .attr("fill", color(id));
+      });
+
+      const legend = svg.append("g").attr("transform", `translate(${width - 120}, 0)`);
+      sources.forEach(([id], i) => {
+        const lg = legend.append("g").attr("transform", `translate(0, ${i * 20})`);
+        lg.append("rect").attr("width", 12).attr("height", 12).attr("fill", color(id));
+        lg.append("text").attr("x", 16).attr("y", 10).text(id).style("font-size", "11px").attr("alignment-baseline", "middle");
+      });
+    },
+
+
+    visualizeCriticalPoints(criticalPointsData, sourceId = 'original') {
+      // Store critical points data in Vuex so HelloVtk can access it
+      this.$store.commit('setCriticalPoints', { 
+        source: sourceId, 
+        data: criticalPointsData 
+      });
+      
+      // Switch to Data Visualization tab
+      this.$nextTick(() => {
+        const datavisTab = document.getElementById('datavis-tab');
+        if (datavisTab) {
+          datavisTab.click();
+        }
+      });
+      
+      this.$store.commit('setStatus', { 
+        type: 'success', 
+        message: `Critical points visualization activated for ${sourceId}. Switched to Data Visualization tab.` 
+      });
+    },
+
+    visualizeAllCriticalPoints(metric) {
+      if (!metric || !metric.results) return;
+
+      let count = 0;
+      Object.entries(metric.results).forEach(([sourceId, data]) => {
+        if (data && data.type === 'critical_points') {
+          console.log(`[MetricVis] Visualizing CPs for ${sourceId}:`, data);
+          this.$store.commit('setCriticalPoints', { 
+            source: sourceId, 
+            data: data 
+          });
+          count++;
+        }
+      });
+      
+      if (count === 0) return;
+
+      // Switch to Data Visualization tab
+      this.$nextTick(() => {
+        const datavisTab = document.getElementById('datavis-tab');
+        if (datavisTab) {
+          datavisTab.click();
+        }
+      });
+      
+      this.$store.commit('setStatus', { 
+        type: 'success', 
+        message: `Visualizing critical points for ${count} sources. Switched to Data Visualization tab.` 
+      });
+    },
+
 
     // Compression visualization methods
     normalizeData(data, key) {
@@ -524,6 +919,30 @@ export default {
           </button>
         </div>
 
+        <!-- Sources Selection -->
+        <div class="card mb-3">
+          <div class="card-header bg-light py-2 d-flex justify-content-between align-items-center">
+            <h6 class="mb-0 small">Data Sources to Analyze</h6>
+            <span class="badge bg-secondary">{{ selectedSources.length }} selected</span>
+          </div>
+          <div class="card-body py-2">
+            <div class="d-flex flex-wrap gap-2">
+              <button 
+                v-for="source in availableSources" 
+                :key="source.id"
+                class="btn btn-sm"
+                :class="selectedSources.includes(source.id) ? 'btn-success' : 'btn-outline-secondary'"
+                :disabled="source.id === 'original'"
+                @click="toggleSource(source.id)"
+                :title="source.id === 'original' ? 'Original data is always required for comparison' : ''"
+              >
+                <i class="bi" :class="selectedSources.includes(source.id) ? 'bi-check-circle-fill' : 'bi-circle'"></i>
+                <span class="ms-1">{{ source.name }}</span>
+              </button>
+            </div>
+          </div>
+        </div>
+
         <!-- Metrics Palette -->
         <div class="card mb-3">
           <div class="card-header bg-light py-2">
@@ -581,6 +1000,14 @@ export default {
                   <i v-else class="bi bi-play-fill me-1"></i>
                   {{ metric.computing ? 'Computing...' : 'Compute' }}
                 </button>
+                <!-- Visualize button for critical points -->
+                <button 
+                  v-if="metric.id === 'critical_points' && Object.keys(metric.results).length > 0"
+                  class="btn btn-sm btn-success"
+                  @click="visualizeAllCriticalPoints(metric)"
+                >
+                  <i class="bi bi-eye me-1"></i>Visualize
+                </button>
                 <span v-if="!canCompute" class="text-muted small">
                   <i class="bi bi-info-circle me-1"></i>Load dataset first
                 </span>
@@ -624,40 +1051,116 @@ export default {
               </div>
 
               <!-- Results Display -->
-              <div v-if="metric.result" class="metric-result">
-                <h6 class="small text-muted mb-2">Results</h6>
+              <div v-if="Object.keys(metric.results).length > 0" class="metric-result">
+                <h6 class="small text-muted mb-3">Comparison Results</h6>
                 
-                <!-- Scalar Result -->
-                <div v-if="metric.result.type === 'scalar'" class="result-scalar">
-                  <div class="alert alert-info mb-0 py-2">
-                    <strong>{{ metric.result.label }}:</strong> {{ metric.result.value }}
-                  </div>
-                </div>
-
-                <!-- Table Result -->
-                <div v-else-if="metric.result.type === 'table'" class="result-table">
-                  <table class="table table-sm table-bordered mb-0">
-                    <thead>
+                <!-- Statistics Comparison Table (Custom for stats) -->
+                <div v-if="metric.id === 'statistics'" class="result-table overflow-auto">
+                  <table class="table table-sm table-bordered mb-0 small">
+                    <thead class="bg-light">
                       <tr>
-                        <th v-for="header in metric.result.headers" :key="header">{{ header }}</th>
+                        <th>Metric</th>
+                        <th v-for="sourceId in selectedSources" :key="sourceId" class="text-center">
+                          {{ sourceId }}
+                        </th>
                       </tr>
                     </thead>
                     <tbody>
-                      <tr v-for="(row, idx) in metric.result.rows" :key="idx">
-                        <td v-for="(cell, cidx) in row" :key="cidx">{{ cell }}</td>
+                      <!-- Get all unique headers from all results -->
+                      <tr v-for="headerIdx in [0, 1, 2, 3, 4, 5, 6, 7]" :key="headerIdx">
+                        <template v-if="metric.results['original'] && metric.results['original'].rows[headerIdx]">
+                          <td class="fw-bold">{{ metric.results['original'].rows[headerIdx][0] }}</td>
+                          <td v-for="sourceId in selectedSources" :key="sourceId" class="text-center">
+                            {{ metric.results[sourceId] ? metric.results[sourceId].rows[headerIdx][1] : '-' }}
+                          </td>
+                        </template>
                       </tr>
                     </tbody>
                   </table>
                 </div>
 
-                <!-- Image Result -->
-                <div v-else-if="metric.result.type === 'image'" class="result-image">
-                  <img :src="metric.result.src" class="img-fluid" :alt="metric.name" />
+                <!-- Power Spectrum Comparison Chart -->
+                <div v-else-if="metric.id === 'power_spectrum'" class="result-chart">
+                  <div :id="`ps-chart-${metric.id}`" class="w-100" style="height: 300px;"></div>
                 </div>
 
-                <!-- Text Result -->
-                <div v-else-if="metric.result.type === 'text'" class="result-text">
-                  <pre class="bg-light p-2 rounded small mb-0">{{ metric.result.content }}</pre>
+                <!-- Correlation Comparison Chart -->
+                <div v-else-if="metric.id === 'correlation'" class="result-chart">
+                  <div :id="`corr-chart-${metric.id}`" class="w-100" style="height: 300px;"></div>
+                </div>
+
+                <!-- Histogram Comparison Chart -->
+                <div v-else-if="metric.id === 'histogram'" class="result-chart">
+                  <div :id="`histogram-chart-${metric.id}`" class="w-100" style="height: 300px;"></div>
+                </div>
+
+                <!-- Default Multi-Source Display for other types -->
+                <div v-else class="sources-results">
+                  <div v-for="sourceId in selectedSources" :key="sourceId" class="mb-3 p-2 border rounded">
+                    <div class="d-flex justify-content-between align-items-center mb-2">
+                      <span class="badge bg-secondary">{{ sourceId }}</span>
+                    </div>
+
+                    <div v-if="!metric.results[sourceId]" class="text-muted x-small py-2 text-center">
+                      <div v-if="metric.computing" class="d-flex align-items-center justify-content-center gap-2">
+                        <span class="spinner-border spinner-border-sm text-primary" role="status"></span>
+                        <span class="fst-italic">Computing...</span>
+                      </div>
+                      <span v-else>Not computed. Click "Compute" to run.</span>
+                    </div>
+
+                    <!-- Scalar Result -->
+                    <div v-else-if="metric.results[sourceId].type === 'scalar'" class="result-scalar">
+                      <div class="alert alert-info mb-0 py-1 small">
+                        <strong>{{ metric.results[sourceId].label }}:</strong> {{ metric.results[sourceId].value }}
+                      </div>
+                    </div>
+
+                    <!-- Table Result -->
+                    <div v-else-if="metric.results[sourceId].type === 'table'" class="result-table">
+                      <table class="table table-sm table-bordered mb-0 x-small">
+                        <thead>
+                          <tr>
+                            <th v-for="header in metric.results[sourceId].headers" :key="header">{{ header }}</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          <tr v-for="(row, idx) in metric.results[sourceId].rows" :key="idx">
+                            <td v-for="(cell, cidx) in row" :key="cidx">{{ cell }}</td>
+                          </tr>
+                        </tbody>
+                      </table>
+                    </div>
+
+                    <!-- Critical Points Result -->
+                    <div v-else-if="metric.results[sourceId].type === 'critical_points'" class="result-critical-points x-small">
+                        <div class="d-flex flex-column gap-1">
+                          <div class="d-flex gap-3">
+                             <div><strong>Minima:</strong> {{ metric.results[sourceId].minima.count }}</div>
+                             <div><strong>Maxima:</strong> {{ metric.results[sourceId].maxima.count }}</div>
+                             <div v-if="metric.results[sourceId].saddles"><strong>Saddles:</strong> {{ metric.results[sourceId].saddles.count }}</div>
+                          </div>
+                          <div v-if="metric.results[sourceId].faults" class="mt-2 pt-2 border-top text-danger">
+                            <div class="fw-bold mb-1">Topology Faults:</div>
+                            <div class="d-flex gap-3">
+                              <div><strong>False Min:</strong> {{ metric.results[sourceId].faults.num_false_min }}</div>
+                              <div><strong>False Max:</strong> {{ metric.results[sourceId].faults.num_false_max }}</div>
+                              <div><strong>False Segmentation Labels:</strong> {{ metric.results[sourceId].faults.num_false_labels }}</div>
+                            </div>
+                          </div>
+                        </div>
+                    </div>
+
+                    <!-- Image Result -->
+                    <div v-else-if="metric.results[sourceId].type === 'image'" class="result-image">
+                      <img :src="metric.results[sourceId].src" class="img-fluid" :alt="metric.name" />
+                    </div>
+
+                    <!-- Text Result -->
+                    <div v-else-if="metric.results[sourceId].type === 'text'" class="result-text">
+                      <pre class="bg-light p-2 rounded small mb-0">{{ metric.results[sourceId].content }}</pre>
+                    </div>
+                  </div>
                 </div>
               </div>
 
@@ -713,5 +1216,23 @@ export default {
 .result-text pre {
   max-height: 300px;
   overflow-y: auto;
+}
+
+.cursor-pointer {
+  cursor: pointer;
+}
+
+.x-small {
+  font-size: 0.75rem;
+}
+
+.btn-xs {
+  padding: 0.1rem 0.25rem;
+  font-size: 0.7rem;
+  border-radius: 0.15rem;
+}
+
+.btn-xs i {
+  font-size: 0.7rem;
 }
 </style>

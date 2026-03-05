@@ -10,7 +10,14 @@ export default {
     baseConfigurations: { type: Object, required: true },
     derivedConfigurations: { type: Object, required: true },
     savedConfigurations: { type: Object, required: true },
-    compressorOptions: { type: Object, required: false, default: () => ({}) },
+    compressorOptions: {
+      type: Object,
+      default: () => ({})
+    },
+    noCard: {
+      type: Boolean,
+      default: false
+    }
   },
   components: {
     Multiselect,
@@ -654,12 +661,16 @@ export default {
     setupResizeObserver() {
       if (!this.$refs.graphContainer) return;
       this.resizeObserver = new ResizeObserver(entries => {
-        for (let entry of entries) {
-          const { width, height } = entry.contentRect;
-          if (width > 0 && height > 0 && this.simulation) {
-            this.initializeGraphWithDimensions(width, height);
+        // Use requestAnimationFrame to avoid "ResizeObserver loop completed with undelivered notifications"
+        window.requestAnimationFrame(() => {
+          if (!entries.length || !this.$refs.graphContainer) return;
+          for (let entry of entries) {
+            const { width, height } = entry.contentRect;
+            if (width > 0 && height > 0 && this.simulation) {
+              this.initializeGraphWithDimensions(width, height);
+            }
           }
-        }
+        });
       });
       this.resizeObserver.observe(this.$refs.graphContainer);
     },
@@ -766,9 +777,8 @@ export default {
 </script>
 
 <template>
-  <!-- Configuration Graph Card Panel -->
-  <div class="card border-primary mt-2">
-    <div class="card-header d-flex justify-content-between align-items-center">
+  <div :class="noCard ? 'h-100 d-flex flex-column' : 'card border-primary mt-2'">
+    <div v-if="!noCard" class="card-header d-flex justify-content-between align-items-center">
       <h6 class="mb-0">Configuration Graph</h6>
       <div class="d-flex align-items-center">
         <span class="badge bg-info me-2">{{ Object.keys(baseConfigurations).length }}</span>
@@ -777,8 +787,18 @@ export default {
         </button>
       </div>
     </div>
-    <div class="card-body p-2">
-      <div id="configuration-graph" ref="graphContainer" style="min-height: 320px; width: 100%; border: 1px solid #dee2e6; border-radius: 0.35rem; cursor: grab; position: relative;">
+    <div :class="noCard ? 'flex-grow-1 p-0 position-relative h-100' : 'card-body p-2'">
+      <!-- Floating action button for fullscreen if noCard -->
+      <button 
+        v-if="noCard" 
+        class="btn btn-sm btn-outline-primary border-0 shadow-sm position-absolute top-0 end-0 m-2" 
+        style="z-index: 10; background: rgba(255,255,255,0.8); backdrop-filter: blur(2px);"
+        @click="openLargeGraphModal" 
+        title="Open Fullscreen View"
+      >
+        <i class="bi bi-arrows-fullscreen"></i>
+      </button>
+      <div id="configuration-graph" ref="graphContainer" :style="{ minHeight: noCard ? '100%': '320px', width: '100%', border: noCard ? 'none' : '1px solid #dee2e6', borderRadius: '0.35rem', cursor: 'grab', position: 'relative', height: noCard ? '100%' : 'auto' }">
         <svg ref="graphSvg" width="100%" height="100%"></svg>
         <div
           v-if="loading"
@@ -786,137 +806,6 @@ export default {
           style="position: absolute; top: 0; left: 0; width: 100%; height: 100%; background: rgba(255,255,255,0.6); z-index: 10; display: flex; align-items: center; justify-content: center; pointer-events: all;">
           <span class="spinner-border text-primary" role="status" aria-hidden="true"></span>
           <span class="ms-2">Rendering...</span>
-        </div>
-        <!-- Modals remain inside the graph container -->
-        <div id="largeGraphModal" class="modal fade" tabindex="-1" aria-labelledby="largeGraphModalLabel" aria-hidden="true">
-          <div class="modal-dialog modal-fullscreen">
-            <div class="modal-content">
-              <div class="modal-header">
-                <h5 class="modal-title" id="largeGraphModalLabel">Configuration Graph - Fullscreen View</h5>
-                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
-              </div>
-              <div class="modal-body p-0">
-                <div id="large-configuration-graph" ref="largeGraphContainer" style="width: 100%; height: 100%; cursor: grab;">
-                  <svg ref="largeGraphSvg" width="100%" height="100%"></svg>
-                </div>
-              </div>
-              <div class="modal-footer">
-                <div v-if="contextMenuTarget" class="context-menu-footer mb-2 w-100">
-                  <div id="node-context-menu-fullscreen" class="d-flex align-items-center flex-wrap gap-2">
-                    <span class="text-muted small">Selected: <strong>{{ contextMenuTarget.name }}</strong></span>
-                    <div class="vr"></div>
-                    <template v-if="contextMenuTarget.type === 'base'">
-                      <button class="btn btn-sm btn-outline-primary" @click="openPropagateModal">
-                        <i class="bi bi-arrow-repeat me-1"></i>Propagate
-                      </button>
-                      <button class="btn btn-sm btn-outline-danger" @click="deleteNode">
-                        <i class="bi bi-trash me-1"></i>Remove
-                      </button>
-                    </template>
-                    <template v-else-if="contextMenuTarget.type === 'derived'">
-                      <button class="btn btn-sm btn-outline-danger" @click="deleteNode">
-                        <i class="bi bi-trash me-1"></i>Remove
-                      </button>
-                    </template>
-                  </div>
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
-
-        <div id="propagateModal" class="modal fade" tabindex="-1" aria-labelledby="propagateModalLabel" aria-hidden="true">
-          <div class="modal-dialog modal-dialog-centered">
-            <div class="modal-content">
-              <div class="modal-header">
-                <h5 class="modal-title" id="propagateModalLabel">Propagate Parameter</h5>
-                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
-              </div>
-              <div class="modal-body" v-if="contextMenuTarget">
-                <label>Select a parameter to propagate:</label>
-                <select v-model="selectedParameter" class="form-select" @change="parameterValues = []">
-                  <option
-                    v-for="label in Object.keys(availableParameters)"
-                    :key="label"
-                    :value="label"
-                  >
-                    {{ label }}
-                  </option>
-                </select>
-                <div v-if="selectedParameter && selectedParameter.toLowerCase().includes('error bound') && !selectedParameter.toLowerCase().includes('mode')" class="mt-3">
-                  <hr>
-                  <strong>Bulk Generate Error Bound Configurations</strong>
-                  <form>
-                    <div class="mb-2">
-                      <div class="form-floating">
-                        <input type="number" id="numConfigs" class="form-control" v-model="bulkSettings.count" min="1" max="1000" placeholder="Number of Configurations">
-                        <label for="numConfigs">Number of Configurations</label>
-                      </div>
-                    </div>
-                    <div class="mb-2">
-                      <div class="form-floating">
-                        <select id="generationType" class="form-select" v-model="bulkSettings.distribution">
-                          <option value="linear">Linear Distribution</option>
-                          <option value="exponential">Exponential Distribution</option>
-                          <option value="random">Random Distribution</option>
-                        </select>
-                        <label for="generationType">Generation Type</label>
-                      </div>
-                    </div>
-                    <div class="mb-2">
-                      <div class="form-floating">
-                        <input type="number" id="minBound" class="form-control" v-model="bulkSettings.minBound" step="0.00001" placeholder="Min Error Bound">
-                        <label for="minBound">Min Error Bound</label>
-                      </div>
-                    </div>
-                    <div class="mb-2">
-                      <div class="form-floating">
-                        <input type="number" id="maxBound" class="form-control" v-model="bulkSettings.maxBound" step="0.00001" placeholder="Max Error Bound">
-                        <label for="maxBound">Max Error Bound</label>
-                      </div>
-                    </div>
-                  </form>
-                </div>
-                <div v-else-if="selectedParameter && compressorOptions[contextMenuTarget.config.compressor_id]">
-                  <label class="mt-2">Value to propagate:</label>
-                  <multiselect
-                    v-model="parameterValues"
-                    :options="compressorOptions[contextMenuTarget.config.compressor_id].Detail[selectedParameter]"
-                    :multiple="true"
-                    :searchable="true"
-                    :placeholder="'Select values'"
-                    :close-on-select="false"
-                    label="label"
-                    track-by="id"
-                    class="mb-2"
-                  />
-                </div>
-              </div>
-              <div class="modal-footer d-flex justify-content-between">
-                <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancel</button>
-                <button
-                  v-if="selectedParameter && selectedParameter.toLowerCase().includes('error bound') && !selectedParameter.toLowerCase().includes('mode')"
-                  type="button"
-                  class="btn btn-primary"
-                  data-bs-dismiss="modal"
-                  :disabled="!isBulkConfigValid"
-                  @click="generateBulkConfigurations"
-                >
-                  Bulk Generate
-                </button>
-                <button
-                  v-else
-                  type="button"
-                  class="btn btn-primary"
-                  data-bs-dismiss="modal"
-                  @click="propagateParameter"
-                  :disabled="!selectedParameter || !parameterValues || (Array.isArray(parameterValues) && parameterValues.length === 0)"
-                >
-                  Propagate
-                </button>
-              </div>
-            </div>
-          </div>
         </div>
       </div>
       <div v-if="Object.keys(baseConfigurations).length === 0" class="text-center text-muted mt-3">
@@ -972,4 +861,136 @@ export default {
     <span id="compressorAlertMessage">Placeholder</span>
   </div>
 
+  <teleport to="body">
+    <div id="largeGraphModal" class="modal fade" tabindex="-1" aria-labelledby="largeGraphModalLabel" aria-hidden="true" style="z-index: 2000;">
+      <div class="modal-dialog modal-fullscreen">
+        <div class="modal-content">
+          <div class="modal-header">
+            <h5 class="modal-title" id="largeGraphModalLabel">Configuration Graph - Fullscreen View</h5>
+            <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+          </div>
+          <div class="modal-body p-0 overflow-hidden">
+            <div id="large-configuration-graph" ref="largeGraphContainer" style="width: 100%; height: 100%; cursor: grab;">
+              <svg ref="largeGraphSvg" width="100%" height="100%"></svg>
+            </div>
+          </div>
+          <div class="modal-footer">
+            <div v-if="contextMenuTarget" class="context-menu-footer mb-2 w-100">
+              <div id="node-context-menu-fullscreen" class="d-flex align-items-center flex-wrap gap-2">
+                <span class="text-muted small">Selected: <strong>{{ contextMenuTarget.name }}</strong></span>
+                <div class="vr"></div>
+                <template v-if="contextMenuTarget.type === 'base'">
+                  <button class="btn btn-sm btn-outline-primary" @click="openPropagateModal">
+                    <i class="bi bi-arrow-repeat me-1"></i>Propagate
+                  </button>
+                  <button class="btn btn-sm btn-outline-danger" @click="deleteNode">
+                    <i class="bi bi-trash me-1"></i>Remove
+                  </button>
+                </template>
+                <template v-else-if="contextMenuTarget.type === 'derived'">
+                  <button class="btn btn-sm btn-outline-danger" @click="deleteNode">
+                    <i class="bi bi-trash me-1"></i>Remove
+                  </button>
+                </template>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div id="propagateModal" class="modal fade" tabindex="-1" aria-labelledby="propagateModalLabel" aria-hidden="true" style="z-index: 2100;">
+      <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content">
+          <div class="modal-header">
+            <h5 class="modal-title" id="propagateModalLabel">Propagate Parameter</h5>
+            <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+          </div>
+          <div class="modal-body" v-if="contextMenuTarget">
+            <label>Select a parameter to propagate:</label>
+            <select v-model="selectedParameter" class="form-select" @change="parameterValues = []">
+              <option
+                v-for="label in Object.keys(availableParameters)"
+                :key="label"
+                :value="label"
+              >
+                {{ label }}
+              </option>
+            </select>
+            <div v-if="selectedParameter && selectedParameter.toLowerCase().includes('error bound') && !selectedParameter.toLowerCase().includes('mode')" class="mt-3">
+              <hr>
+              <strong>Bulk Generate Error Bound Configurations</strong>
+              <form>
+                <div class="mb-2">
+                  <div class="form-floating">
+                    <input type="number" id="numConfigs-tele" class="form-control" v-model="bulkSettings.count" min="1" max="1000" placeholder="Number of Configurations">
+                    <label for="numConfigs-tele">Number of Configurations</label>
+                  </div>
+                </div>
+                <div class="mb-2">
+                  <div class="form-floating">
+                    <select id="generationType-tele" class="form-select" v-model="bulkSettings.distribution">
+                      <option value="linear">Linear Distribution</option>
+                      <option value="exponential">Exponential Distribution</option>
+                      <option value="random">Random Distribution</option>
+                    </select>
+                    <label for="generationType-tele">Generation Type</label>
+                  </div>
+                </div>
+                <div class="mb-2">
+                  <div class="form-floating">
+                    <input type="number" id="minBound-tele" class="form-control" v-model="bulkSettings.minBound" step="0.00001" placeholder="Min Error Bound">
+                    <label for="minBound-tele">Min Error Bound</label>
+                  </div>
+                </div>
+                <div class="mb-2">
+                  <div class="form-floating">
+                    <input type="number" id="maxBound-tele" class="form-control" v-model="bulkSettings.maxBound" step="0.00001" placeholder="Max Error Bound">
+                    <label for="maxBound-tele">Max Error Bound</label>
+                  </div>
+                </div>
+              </form>
+            </div>
+            <div v-else-if="selectedParameter && compressorOptions[contextMenuTarget.config.compressor_id]">
+              <label class="mt-2">Value to propagate:</label>
+              <multiselect
+                v-model="parameterValues"
+                :options="compressorOptions[contextMenuTarget.config.compressor_id].Detail[selectedParameter]"
+                :multiple="true"
+                :searchable="true"
+                :placeholder="'Select values'"
+                :close-on-select="false"
+                label="label"
+                track-by="id"
+                class="mb-2"
+              />
+            </div>
+          </div>
+          <div class="modal-footer d-flex justify-content-between">
+            <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancel</button>
+            <button
+              v-if="selectedParameter && selectedParameter.toLowerCase().includes('error bound') && !selectedParameter.toLowerCase().includes('mode')"
+              type="button"
+              class="btn btn-primary"
+              data-bs-dismiss="modal"
+              :disabled="!isBulkConfigValid"
+              @click="generateBulkConfigurations"
+            >
+              Bulk Generate
+            </button>
+            <button
+              v-else
+              type="button"
+              class="btn btn-primary"
+              data-bs-dismiss="modal"
+              @click="propagateParameter"
+              :disabled="!selectedParameter || !parameterValues || (Array.isArray(parameterValues) && parameterValues.length === 0)"
+            >
+              Propagate
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </teleport>
 </template>

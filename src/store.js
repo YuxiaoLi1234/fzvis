@@ -29,6 +29,11 @@ export default createStore({
     derivedConfigurations: {},
     savedConfigurations: {},
     compressorOptions: {},
+    criticalPoints: {
+      original: null,
+      decompressed: {} // Map of compressorId -> cpData
+    },
+    bulkGenerationRequests: [],
   },
 
   mutations: {
@@ -51,14 +56,31 @@ export default createStore({
       state.filterOperations = [];
     },
     setComparisonData(state, payload) {
-      if (payload) {
-        for (const key in payload) {
-          if (payload[key].decp_data) {
-            payload[key].decp_data = markRaw(payload[key].decp_data);
-          }
-        }
+      if (!payload) {
+        state.comparisonData = null;
+        return;
       }
-      state.comparisonData = payload;
+
+      const next = state.comparisonData ? { ...state.comparisonData } : {};
+      for (const key in payload) {
+        const item = { ...payload[key] };
+        if (item.decp_data) {
+          item.decp_data = markRaw(item.decp_data);
+        }
+        next[key] = item;
+      }
+      state.comparisonData = next;
+    },
+    removeComparisonData(state, nodeId) {
+      if (state.comparisonData && nodeId in state.comparisonData) {
+        const next = { ...state.comparisonData };
+        delete next[nodeId];
+        state.comparisonData = Object.keys(next).length > 0 ? next : null;
+      }
+      // Clean up associated critical points, regardless of comparisonData existence
+      if (state.criticalPoints?.decompressed && nodeId in state.criticalPoints.decompressed) {
+        delete state.criticalPoints.decompressed[nodeId];
+      }
     },
     setFileData(state, payload) {
       if (!payload) return;
@@ -106,6 +128,7 @@ export default createStore({
           vars: next.vars,
         };
         state.filterOperations = [];
+        state.criticalPoints = { original: null, decompressed: {} };
       }
 
       state.dataset = next;
@@ -114,6 +137,7 @@ export default createStore({
       state.dataset = null;
       state.originalDataset = null;
       state.filterOperations = [];
+      state.criticalPoints = { original: null, decompressed: {} };
     },
     addFilterOperation(state, operation) {
       // Add a filter operation to the stack
@@ -166,6 +190,50 @@ export default createStore({
     },
     setShowConfigGraphInPane(state, payload) {
       state.showConfigGraphInPane = Boolean(payload);
+    },
+    addBaseConfiguration(state, { name, config }) {
+      state.baseConfigurations = { ...state.baseConfigurations, [name]: config };
+      // initialize derived map if doesn't exist
+      if (!(name in state.derivedConfigurations)) {
+        state.derivedConfigurations = { ...state.derivedConfigurations, [name]: {} };
+      }
+    },
+    addDerivedConfiguration(state, { baseName, derivedName, config }) {
+      if (!(baseName in state.derivedConfigurations)) {
+        state.derivedConfigurations[baseName] = {};
+      }
+      state.derivedConfigurations[baseName] = {
+        ...state.derivedConfigurations[baseName],
+        [derivedName]: config
+      };
+      state.savedConfigurations = { ...state.savedConfigurations, [derivedName]: config };
+    },
+    setCriticalPoints(state, payload) {
+      if (!payload) {
+        state.criticalPoints = { original: null, decompressed: {} };
+        return;
+      }
+      const { source, data } = payload;
+      if (source === 'original') {
+        state.criticalPoints.original = data;
+      } else if (source) {
+        state.criticalPoints.decompressed = {
+          ...state.criticalPoints.decompressed,
+          [source]: data
+        };
+      } else {
+        // Fallback for backward compatibility if source is not provided
+        state.criticalPoints.original = payload;
+      }
+    },
+    requestBulkGeneration(state, payload) {
+      state.bulkGenerationRequests.push({
+        id: Date.now(),
+        ...payload
+      });
+    },
+    clearBulkGenerationRequest(state, requestId) {
+      state.bulkGenerationRequests = state.bulkGenerationRequests.filter(r => r.id !== requestId);
     },
   },
 

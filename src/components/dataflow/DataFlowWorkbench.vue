@@ -7,8 +7,11 @@ import DataClipping from '../filter/DataClipping.vue';
 import DataThresholdMask from '../filter/DataThresholdMask.vue';
 import DataNormalization from '../filter/DataNormalization.vue';
 import SZ3Pipeline from '../compressor/SZ3Pipeline.vue';
+import ZFPConfig from '../compressor/ZFPConfig.vue';
+import CriticalPointsCorrection from '../correction/CriticalPointsCorrection.vue';
 import { Splitpanes, Pane } from 'splitpanes';
 import { NodeFactory } from '../../utils/nodeClasses';
+import ConfigGraph from '../ConfigGraph.vue';
 
 export default {
   name: 'DataFlowWorkbench',
@@ -18,8 +21,11 @@ export default {
     DataThresholdMask,
     DataNormalization,
     SZ3Pipeline,
+    ZFPConfig,
+    CriticalPointsCorrection,
     Splitpanes,
-    Pane
+    Pane,
+    ConfigGraph
   },
 
   data() {
@@ -79,11 +85,27 @@ export default {
           label: 'SZ3 Compressor',
           description: 'A Modular Error-bounded Lossy Compression Framework.',
           icon: 'bi-cpu',
+          architecture: 'modular'
+        },
+        {
+          id: 'zfp',
+          label: 'ZFP Compressor',
+          description: 'Compress floating-point and integer arrays with high throughput.',
+          icon: 'bi-cpu',
+          architecture: 'parametric'
+        },
+      ],
+      availableCorrections: [
+        {
+          id: 'critical_points',
+          label: 'Critical Points Correction',
+          description: 'Apply fixes to correct critical points in the compressed data',
+          icon: 'bi-bullseye',
         },
       ],
       nodes: [],
       selectedNodeId: null,
-      counters: { source: 0, filter: 0, module: 0, compressor: 0 },
+      counters: { source: 0, filter: 0, module: 0, compressor: 0, correction: 0 },
       dragging: { active: false, nodeId: null, offsetX: 0, offsetY: 0 },
       // Map of filter types to component classes for pipeline replay
       filterComponents: new Map([
@@ -95,6 +117,7 @@ export default {
         filters: true,
         modules: true,
         compressors: true,
+        corrections: true,
       },
       // Edges between nodes and connection state
       edges: [],
@@ -110,10 +133,10 @@ export default {
         height: 600,
       },
       deleteConfirmation: {
-        show: false,
         nodeId: null,
         nodeLabel: '',
       },
+      showConfigGraph: false,
     };
   },
 
@@ -135,6 +158,21 @@ export default {
         type: ds.type || null,
       };
     },
+    showConfigGraphInPane() {
+      return this.$store?.state?.showConfigGraphInPane || false;
+    },
+    baseConfigurations() {
+      return this.$store?.state?.baseConfigurations || {};
+    },
+    derivedConfigurations() {
+      return this.$store?.state?.derivedConfigurations || {};
+    },
+    savedConfigurations() {
+      return this.$store?.state?.savedConfigurations || {};
+    },
+    compressorOptions() {
+      return this.$store?.state?.compressorOptions || {};
+    },
   },
 
   watch: {
@@ -145,6 +183,20 @@ export default {
           n.status = loaded ? 'ready' : 'empty';
         });
       }
+    },
+    '$store.state.bulkGenerationRequests': {
+      handler(requests) {
+        if (requests && requests.length > 0) {
+          const req = requests[0];
+          if (req.type === 'error-bound') {
+            this.handleErrorBoundBulkGeneration(req.payload);
+          } else if (req.type === 'propagate') {
+            this.handlePropagateParameter(req.payload);
+          }
+          this.$store.commit('clearBulkGenerationRequest', req.id);
+        }
+      },
+      deep: true
     }
   },
 
@@ -273,9 +325,19 @@ export default {
         label = def.label;
         icon = def.icon || 'bi-cpu';
         description = def.description;
+        config = {
+          architecture: def.architecture || 'parametric'
+        };
+      } else if (type === 'correction') {
+        const def = this.availableCorrections.find(c => c.id === defId);
+        if (!def) return;
+        this.counters.correction += 1;
+        label = def.label;
+        icon = def.icon || 'bi-gear';
+        description = def.description;
       }
 
-      const id = `${type}-${defId || 'inst'}-${this.counters[type] || Date.now()}`;
+  const id = `${defId || type}-${this.counters[type] || Date.now()}`;
       const node = NodeFactory.createNode(type, id, label, icon, defId, config);
       // Attach definition id and initial props to mimic PipelineBrowser config pane
       node.definitionId = defId;
@@ -302,6 +364,11 @@ export default {
         node.status = 'pending';
       } else if (type === 'compressor') {
         if (defId === 'sz3') node.editorComponent = markRaw(SZ3Pipeline);
+        else if (defId === 'zfp') node.editorComponent = markRaw(ZFPConfig);
+        else node.editorComponent = null;
+        node.status = 'pending';
+      } else if (type === 'correction') {
+        if (defId === 'critical_points') node.editorComponent = markRaw(CriticalPointsCorrection);
         else node.editorComponent = null;
         node.status = 'pending';
       }
@@ -312,6 +379,101 @@ export default {
         this.autoConnectNewNode(node);
         this.updateCanvasSize();
       });
+    },
+    promoteToConfigGraph(node) {
+      if (node.type !== 'compressor') return;
+      
+      const config = {
+        compressor_id: node.definitionId,
+        compressor_config: {}
+      };
+
+      // Extract config from modules
+      if (node.modules) {
+        node.modules.forEach(m => {
+          if (m.value && Object.keys(m.value).length) {
+            const [label] = Object.keys(m.value);
+            config.compressor_config[m.key] = m.value[label];
+          }
+        });
+      }
+
+      // Add error bound if present in node config or as defaults
+      // For now, use some defaults if not found
+      if (node.definitionId === 'sz3') {
+        config.compressor_config['sz3:error_bound_mode_str'] = 'ABS';
+        config.compressor_config['sz3:abs_error_bound'] = 1e-3;
+      }
+
+      config.early_config = {
+        'pressio:metric': 'composite',
+        'composite:plugins': ['time', 'size', 'error_stat'],
+      };
+
+      // Save to store
+      this.$store.commit('addBaseConfiguration', { name: node.id, config });
+      this.$store.commit('setShowConfigGraphInPane', true);
+      this.$store.commit('setStatus', { type: 'success', message: `Node ${node.id} added to Config Graph.` });
+    },
+
+    handleErrorBoundBulkGeneration({ baseConfigName, parameter, values }) {
+      const baseNode = this.nodes.find(n => n.id === baseConfigName);
+      if (!baseNode) {
+        this.$store.commit('setStatus', { type: 'danger', message: 'Base node not found in workspace.' });
+        return;
+      }
+
+      const inputEdges = this.edges.filter(e => e.to.nodeId === baseNode.id);
+      
+      values.forEach((val, index) => {
+        const type = 'compressor';
+        const defId = baseNode.definitionId;
+        const x = baseNode.x + (index + 1) * 50;
+        const y = baseNode.y + (index + 1) * 30;
+        
+        const label = `${baseNode.label} (v${index + 1})`;
+        const id = `${defId}-bulk-${Date.now()}-${index}`;
+        
+        // Create new node
+        const newNode = NodeFactory.createNode(type, id, label, baseNode.icon, defId, { ...baseNode.config });
+        newNode.x = x;
+        newNode.y = y;
+        newNode.definitionId = defId;
+        newNode.editorComponent = baseNode.editorComponent;
+        newNode.status = 'ready';
+        
+        // Deep copy modules
+        if (baseNode.modules) {
+          newNode.modules = JSON.parse(JSON.stringify(baseNode.modules));
+        }
+
+        this.nodes.push(newNode);
+
+        // Connect to same inputs
+        inputEdges.forEach(edge => {
+          this.addEdge(edge.from.nodeId, edge.from.portId, newNode.id, edge.to.portId);
+        });
+
+        // Store this derived config in the store as well for the ConfigGraph to see
+        const derivedConfig = JSON.parse(JSON.stringify(this.baseConfigurations[baseConfigName]));
+        derivedConfig.compressor_config[parameter] = val;
+        this.$store.commit('addDerivedConfiguration', { 
+          baseName: baseConfigName, 
+          derivedName: id, 
+          config: derivedConfig 
+        });
+      });
+
+      this.$nextTick(() => {
+        this.updateCanvasSize();
+      });
+    },
+
+    handlePropagateParameter({ baseNodeId, parameter, values }) {
+      // Similar to error bound but for other parameters
+      // For now, let's treat it similarly or just show a message
+      console.log('Propagating parameter from base node:', baseNodeId, parameter, values);
+      this.$store.commit('setStatus', { type: 'info', message: 'Parameter propagation not fully implemented for data flow nodes yet.' });
     },
     onNodeConfigChange(payload) {
       if (this.selectedNode) {
@@ -334,16 +496,22 @@ export default {
     handleFilterSuccess(nodeId, payload) {
       const node = this.nodes.find(n => n.id === nodeId);
       if (!node) return;
-      const result = payload?.result || null;
+      
+      const result = payload?.result || payload || null;
       const context = payload?.context || null;
+      
       node.lastResult = result;
       node.lastRunContext = context;
       node.lastRunAt = Date.now();
+      
       let message = 'Filter applied successfully.';
       if (result?.dimensions && Array.isArray(result.dimensions)) {
         message = `Output dimensions ${result.dimensions.join('×')}.`;
       }
       this.setNodeStatus(nodeId, 'success', message);
+      
+      // Propagate reset to downstream nodes since data has changed
+      this.resetDownstreamNodes(nodeId);
     },
     handleFilterError(nodeId, payload) {
       const node = this.nodes.find(n => n.id === nodeId);
@@ -392,6 +560,25 @@ export default {
         });
       }
     },
+    resetDownstreamNodes(nodeId) {
+      // Find all nodes that depend on this node (directly or indirectly)
+      const directDownstreamIds = this.edges
+        .filter(e => e.from.nodeId === nodeId)
+        .map(e => e.to.nodeId);
+      
+      directDownstreamIds.forEach(childId => {
+        const childNode = this.nodes.find(n => n.id === childId);
+        if (childNode) {
+          childNode.status = 'pending';
+          childNode.lastResult = null;
+          childNode.lastError = null;
+          if (this.$store) {
+            this.$store.commit('removeComparisonData', childId);
+          }
+          this.resetDownstreamNodes(childId); // Recursive reset
+        }
+      });
+    },
     removeNode(nodeId) {
       const idx = this.nodes.findIndex(n => n.id === nodeId);
       if (idx === -1) return;
@@ -418,6 +605,9 @@ export default {
         store: this.$store,
         filterComponents: this.filterComponents,
       });
+
+      // Invalidate and reset all downstream nodes before removing edges
+      this.resetDownstreamNodes(nodeId);
 
       const wasSelected = this.selectedNodeId === nodeId;
       this.nodes.splice(idx, 1);
@@ -491,6 +681,14 @@ export default {
       const targetNodeId = targetNode.id;
       const targetPortId = targetPort.id;
       if (this.validateConnection(sourceNodeId, targetNodeId)) {
+        // Reset the target node and its descendants since the input is changing
+        this.resetDownstreamNodes(targetNodeId);
+        targetNode.status = 'pending';
+        targetNode.lastResult = null;
+        if (this.$store) {
+          this.$store.commit('removeComparisonData', targetNodeId);
+        }
+
         this.edges = this.edges.filter(e => 
           !(e.to.nodeId === targetNodeId && e.to.portId === targetPortId)
         );
@@ -653,6 +851,13 @@ export default {
 
         const nodeResult = response.data[nodeId];
         
+        // Final guard: check if node still exists and is the same type
+        const finalNode = this.nodes.find(n => n.id === nodeId);
+        if (!finalNode) {
+          console.warn(`Node ${nodeId} no longer exists, discarding results.`);
+          return;
+        }
+
         if (nodeResult.error) {
           this.setNodeStatus(nodeId, 'error', nodeResult.error);
         } else {
@@ -669,8 +874,8 @@ export default {
           }
 
           this.setNodeStatus(nodeId, 'success', 'Compression completed.');
-          this.selectedNode.lastResult = nodeResult;
-          this.selectedNode.lastRunAt = Date.now();
+          finalNode.lastResult = nodeResult;
+          finalNode.lastRunAt = Date.now();
           
           if (this.$store) {
             this.$store.commit('setComparisonData', { [nodeId]: nodeResult });
@@ -786,6 +991,58 @@ export default {
         return sz3Options[moduleId] || [];
       }
       return [];
+    },
+    getIncomingData(nodeId) {
+      const node = this.nodes.find(n => n.id === nodeId);
+      const incomingEdges = this.edges.filter(e => e.to.nodeId === nodeId);
+      const data = {};
+      
+      // Process explicit connections
+      incomingEdges.forEach(edge => {
+        const sourceNode = this.nodes.find(n => n.id === edge.from.nodeId);
+        if (!sourceNode) return;
+
+        let sourceData = null;
+        if (sourceNode.type === 'source') {
+          sourceData = {
+            data_key: this.$store.state.dataset?.data_key || this.$store.state.dataset?.name,
+            meta: {
+              dimensions: [
+                this.$store.state.dataset?.width,
+                this.$store.state.dataset?.height,
+                this.$store.state.dataset?.depth
+              ].filter(d => d && d !== '1' && d !== 1).map(Number),
+              precision: this.$store.state.dataset?.precision,
+              name: this.$store.state.dataset?.name
+            }
+          };
+        } else if (sourceNode.type === 'filter' || sourceNode.type === 'compressor' || sourceNode.type === 'correction') {
+          sourceData = sourceNode.lastResult || (this.comparisonData ? this.comparisonData[sourceNode.id] : null);
+        }
+
+        data[edge.to.portId] = sourceData;
+      });
+
+      // Special handling for correction nodes: implicitly provide original data
+      if (node && node.type === 'correction') {
+        const originalSourceNode = this.nodes.find(n => n.type === 'source');
+        if (originalSourceNode) {
+          data['original'] = {
+            data_key: this.$store.state.dataset?.data_key || this.$store.state.dataset?.name,
+            meta: {
+              dimensions: [
+                this.$store.state.dataset?.width,
+                this.$store.state.dataset?.height,
+                this.$store.state.dataset?.depth
+              ].filter(d => d && d !== '1' && d !== 1).map(Number),
+              precision: this.$store.state.dataset?.precision,
+              name: this.$store.state.dataset?.name
+            }
+          };
+        }
+      }
+
+      return data;
     },
     updateCanvasSize() {
       if (!this.nodes.length) {
@@ -1039,6 +1296,43 @@ export default {
                 <i class="bi bi-arrows-move text-muted" aria-hidden="true" title="Drag to canvas"></i>
               </button>
             </template>
+
+            <!-- Corrections -->
+            <div 
+              class="list-group-item bg-light fw-semibold d-flex justify-content-between align-items-center cursor-pointer"
+              @click="paletteState.corrections = !paletteState.corrections"
+            >
+              <div class="d-flex align-items-center gap-2">
+                <i :class="['bi', paletteState.corrections ? 'bi-chevron-down' : 'bi-chevron-right']"></i>
+                <span>Correction Modules</span>
+              </div>
+              <span class="badge bg-secondary">{{ availableCorrections.length }}</span>
+            </div>
+
+            <template v-if="paletteState.corrections">
+              <button
+                v-for="corr in availableCorrections"
+                :key="`pc-${corr.id}`"
+                type="button"
+                class="list-group-item d-flex align-items-center justify-content-between text-start"
+                :class="{ 
+                  'node-disabled': !canAddNodeType('correction'),
+                  'node-enabled': canAddNodeType('correction')
+                }"
+                :draggable="canAddNodeType('correction')"
+                @dragstart="onDragStart($event, { type: 'correction', id: corr.id })"
+                :title="corr.description"
+              >
+                <div class="d-flex align-items-center gap-2">
+                  <i :class="['bi', corr.icon || 'bi-gear']" aria-hidden="true"></i>
+                  <div>
+                    <div class="fw-semibold">{{ corr.label }}</div>
+                    <div class="text-muted small">{{ corr.description }}</div>
+                  </div>
+                </div>
+                <i class="bi bi-arrows-move text-muted" aria-hidden="true" title="Drag to canvas"></i>
+              </button>
+            </template>
           </div>
         </div>
       </Pane>
@@ -1102,6 +1396,15 @@ export default {
                     <span class="badge rounded-pill" :class="getStatusBadgeClass(node.status)">{{ getStatusLabel(node.status) }}</span>
                   </div>
                   <div class="d-flex align-items-center gap-1 ms-2">
+                    <button 
+                      v-if="node.type === 'compressor'"
+                      type="button"
+                      class="btn btn-sm btn-outline-primary"
+                      @click.stop="promoteToConfigGraph(node)"
+                      title="Promote to Config Graph for bulk generation"
+                    >
+                      <i class="bi bi-box-arrow-in-up"></i>
+                    </button>
                     <button 
                       v-if="node.type === 'compressor' && node.modules && node.modules.length"
                       type="button"
@@ -1180,7 +1483,7 @@ export default {
                         </li>
                       </ul>
                     </div>
-                    <div v-if="!node.modules || !node.modules.length">No module selections yet.</div>
+                    <div v-if="(!node.modules || !node.modules.length) && node.architecture === 'modular'">No module selections yet.</div>
                     <div v-if="node.lastUpdatedAt" class="text-muted mt-2">Last updated: {{ formatTimestamp(node.lastUpdatedAt) }}</div>
                     <div v-if="node.description" class="text-muted small mt-2">{{ node.description }}</div>
                   </template>
@@ -1249,9 +1552,9 @@ export default {
                       :nodeId="selectedNode.id"
                       v-bind="selectedNode.props"
                       @filter-start="() => handleFilterStart(selectedNode.id)"
-                      @filter-success="($event) => handleFilterSuccess(selectedNode.id, $event)"
-                      @filter-error="($event) => handleFilterError(selectedNode.id, $event)"
-                      @filter-invalid="($event) => handleFilterInvalid(selectedNode.id, $event)"
+                      @filter-success="($event) => handleFilterSuccess($event.nodeId || selectedNode.id, $event)"
+                      @filter-error="($event) => handleFilterError($event.nodeId || selectedNode.id, $event)"
+                      @filter-invalid="($event) => handleFilterInvalid($event.nodeId || selectedNode.id, $event)"
                       @filter-finish="() => handleFilterFinish(selectedNode.id)"
                       @dataset-change="() => handleFilterDatasetChange(selectedNode.id)"
                     />
@@ -1304,6 +1607,34 @@ export default {
                   </keep-alive>
                 </template>
                 <p v-else class="text-muted small mb-0">No compressor UI available.</p>
+              </template>
+
+              <template v-else-if="selectedNode.type === 'correction'">
+                <p v-if="selectedNode.description" class="text-muted small mb-3">
+                  {{ selectedNode.description }}
+                </p>
+                <template v-if="selectedNode.editorComponent">
+                  <keep-alive>
+                    <component
+                      :is="selectedNode.editorComponent"
+                      :key="selectedNode.id"
+                      :nodeId="selectedNode.id"
+                      :config="selectedNode.config"
+                      :input-data="getIncomingData(selectedNode.id)"
+                      @config-change="onNodeConfigChange"
+                      @start="(nodeId) => handleFilterStart(nodeId)"
+                      @success="($event) => {
+                        handleFilterSuccess($event.nodeId, $event);
+                        if ($event.result) {
+                          this.$store.commit('setComparisonData', { [$event.nodeId]: $event.result });
+                        }
+                      }"
+                      @error="($event) => handleFilterError($event.nodeId || selectedNode.id, $event)"
+                      @finish="($event) => handleFilterFinish($event || selectedNode.id)"
+                    />
+                  </keep-alive>
+                </template>
+                <p v-else class="text-muted small mb-0">No correction UI available.</p>
               </template>
 
               <template v-else>
@@ -1482,5 +1813,18 @@ export default {
   height: 8px;
   background-color: #dee2e6;
   z-index: -1;
+}
+.config-graph-overlay {
+  transition: transform 0.2s ease, opacity 0.2s ease;
+  backdrop-filter: blur(5px);
+  background-color: rgba(255, 255, 255, 0.95) !important;
+}
+
+.config-graph-overlay:hover {
+  box-shadow: 0 1rem 3rem rgba(0,0,0,0.175) !important;
+}
+
+.card-header.bg-primary.bg-gradient {
+  background: linear-gradient(45deg, #0d6efd, #0dcaf0) !important;
 }
 </style>

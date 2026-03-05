@@ -212,14 +212,17 @@ export class ModuleNode extends BaseNode {
  * Compression Node: The main processing module or compressor.
  */
 export class CompressorNode extends BaseNode {
-  constructor(id, label, icon = 'bi-cpu', compressorId = null) {
+  constructor(id, label, icon = 'bi-cpu', compressorId = null, architecture = 'parametric') {
     super(id, label, icon, 1, 1);
     this.type = 'compressor';
+    this.compressorId = compressorId;
+    this.architecture = architecture;
     this.initializePorts('Data In', 'Compressed Data');
 
     // Map compressor IDs to their respective components
     const componentMap = {
       'sz3': 'SZ3Pipeline',
+      'zfp': 'ZFPConfig',
       'testing': 'TestingPipeline' // Example
     };
     this.editorComponent = componentMap[compressorId] || null;
@@ -238,6 +241,67 @@ export class CompressorNode extends BaseNode {
   canAcceptInput(sourceNode) {
     return super.canAcceptInput(sourceNode);
   }
+
+  onDestroy(context) {
+    // Clean up the stored compression results from the store
+    if (context?.store) {
+      context.store.commit('removeComparisonData', this.id);
+    }
+  }
+}
+
+/**
+ * Correction Node: Post-processing corrections like critical points preservation.
+ */
+export class CorrectionNode extends BaseNode {
+  constructor(id, label, icon = 'bi-gear', correctionId = null) {
+    super(id, label, icon, 1, 1);
+    this.type = 'correction';
+
+    // Manually initialize ports with descriptive labels
+    this.inputs = [
+      new Port('in-0', 'Compressed Data', 'input')
+    ];
+    this.outputs = [
+      new Port('out-0', 'Corrected Data', 'output')
+    ];
+
+    // Map correction IDs to their respective components
+    const componentMap = {
+      'critical_points': 'CriticalPointsPreservation',
+    };
+    this.editorComponent = componentMap[correctionId] || null;
+  }
+
+  static canAdd(existingNodes) {
+    const sourceNode = existingNodes.find(n => n instanceof DataSourceNode);
+    if (!sourceNode || sourceNode.status !== 'ready') return false;
+
+    // Only allow one correction node in the graph
+    const existingCorrectionNode = existingNodes.find(n => n instanceof CorrectionNode);
+    if (existingCorrectionNode) return false;
+
+    // Require at least one compressor node
+    const compressorNode = existingNodes.find(n =>
+      n instanceof CompressorNode
+    );
+    return !!compressorNode;
+  }
+
+  canAcceptInput(sourceNode) {
+    // Only accept input from compressor for the single input port
+    if (sourceNode.type === 'compressor') {
+      return this.inputs.length > 0;
+    }
+    return false;
+  }
+
+  onDestroy(context) {
+    // Clean up the stored correction results from the store
+    if (context?.store) {
+      context.store.commit('removeComparisonData', this.id);
+    }
+  }
 }
 
 /**
@@ -253,7 +317,9 @@ export class NodeFactory {
       case 'module':
         return new ModuleNode(id, label, icon, defId, config);
       case 'compressor':
-        return new CompressorNode(id, label, icon, defId);
+        return new CompressorNode(id, label, icon, defId, config.architecture);
+      case 'correction':
+        return new CorrectionNode(id, label, icon, defId);
       default:
         return new BaseNode(id, label, icon);
     }
@@ -265,6 +331,7 @@ export class NodeFactory {
       case 'filter': return FilterNode;
       case 'module': return ModuleNode;
       case 'compressor': return CompressorNode;
+      case 'correction': return CorrectionNode;
       default: return BaseNode;
     }
   }

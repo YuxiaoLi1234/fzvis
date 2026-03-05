@@ -124,14 +124,43 @@
         </div>
       </div>
     </div>
+    <!-- Config Graph Panel (floating) -->
+    <div v-if="$store.state.showConfigGraphInPane" class="position-fixed bottom-0 start-0 ms-3 mb-5" style="width: 600px; max-width: 80vw; z-index: 1050; height: 450px;">
+      <div class="card border-0 shadow-lg h-100 overflow-hidden" style="border-radius: 12px;">
+        <div class="card-header d-flex justify-content-between align-items-center">
+          <div>
+            <i class="bi bi-diagram-3 me-2"></i>
+            <span>Parameter Explorer</span>
+          </div>
+          <button type="button" class="btn btn-sm btn-outline-secondary" @click="toggleConfigGraphPane" title="Close">
+            <i class="bi bi-x-lg"></i>
+          </button>
+        </div>
+        <div class="card-body p-0 overflow-hidden position-relative bg-light">
+          <ConfigGraph
+            :no-card="true"
+            :baseConfigurations="baseConfigurations"
+            :derivedConfigurations="derivedConfigurations"
+            :savedConfigurations="savedConfigurations"
+            :compressorOptions="compressorOptions"
+            @error-bound-bulk-generation="handleErrorBoundBulkGeneration"
+            @propagate-parameter="handlePropagateParameter"
+          />
+        </div>
+      </div>
+    </div>
   </footer>
 </template>
 
 <script>
 import { marked } from 'marked';
+import ConfigGraph from './ConfigGraph.vue';
 
 export default {
   name: "AppFooter",
+  components: {
+    ConfigGraph
+  },
   data() {
     return {
       baseURL: "/api",
@@ -184,7 +213,19 @@ export default {
     },
     orderedHistory() {
       return [...this.history].sort((a, b) => (a.timestamp || 0) - (b.timestamp || 0));
-    }
+    },
+    baseConfigurations() {
+      return this.$store.state.baseConfigurations || {};
+    },
+    derivedConfigurations() {
+      return this.$store.state.derivedConfigurations || {};
+    },
+    savedConfigurations() {
+      return this.$store.state.savedConfigurations || {};
+    },
+    compressorOptions() {
+      return this.$store.state.compressorOptions || {};
+    },
   },
   mounted() {
     this.resetSuggestions();
@@ -328,12 +369,19 @@ export default {
     resetSuggestions() {
       this.suggestedQuestions = this.presetQuestions;
       this.showSuggestions = true;
-    }
+    },
+    handleErrorBoundBulkGeneration(payload) {
+      this.$store.commit('requestBulkGeneration', { type: 'error-bound', payload });
+    },
+    handlePropagateParameter(payload) {
+      this.$store.commit('requestBulkGeneration', { type: 'propagate', payload });
+    },
   }
 }
 </script>
 
 <style scoped>
-/* Remove scroller; no longer used */
-.history-scroller { display: none; }
+.card {
+  transition: all 0.3s ease;
+}
 </style>
