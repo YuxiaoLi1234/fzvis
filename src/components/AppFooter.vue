@@ -175,7 +175,7 @@ export default {
         "What is the pipeline of SZ3 compressor?",
         "Explain the differences between SZ and SZ3.",
         "How does the ZFP compressor work?",
-        "What are aboslute and relative error bound?",
+        "What are aboslute and relative error bounds?",
       ],
       suggestedQuestions: [],
       showHistory: false,

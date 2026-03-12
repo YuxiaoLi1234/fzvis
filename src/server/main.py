@@ -40,7 +40,7 @@ logger = logging.getLogger(__name__)
 
 # CONSTANTS
 DEFAULT_SYSTEM_CONFIG_PROMPT = "You are an expert in lossy compression with deep knowledge of scientific data. Please provide clear and concise answers to all questions. If you are not sure about the answer, please say so. Don't make up answers. Please always reply within 200 words if possible."
-LLM_MODEL_NAME = "deepseek-ai/deepseek-r1-0528"
+LLM_MODEL_NAME = "meta/llama3-70b-instruct"
 
 # Useful paths and create necessary folders for the backend
 project_root = Path(__file__).parent.parent.parent

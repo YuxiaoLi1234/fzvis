@@ -33,6 +33,10 @@ export default createStore({
       original: null,
       decompressed: {} // Map of compressorId -> cpData
     },
+    segmentation: {
+      original: null,
+      decompressed: {}
+    },
     bulkGenerationRequests: [],
   },
 
@@ -80,6 +84,11 @@ export default createStore({
       // Clean up associated critical points, regardless of comparisonData existence
       if (state.criticalPoints?.decompressed && nodeId in state.criticalPoints.decompressed) {
         delete state.criticalPoints.decompressed[nodeId];
+      }
+      if (state.segmentation?.decompressed && nodeId in state.segmentation.decompressed) {
+        const nextSeg = { ...state.segmentation.decompressed };
+        delete nextSeg[nodeId];
+        state.segmentation.decompressed = nextSeg;
       }
     },
     setFileData(state, payload) {
@@ -129,6 +138,7 @@ export default createStore({
         };
         state.filterOperations = [];
         state.criticalPoints = { original: null, decompressed: {} };
+        state.segmentation = { original: null, decompressed: {} };
       }
 
       state.dataset = next;
@@ -138,6 +148,7 @@ export default createStore({
       state.originalDataset = null;
       state.filterOperations = [];
       state.criticalPoints = { original: null, decompressed: {} };
+      state.segmentation = { original: null, decompressed: {} };
     },
     addFilterOperation(state, operation) {
       // Add a filter operation to the stack
@@ -224,6 +235,27 @@ export default createStore({
       } else {
         // Fallback for backward compatibility if source is not provided
         state.criticalPoints.original = payload;
+      }
+    },
+    setSegmentation(state, payload) {
+      if (!payload) {
+        state.segmentation = { original: null, decompressed: {} };
+        return;
+      }
+      const { source, data } = payload;
+      if (source === 'original') {
+        state.segmentation = {
+          ...state.segmentation,
+          original: data
+        };
+      } else if (source) {
+        state.segmentation = {
+          ...state.segmentation,
+          decompressed: {
+            ...state.segmentation.decompressed,
+            [source]: data
+          }
+        };
       }
     },
     requestBulkGeneration(state, payload) {

@@ -26,6 +26,8 @@ export default {
     const containerDecompressed = ref(null);
     const scalarBarCanvasOriginal = ref(null);
     const scalarBarCanvasDecompressed = ref(null);
+    const manifoldBarCanvasOriginal = ref(null);
+    const manifoldBarCanvasDecompressed = ref(null);
 
     const context = ref({
       original: null,
@@ -36,54 +38,82 @@ export default {
     let sameCamera = ref(false);
     const currentRangeOriginal = ref([0, 1]);
     const currentRangeDecompressed = ref([0, 1]);
+    const currentLabelRangeOriginal = ref([0, 1]);
+    const currentLabelRangeDecompressed = ref([0, 1]);
     
     const comparisonData = computed(() => store.state.comparisonData);
     const criticalPoints = computed(() => store.state.criticalPoints);
+    const segmentation = computed(() => store.state.segmentation);
     const criticalPointsDisplay = ref('all');
     const criticalPointsScale = ref(0.3);
     const minimaColor = ref('#666666');
     const maximaColor = ref('#ff0000');
     const saddleColor = ref('#ffcc00');
+    const segmentationMode = ref('none');
+    const segmentationModeOptions = [
+      { value: 'none', label: 'Scalar Field' },
+      { value: 'ascending', label: 'Ascending Manifold' },
+      { value: 'descending', label: 'Descending Manifold' },
+      { value: 'morse_smale', label: 'Morse-Smale Manifold' },
+    ];
     
     // Movable Colorbar and Scaling
     const visualScale = ref(1.0);
     const scalarBarTop = ref(88); // Default for horizontal layout
-    const scalarBarRight = ref(50); // Centered for horizontal layout
+    const scalarBarLeft = ref(50); // Centered for horizontal layout
     const isDragging = ref(false);
-    let dragStart = { x: 0, y: 0, top: 0, right: 0 };
+    let dragStart = { x: 0, y: 0, top: 0, left: 0, width: 1, height: 1 };
     
     const layoutMode = ref('horizontal'); // 'horizontal' or 'vertical'
     const leadContext = ref('original'); // 'original' or 'decompressed'
 
     function startDrag(e) {
       isDragging.value = true;
+      const host = e.currentTarget?.parentElement;
+      const rect = host?.getBoundingClientRect();
       dragStart = { 
         x: e.clientX, 
         y: e.clientY, 
         top: scalarBarTop.value, 
-        right: scalarBarRight.value 
+        left: scalarBarLeft.value,
+        width: Math.max(1, rect?.width || 1),
+        height: Math.max(1, rect?.height || 1),
       };
       window.addEventListener('mousemove', handleDrag);
       window.addEventListener('mouseup', stopDrag);
     }
 
     function handleDrag(e) {
-      if (!isDragging.value || !containerOriginal.value) return;
+      if (!isDragging.value) return;
       const dx = e.clientX - dragStart.x;
       const dy = e.clientY - dragStart.y;
-      
-      const containerWidth = containerOriginal.value.clientWidth || 1;
-      const containerHeight = containerOriginal.value.clientHeight || 1;
-      
+
       // Update position in percentage
-      scalarBarTop.value = Math.max(0, Math.min(100, dragStart.top + (dy / containerHeight * 100))); 
-      scalarBarRight.value = Math.max(0, Math.min(100, dragStart.right - (dx / containerWidth * 100)));
+      scalarBarTop.value = Math.max(0, Math.min(100, dragStart.top + (dy / dragStart.height * 100))); 
+      scalarBarLeft.value = Math.max(0, Math.min(100, dragStart.left + (dx / dragStart.width * 100)));
     }
 
     function stopDrag() {
       isDragging.value = false;
       window.removeEventListener('mousemove', handleDrag);
       window.removeEventListener('mouseup', stopDrag);
+    }
+
+    function normalizeSegmentationField(field) {
+      if (field === null || field === undefined) return null;
+      if (field instanceof ArrayBuffer) return new Float32Array(field);
+      if (ArrayBuffer.isView(field)) return new Float32Array(field);
+      if (Array.isArray(field)) {
+        if (!field.length) return new Float32Array();
+        if (field.every(item => typeof item !== 'object' || item === null)) {
+          return new Float32Array(field.map(v => Number.isFinite(Number(v)) ? Number(v) : -1));
+        }
+        return new Float32Array(field.flat(Infinity).map(v => Number.isFinite(Number(v)) ? Number(v) : -1));
+      }
+      if (typeof field === 'object' && Array.isArray(field.data)) {
+        return normalizeSegmentationField(field.data);
+      }
+      return null;
     }
 
     const selectedDecompressedIndex = ref(0);
@@ -104,7 +134,22 @@ export default {
       }
       return null;
     });
-
+    const hasAnySegmentation = computed(() => {
+      const seg = segmentation.value;
+      if (!seg) return false;
+      const sources = [];
+      if (seg.original) sources.push(seg.original);
+      if (seg.decompressed) {
+        Object.values(seg.decompressed).forEach((v) => {
+          if (v) sources.push(v);
+        });
+      }
+      return sources.some((src) => (
+        normalizeSegmentationField(src.ascending)?.length ||
+        normalizeSegmentationField(src.descending)?.length ||
+        normalizeSegmentationField(src.morse_smale)?.length
+      ));
+    });
     const allPresets = vtkColorMaps.rgbPresetNames;
 
     // --- Shader Definitions ---
@@ -220,7 +265,7 @@ export default {
       }
     }
 
-    function createTransferFunctionTexture(name) {
+    function createTransferFunctionTexture(name, { opaque = false } = {}) {
       const preset = vtkColorMaps.getPresetByName(name);
       const canvas = document.createElement('canvas');
       canvas.width = 256;
@@ -242,8 +287,8 @@ export default {
         const r = Math.round(rgbPoints[i + 1] * 255);
         const g = Math.round(rgbPoints[i + 2] * 255);
         const b = Math.round(rgbPoints[i + 3] * 255);
-        // Add linear alpha ramp: 0 at min, 1 at max
-        const a = t; 
+        // Add linear alpha ramp: 0 at min, 1 at max (or force opaque)
+        const a = opaque ? 1 : t;
         gradient.addColorStop(t, `rgba(${r},${g},${b},${a})`);
       }
 
@@ -293,6 +338,80 @@ export default {
       }
       ctx.fillStyle = gradient;
       ctx.fillRect(0, 0, w, h);
+    }
+
+    function inferLabelRange(sourceSeg) {
+      if (!sourceSeg || segmentationMode.value === 'none') return [0, 1];
+      const modeField = normalizeSegmentationField(sourceSeg[segmentationMode.value]);
+      if (!modeField || !modeField.length) return [0, 1];
+      let min = Infinity;
+      let max = -Infinity;
+      for (let i = 0; i < modeField.length; i += 1) {
+        const v = Number(modeField[i]);
+        if (!Number.isFinite(v)) continue;
+        if (v < min) min = v;
+        if (v > max) max = v;
+      }
+      if (!Number.isFinite(min) || !Number.isFinite(max)) return [0, 1];
+      return [min, max];
+    }
+
+    function updateManifoldBar(canvasRef, range) {
+      if (!canvasRef) return;
+      const ctx = canvasRef.getContext('2d');
+      const isHorizontal = layoutMode.value === 'horizontal';
+      if (isHorizontal) {
+        canvasRef.width = 220;
+        canvasRef.height = 12;
+      } else {
+        canvasRef.width = 12;
+        canvasRef.height = 180;
+      }
+      const w = canvasRef.width;
+      const h = canvasRef.height;
+      const minLabel = Number(range?.[0] ?? 0);
+      const maxLabel = Number(range?.[1] ?? 1);
+      const stops = getColormapStops(colormap.value);
+
+      if (isHorizontal) {
+        for (let x = 0; x < w; x += 1) {
+          const t = x / Math.max(1, w - 1);
+          const label = minLabel + t * (maxLabel - minLabel);
+          const [r, g, b] = labelToColor(label, [minLabel, maxLabel], stops);
+          ctx.fillStyle = `rgb(${r},${g},${b})`;
+          ctx.fillRect(x, 0, 1, h);
+        }
+      } else {
+        for (let y = 0; y < h; y += 1) {
+          const t = 1 - (y / Math.max(1, h - 1));
+          const label = minLabel + t * (maxLabel - minLabel);
+          const [r, g, b] = labelToColor(label, [minLabel, maxLabel], stops);
+          ctx.fillStyle = `rgb(${r},${g},${b})`;
+          ctx.fillRect(0, y, w, 1);
+        }
+      }
+    }
+
+    function refreshColorBars() {
+      if (segmentationMode.value === 'none') {
+        updateScalarBar(scalarBarCanvasOriginal.value, colormap.value);
+        updateScalarBar(scalarBarCanvasDecompressed.value, colormap.value);
+        return;
+      }
+      const seg = segmentation.value || {};
+      const originalRange = inferLabelRange(seg.original);
+      const decompressedRange = inferLabelRange(selectedCompressor.value ? seg.decompressed?.[selectedCompressor.value] : null);
+      currentLabelRangeOriginal.value = originalRange;
+      currentLabelRangeDecompressed.value = decompressedRange;
+      updateManifoldBar(manifoldBarCanvasOriginal.value, originalRange);
+      updateManifoldBar(manifoldBarCanvasDecompressed.value, decompressedRange);
+    }
+
+    function segmentationLabel() {
+      if (segmentationMode.value === 'ascending') return 'Ascending';
+      if (segmentationMode.value === 'descending') return 'Descending';
+      if (segmentationMode.value === 'morse_smale') return 'Morse-Smale';
+      return 'Manifold';
     }
 
     function getLocalRange(data, dims, sliceIdx = 0) {
@@ -359,6 +478,7 @@ export default {
         sliceMesh: null,
         cpGroup: markRaw(new THREE.Group()),
         transferTexture: markRaw(createTransferFunctionTexture(colormap.value)),
+        transferTextureOpaque: markRaw(createTransferFunctionTexture(colormap.value, { opaque: true })),
         cachedData: null,
         cachedRange: [0, 1],
       });
@@ -394,20 +514,32 @@ export default {
       ctx.controls.update();
     }
 
-    function updateVisualization(ctx, content, dims, precision, isOriginal) {
+    function toFloat32Data(content, precisionHint) {
+      if (!content) return null;
+      if (content instanceof Float32Array) return content;
+      if (content instanceof Float64Array) return new Float32Array(content);
+      if (ArrayBuffer.isView(content)) {
+        const view = content;
+        const ctorName = view.constructor?.name || '';
+        if (ctorName === 'Float64Array') return new Float32Array(view);
+        return new Float32Array(view.buffer.slice(view.byteOffset, view.byteOffset + view.byteLength));
+      }
+      if (!(content instanceof ArrayBuffer)) return null;
+      const isDouble = precisionHint === 'd' || precisionHint === 'double' || precisionHint === 'float64';
+      const rawArray = isDouble ? new Float64Array(content) : new Float32Array(content);
+      return new Float32Array(rawArray);
+    }
+
+    function updateVisualization(ctx, content, dims, precision, isOriginal, options = {}) {
       if (!ctx || !content || !dims || dims[0] <= 0 || dims[1] <= 0) return;
       const { scene } = ctx;
       if (ctx.volumeMesh) scene.remove(ctx.volumeMesh);
       if (ctx.sliceMesh) scene.remove(ctx.sliceMesh);
 
-      const isDouble = precision === 'd' || precision === 'double' || precision === 'float64';
-      // More robust conversion: handle ArrayBuffer or TypedArray inputs
-      const rawArray = isDouble ? new Float64Array(content) : new Float32Array(content);
-      const data = new Float32Array(rawArray);
+      const data = toFloat32Data(content, precision);
+      if (!data) return;
       ctx.cachedData = data;
       
-      console.log(`[Three] ${isOriginal ? 'Original' : 'Decompressed'} Data: ${data.length} pts, prec: ${precision}, dims: ${dims.join('x')}`);
-
       // Calculate global range, skipping NaNs and Infinites
       let min = Infinity, max = -Infinity;
       for (let i = 0; i < data.length; i++) {
@@ -424,11 +556,16 @@ export default {
       const is2D = !dims[2] || dims[2] <= 1 || isTimeVarying.value;
       
       // Determine actual range to use
-      let displayRange = [...ctx.cachedRange];
-      if (rescaleMethod.value === 'local' && is2D) {
-        displayRange = getLocalRange(data, dims, sliceId.value);
-      } else if (rescaleMethod.value === 'custom') {
-        displayRange = [customMin.value, customMax.value];
+      const forcedRange = options?.forcedRange;
+      const transferOverride = options?.transferTexture || null;
+      const opacityOverride = options?.opacityMultiplier;
+      let displayRange = forcedRange ? [forcedRange[0], forcedRange[1]] : [...ctx.cachedRange];
+      if (!forcedRange) {
+        if (rescaleMethod.value === 'local' && is2D) {
+          displayRange = getLocalRange(data, dims, sliceId.value);
+        } else if (rescaleMethod.value === 'custom') {
+          displayRange = [customMin.value, customMax.value];
+        }
       }
       
       if (isOriginal) currentRangeOriginal.value = displayRange;
@@ -450,7 +587,7 @@ export default {
         const material = new THREE.ShaderMaterial({
           uniforms: {
             tex: { value: texture },
-            transferFunction: { value: ctx.transferTexture },
+            transferFunction: { value: transferOverride || ctx.transferTexture },
             dataRange: { value: new THREE.Vector2(displayRange[0], displayRange[1]) }
           },
           vertexShader: `
@@ -515,11 +652,11 @@ export default {
         const material = new THREE.ShaderMaterial({
           uniforms: {
             volume: { value: texture },
-            transferFunction: { value: ctx.transferTexture },
+            transferFunction: { value: transferOverride || ctx.transferTexture },
             inverseModelMatrix: { value: new THREE.Matrix4() }, // Will be updated
             dimensions: { value: new THREE.Vector3(dims[0], dims[1], dims[2]) },
             stepSize: { value: 1.5 / Math.max(dims[0], Math.max(dims[1], dims[2])) }, // Increased step size slightly (faster)
-            opacityMultiplier: { value: 1.0 },
+            opacityMultiplier: { value: typeof opacityOverride === 'number' ? opacityOverride : 1.0 },
             dataRange: { value: new THREE.Vector2(displayRange[0], displayRange[1]) }
           },
           vertexShader: volumeVertexShader,
@@ -543,6 +680,43 @@ export default {
       renderCriticalPoints(ctx);
     }
 
+    function updateSegmentationVisualization(ctx, sourceSeg, isOriginal) {
+      if (!ctx || !sourceSeg || segmentationMode.value === 'none') return;
+      const modeField = normalizeSegmentationField(sourceSeg[segmentationMode.value]);
+      const dimsObj = sourceSeg.dimensions || {};
+      const width = Number(dimsObj.width || dimensions.value?.[0] || 0);
+      const height = Number(dimsObj.height || dimensions.value?.[1] || 0);
+      const depth = Number(dimsObj.depth || dimensions.value?.[2] || 1);
+      if (!modeField || !width || !height || !depth) return;
+      const range = inferLabelRange(sourceSeg);
+      updateVisualization(
+        ctx,
+        modeField,
+        [width, height, depth],
+        'float32',
+        isOriginal,
+        {
+          forcedRange: range,
+          transferTexture: ctx.transferTextureOpaque,
+          opacityMultiplier: 1.0
+        }
+      );
+    }
+
+    function updateSegmentationThreePanels() {
+      if (segmentationMode.value === 'none') return;
+      const seg = segmentation.value;
+      if (!seg) return;
+      if (context.value.original && seg.original) {
+        updateSegmentationVisualization(context.value.original, seg.original, true);
+      }
+      const decSeg = selectedCompressor.value ? seg.decompressed?.[selectedCompressor.value] : null;
+      if (context.value.decompressed && decSeg) {
+        updateSegmentationVisualization(context.value.decompressed, decSeg, false);
+      }
+      refreshColorBars();
+    }
+
     function renderCriticalPoints(ctx) {
       if (!ctx || !criticalPoints.value) return;
       ctx.cpGroup.clear();
@@ -563,13 +737,6 @@ export default {
         ctx.cpGroup.clear(); // Ensure it's cleared if no data or hidden (both original and decompressed)
         return;
       }
-
-      console.log(`[Three] cpData for ${isOriginal ? 'original' : 'decompressed'}:`, {
-        minima: cpData.minima?.points?.length || 0,
-        maxima: cpData.maxima?.points?.length || 0,
-        saddles: cpData.saddles?.points?.length || 0,
-        sampleMin: cpData.minima?.points?.[0] || 'none'
-      });
 
       const originalCP = criticalPoints.value.original;
       
@@ -647,29 +814,107 @@ export default {
       if (['maxima', 'all', 'false_points'].includes(criticalPointsDisplay.value)) addPoints(filterFalse(cpData.maxima?.points, 'maxima'), maximaColor.value);
       if (['saddles', 'all', 'false_points'].includes(criticalPointsDisplay.value)) addPoints(filterFalse(cpData.saddles?.points, 'saddles'), saddleColor.value);
       
-      console.log(`[Three] Rendered ${ctx.cpGroup.children.filter(c => c.isInstancedMesh).length} CP types for ${isOriginal ? 'original' : 'decompressed'}`);
     }
 
     function updateColormap() {
       const tex = createTransferFunctionTexture(colormap.value);
+      const opaqueTex = createTransferFunctionTexture(colormap.value, { opaque: true });
       [context.value.original, context.value.decompressed].forEach(ctx => {
         if (ctx) {
           ctx.transferTexture = tex;
+          ctx.transferTextureOpaque = opaqueTex;
           if (ctx.volumeMesh) ctx.volumeMesh.material.uniforms.transferFunction.value = tex;
           if (ctx.sliceMesh) ctx.sliceMesh.material.uniforms.transferFunction.value = tex;
         }
       });
-      updateScalarBar(scalarBarCanvasOriginal.value, colormap.value);
-      updateScalarBar(scalarBarCanvasDecompressed.value, colormap.value);
+      if (segmentationMode.value !== 'none') {
+        updateSegmentationThreePanels();
+      }
+      refreshColorBars();
+    }
+
+    function getColormapStops(name) {
+      const preset = vtkColorMaps.getPresetByName(name) || vtkColorMaps.getPresetByName('jet');
+      const rgbPoints = preset?.RGBPoints || [0, 0, 0, 0, 1, 1, 1, 1];
+      let minT = Infinity;
+      let maxT = -Infinity;
+      for (let i = 0; i < rgbPoints.length; i += 4) {
+        if (rgbPoints[i] < minT) minT = rgbPoints[i];
+        if (rgbPoints[i] > maxT) maxT = rgbPoints[i];
+      }
+      const span = (maxT - minT) || 1;
+      const stops = [];
+      for (let i = 0; i < rgbPoints.length; i += 4) {
+        stops.push({
+          t: (rgbPoints[i] - minT) / span,
+          r: rgbPoints[i + 1],
+          g: rgbPoints[i + 2],
+          b: rgbPoints[i + 3],
+        });
+      }
+      return stops;
+    }
+
+    function sampleStops(stops, t) {
+      if (!stops?.length) return [255, 255, 255];
+      const tt = Math.max(0, Math.min(1, t));
+      if (tt <= stops[0].t) {
+        return [
+          Math.round(stops[0].r * 255),
+          Math.round(stops[0].g * 255),
+          Math.round(stops[0].b * 255),
+        ];
+      }
+      for (let i = 1; i < stops.length; i += 1) {
+        const a = stops[i - 1];
+        const b = stops[i];
+        if (tt <= b.t) {
+          const local = (tt - a.t) / Math.max(1e-8, b.t - a.t);
+          const r = a.r + (b.r - a.r) * local;
+          const g = a.g + (b.g - a.g) * local;
+          const bl = a.b + (b.b - a.b) * local;
+          return [
+            Math.round(r * 255),
+            Math.round(g * 255),
+            Math.round(bl * 255),
+          ];
+        }
+      }
+      const last = stops[stops.length - 1];
+      return [
+        Math.round(last.r * 255),
+        Math.round(last.g * 255),
+        Math.round(last.b * 255),
+      ];
+    }
+
+    function labelToColor(label, range = [0, 1], stops = null) {
+      if (!Number.isFinite(label)) return [0, 0, 0, 0];
+      const minLabel = Number(range?.[0] ?? 0);
+      const maxLabel = Number(range?.[1] ?? 1);
+      const denom = Math.max(1e-8, maxLabel - minLabel);
+      const t = (label - minLabel) / denom;
+      const [r, g, b] = sampleStops(stops || getColormapStops(colormap.value), t);
+      return [
+        r,
+        g,
+        b,
+        255,
+      ];
     }
 
     function updateVisuals() {
+      if (segmentationMode.value !== 'none') {
+        updateSegmentationThreePanels();
+        return;
+      }
       if (context.value.original && fileData.value) {
         updateVisualization(context.value.original, fileData.value, dimensions.value, precision.value, true);
       }
       if (context.value.decompressed && selectedDecompressedData.value) {
         updateVisualization(context.value.decompressed, selectedDecompressedData.value.decp_data, dimensions.value, precision.value, false);
       }
+      refreshColorBars();
     }
 
     function syncCameras() {
@@ -700,17 +945,17 @@ export default {
           if (fileData.value) {
             updateVisualization(context.value.original, fileData.value, dimensions.value, precision.value, true);
             nextTick(() => {
-              updateScalarBar(scalarBarCanvasOriginal.value, colormap.value);
+              refreshColorBars();
             });
           }
         }
         
         if (selectedDecompressedData.value && containerDecompressed.value) {
           context.value.decompressed = setupThree(containerDecompressed.value);
-          updateVisualization(context.value.decompressed, selectedDecompressedData.value.decp_data, dimensions.value, precision.value, false);
-          nextTick(() => {
-            updateScalarBar(scalarBarCanvasDecompressed.value, colormap.value);
-          });
+              updateVisualization(context.value.decompressed, selectedDecompressedData.value.decp_data, dimensions.value, precision.value, false);
+              nextTick(() => {
+                refreshColorBars();
+              });
         }
 
         // Unified Animation Loop
@@ -772,7 +1017,7 @@ export default {
         if (context.value.original) {
           updateVisualization(context.value.original, val, dimensions.value, precision.value, true);
           nextTick(() => {
-            updateScalarBar(scalarBarCanvasOriginal.value, colormap.value);
+            refreshColorBars();
           });
         }
       } else {
@@ -790,13 +1035,24 @@ export default {
 
     watch(selectedDecompressedData, (val) => {
       if (val) {
+        if (segmentationMode.value !== 'none') {
+          nextTick(() => {
+            if (!context.value.decompressed && containerDecompressed.value) {
+              context.value.decompressed = setupThree(containerDecompressed.value);
+            }
+            updateSegmentationThreePanels();
+            if (context.value.original) fitCameraToView(context.value.original);
+            if (context.value.decompressed) fitCameraToView(context.value.decompressed);
+          });
+          return;
+        }
         if (!context.value.decompressed) {
           nextTick(() => {
             if (containerDecompressed.value) {
               context.value.decompressed = setupThree(containerDecompressed.value);
               updateVisualization(context.value.decompressed, val.decp_data, dimensions.value, precision.value, false);
               nextTick(() => {
-                updateScalarBar(scalarBarCanvasDecompressed.value, colormap.value);
+                refreshColorBars();
               });
               
               // Rescale both to fit the new side-by-side layout
@@ -824,17 +1080,21 @@ export default {
 
     watch(colormap, updateColormap);
     watch([sliceId, rescaleMethod, customMin, customMax], updateVisuals);
-    watch(criticalPoints, (val) => {
-      console.log('[Three] criticalPoints changed:', {
-        hasOriginal: !!val?.original,
-        decompressedKeys: Object.keys(val?.decompressed || {})
-      });
+    watch(segmentation, updateSegmentationThreePanels, { deep: true });
+    watch(segmentationMode, (mode) => {
+      if (mode !== 'none' && !hasAnySegmentation.value) {
+        segmentationMode.value = 'none';
+        return;
+      }
+      updateVisuals();
+      nextTick(() => refreshColorBars());
+    });
+    watch(criticalPoints, () => {
       if (context.value.original) renderCriticalPoints(context.value.original);
       if (context.value.decompressed) renderCriticalPoints(context.value.decompressed);
     }, { deep: true });
 
     watch([criticalPointsDisplay, minimaColor, maximaColor, saddleColor, criticalPointsScale], () => {
-      console.log('[Three] CP settings changed');
       if (context.value.original) renderCriticalPoints(context.value.original);
       if (context.value.decompressed) renderCriticalPoints(context.value.decompressed);
     });
@@ -842,10 +1102,10 @@ export default {
     watch(layoutMode, (newMode) => {
       if (newMode === 'horizontal') {
         scalarBarTop.value = 88;
-        scalarBarRight.value = 50; // 50% = Centered (with transform)
+        scalarBarLeft.value = 50; // 50% = centered
       } else {
-        scalarBarTop.value = 50;
-        scalarBarRight.value = 10; // Extra room from right
+        scalarBarTop.value = 18;
+        scalarBarLeft.value = 88; // Keep near right edge
       }
 
       nextTick(() => {
@@ -853,8 +1113,7 @@ export default {
         if (context.value.decompressed) fitCameraToView(context.value.decompressed);
         
         // Update scalar bars
-        updateScalarBar(scalarBarCanvasOriginal.value, colormap.value);
-        updateScalarBar(scalarBarCanvasDecompressed.value, colormap.value);
+        refreshColorBars();
       });
     });
 
@@ -930,13 +1189,20 @@ export default {
       decompressedKeys,
       selectedCompressor,
       selectedDecompressedData,
+      segmentationMode,
+      segmentationModeOptions,
+      hasAnySegmentation,
       criticalPointsDisplay,
       criticalPointsScale,
       minimaColor,
       maximaColor,
       saddleColor,
+      manifoldBarCanvasOriginal,
+      manifoldBarCanvasDecompressed,
       currentRangeOriginal,
       currentRangeDecompressed,
+      currentLabelRangeOriginal,
+      currentLabelRangeDecompressed,
       hasAnyCriticalPoints: computed(() => {
         if (!criticalPoints.value) return false;
         const hasOriginal = criticalPoints.value.original && 
@@ -956,9 +1222,10 @@ export default {
       visualScale,
       layoutMode,
       scalarBarTop,
-      scalarBarRight,
+      scalarBarLeft,
       startDrag,
       fileData,
+      segmentationLabel,
       saveScreenshot,
       saveData,
     };
@@ -1100,6 +1367,26 @@ export default {
           </div>
         </div>
       </div>
+
+      <!-- Segmentation Selection -->
+      <div class="d-flex flex-wrap align-items-center justify-content-center gap-2 w-100 mt-2 border-top pt-2 px-3">
+        <label class="me-2 mb-0 fw-semibold text-secondary small">
+          <i class="bi bi-grid-1x2 me-1"></i>Segmentation:
+        </label>
+        <select
+          v-model="segmentationMode"
+          class="form-select form-select-sm"
+          style="width: 190px; font-size: 0.75rem;"
+          :disabled="!hasAnySegmentation"
+        >
+          <option v-for="option in segmentationModeOptions" :key="option.value" :value="option.value">
+            {{ option.label }}
+          </option>
+        </select>
+        <span class="tiny text-muted" v-if="!hasAnySegmentation">
+          Run Critical Points to compute Morse-Smale manifolds.
+        </span>
+      </div>
     </div>
 
     <!-- Visualization containers -->
@@ -1151,8 +1438,8 @@ export default {
           <!-- Custom Scalar Bar Overlay -->
           <div 
              :class="['scalar-bar-overlay', layoutMode]" 
-             v-if="colormap && fileData"
-             :style="{ top: scalarBarTop + '%', right: scalarBarRight + '%' }"
+             v-if="segmentationMode === 'none' && colormap && fileData"
+             :style="{ top: scalarBarTop + '%', left: scalarBarLeft + '%' }"
              @mousedown.stop="startDrag"
           >
              <div class="scalar-title">Intensity</div>
@@ -1160,6 +1447,19 @@ export default {
                <span class="label-min">{{ formatValue(currentRangeOriginal[0]) }}</span>
                <canvas ref="scalarBarCanvasOriginal"></canvas>
                <span class="label-max">{{ formatValue(currentRangeOriginal[1]) }}</span>
+             </div>
+          </div>
+          <div 
+             :class="['scalar-bar-overlay', layoutMode]" 
+             v-if="segmentationMode !== 'none' && hasAnySegmentation"
+             :style="{ top: scalarBarTop + '%', left: scalarBarLeft + '%' }"
+             @mousedown.stop="startDrag"
+          >
+             <div class="scalar-title">{{ segmentationLabel() }}</div>
+             <div :class="['scalar-content', layoutMode]">
+               <span class="label-min">{{ Math.floor(currentLabelRangeOriginal[0]) }}</span>
+               <canvas ref="manifoldBarCanvasOriginal"></canvas>
+               <span class="label-max">{{ Math.floor(currentLabelRangeOriginal[1]) }}</span>
              </div>
           </div>
         </div>
@@ -1199,8 +1499,8 @@ export default {
           <!-- Custom Scalar Bar Overlay -->
           <div 
              :class="['scalar-bar-overlay', layoutMode]" 
-             v-if="colormap && selectedDecompressedData"
-             :style="{ top: scalarBarTop + '%', right: scalarBarRight + '%' }"
+             v-if="segmentationMode === 'none' && colormap && selectedDecompressedData"
+             :style="{ top: scalarBarTop + '%', left: scalarBarLeft + '%' }"
              @mousedown.stop="startDrag"
           >
              <div class="scalar-title">Intensity</div>
@@ -1208,6 +1508,19 @@ export default {
                <span class="label-min">{{ formatValue(currentRangeDecompressed[0]) }}</span>
                <canvas ref="scalarBarCanvasDecompressed"></canvas>
                <span class="label-max">{{ formatValue(currentRangeDecompressed[1]) }}</span>
+             </div>
+          </div>
+          <div 
+             :class="['scalar-bar-overlay', layoutMode]" 
+             v-if="segmentationMode !== 'none' && selectedDecompressedData"
+             :style="{ top: scalarBarTop + '%', left: scalarBarLeft + '%' }"
+             @mousedown.stop="startDrag"
+          >
+             <div class="scalar-title">{{ segmentationLabel() }}</div>
+             <div :class="['scalar-content', layoutMode]">
+               <span class="label-min">{{ Math.floor(currentLabelRangeDecompressed[0]) }}</span>
+               <canvas ref="manifoldBarCanvasDecompressed"></canvas>
+               <span class="label-max">{{ Math.floor(currentLabelRangeDecompressed[1]) }}</span>
              </div>
           </div>
         </div>
@@ -1292,8 +1605,8 @@ export default {
 .scalar-bar-overlay {
   position: absolute;
   top: 50%;
-  right: 5%;
-  transform: translate(50%, -50%); /* Center based on right property */
+  left: 50%;
+  transform: translate(-50%, -50%);
   display: flex;
   align-items: center;
   background: rgba(0, 0, 0, 0.7);

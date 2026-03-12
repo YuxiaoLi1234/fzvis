@@ -301,6 +301,118 @@ def compute_wavelet(data_array, parameters):
 
 def compute_critical_points(data_array, parameters):
     """Compute critical points (minima/maxima) for a single dataset using MSZ."""
+    def _flatten_segmentation_field(field):
+        if field is None:
+            return None
+        try:
+            arr = np.asarray(field)
+            return arr.ravel().tolist()
+        except Exception:
+            pass
+        if hasattr(field, 'tolist'):
+            try:
+                return field.tolist()
+            except Exception:
+                pass
+        if isinstance(field, (list, tuple)):
+            return [float(x) if np.isfinite(x) else 0.0 for x in field]
+        return None
+
+    def _get_segmentation_component(labels_obj, candidate_names):
+        if labels_obj is None:
+            return None
+        if isinstance(labels_obj, dict):
+            for key in candidate_names:
+                if key in labels_obj:
+                    return labels_obj[key]
+        for key in candidate_names:
+            if hasattr(labels_obj, key):
+                value = getattr(labels_obj, key)
+                if callable(value):
+                    try:
+                        value = value()
+                    except TypeError:
+                        pass
+                return value
+        return None
+
+    def _extract_segmentation_fields(labels_obj):
+        metadata = {}
+        if isinstance(labels_obj, np.ndarray):
+            labels_arr = np.asarray(labels_obj)
+            if labels_arr.ndim >= 4 and labels_arr.shape[-1] >= 2:
+                # MSZ returns labels as (W, H, D, 2). Convert to (D, H, W) for C-order flattening.
+                descending_raw = np.ascontiguousarray(labels_arr[..., 0].transpose(2, 1, 0)).astype(np.int64, copy=False)
+                ascending_raw = np.ascontiguousarray(labels_arr[..., 1].transpose(2, 1, 0)).astype(np.int64, copy=False)
+
+                def _remap_nonneg_labels(arr):
+                    flat = arr.reshape(-1)
+                    mask = flat >= 0
+                    if not np.any(mask):
+                        return arr, np.array([], dtype=np.int64)
+                    unique = np.unique(flat[mask])
+                    remapped = flat.copy()
+                    remapped[mask] = np.searchsorted(unique, remapped[mask])
+                    return remapped.reshape(arr.shape), unique
+
+                descending_mapped, desc_unique = _remap_nonneg_labels(descending_raw)
+                ascending_mapped, asc_unique = _remap_nonneg_labels(ascending_raw)
+
+                logger.info(
+                    "MSz segmentation labels: descending=%d unique, ascending=%d unique",
+                    desc_unique.size,
+                    asc_unique.size
+                )
+                logger.debug(
+                    "Descending sample=%s | Ascending sample=%s",
+                    desc_unique[:20].tolist(),
+                    asc_unique[:20].tolist()
+                )
+
+                # One ID per observed (descending, ascending) manifold intersection.
+                pairs = np.stack((descending_mapped, ascending_mapped), axis=-1)
+                pairs_flat = pairs.reshape(-1, 2)
+                unique_pairs, morse_inverse = np.unique(pairs_flat, axis=0, return_inverse=True)
+                morse = morse_inverse.reshape(descending_mapped.shape, order='C').astype(np.int64, copy=False)
+
+                metadata = {
+                    'ascending': {
+                        'unique': list(range(int(asc_unique.size))),
+                        'count': int(asc_unique.size)
+                    },
+                    'descending': {
+                        'unique': list(range(int(desc_unique.size))),
+                        'count': int(desc_unique.size)
+                    },
+                    'morse_smale': {
+                        'count': int(unique_pairs.shape[0]),
+                        'pairs': unique_pairs.tolist()
+                    }
+                }
+
+                return {
+                    'ascending': ascending_mapped.tolist(),
+                    'descending': descending_mapped.tolist(),
+                    'morse_smale': morse.tolist(),
+                }, metadata
+
+        components = {}
+        mapping = {
+            'ascending': ('ascending', 'asc', 'ascending_manifold'),
+            'descending': ('descending', 'desc', 'descending_manifold'),
+            'morse_smale': ('morse_smale', 'morse', 'ms', 'morse_smale_manifold'),
+        }
+        for canonical, candidate_names in mapping.items():
+            raw_component = _get_segmentation_component(labels_obj, candidate_names)
+            serialized = _flatten_segmentation_field(raw_component)
+            if serialized:
+                components[canonical] = serialized
+        if not components:
+            serialized = _flatten_segmentation_field(labels_obj)
+            if serialized:
+                components['morse_smale'] = serialized
+        return components, metadata
+
     try:
         logger.info("Starting critical points computation")
         dims = parameters.get('dimensions')
@@ -341,10 +453,24 @@ def compute_critical_points(data_array, parameters):
         # Ensure contiguous array for C++ binding
         arr_data = np.ascontiguousarray(data_array, dtype=np.float64)
         
-        logger.info(f"Calling msz.extract_critical_points with dims: W={width}, H={height}, D={depth}, connectivity={connectivity_type}, accelerator={accelerator}, data_size={arr_data.size}")
+        compute_segmentation = bool(config.get('computeSegmentation', True))
+        logger.info(
+            f"Calling msz.extract_critical_points with dims: W={width}, H={height}, D={depth}, "
+            f"compute_segmentation={compute_segmentation}, connectivity={connectivity_type}, "
+            f"accelerator={accelerator}, data_size={arr_data.size}"
+        )
         
         try:
-            result = msz.extract_critical_points(arr_data, connectivity_type, width, height, depth, accelerator=accelerator)
+            # Use explicit keywords to avoid argument shifts when the Python binding changes.
+            result = msz.extract_critical_points(
+                arr_data,
+                compute_segmentation=compute_segmentation,
+                connectivity_type=connectivity_type,
+                W=width,
+                H=height,
+                D=depth,
+                accelerator=accelerator
+            )
             logger.info(f"msz.extract_critical_points returned successfully")
         except Exception as msz_error:
             logger.error(f"msz.extract_critical_points raised exception: {msz_error}")
@@ -422,6 +548,22 @@ def compute_critical_points(data_array, parameters):
                 'depth': depth
             }
         }
+
+        # Return segmentation labels (ascending/descending/Morse-Smale) when available.
+        if compute_segmentation and result.get('labels') is not None:
+            labels = result.get('labels')
+            segmentation_fields, segmentation_meta = _extract_segmentation_fields(labels)
+            if segmentation_fields:
+                res['segmentation'] = {
+                    'dimensions': {
+                        'width': width,
+                        'height': height,
+                        'depth': depth
+                    },
+                    **segmentation_fields
+                }
+                if segmentation_meta:
+                    res['segmentation']['metadata'] = segmentation_meta
 
         # If original data is provided, also compute faults
         original_data = parameters.get('original_data')
@@ -607,13 +749,15 @@ def apply_critical_points_correction(original, decompressed, parameters):
         # NOTE: We use ACCELERATOR_NONE (Serial) for apply_edits because it's a very fast
         # operation on CPU (O(N_edits)) and avoids CUDA host-device sync issues.
         # derive_edits (the heavy part) still uses the selected accelerator.
-        logger.info(f"Applying {len(edits)} edits to corrected_data... (using Serial application)")
-        corrected_data = np.ascontiguousarray(decompressed, dtype=np.float64)
+        logger.info(f"Applying {len(edits)} edits to corrected_data...")
+        # Make an explicit deep copy to avoid in-place edits mutating the original decompressed array.
+        corrected_data = np.array(decompressed, dtype=np.float64, copy=True, order='C')
         status = msz.apply_edits(
             corrected_data,
             edits,
             W=W, H=H, D=D,
-            accelerator=msz.ACCELERATOR_NONE
+            accelerator=accelerator,
+            device_id=0
         )
         logger.info(f"msz.apply_edits finished with status: {status}")
 

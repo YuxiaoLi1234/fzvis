@@ -11,8 +11,16 @@ export default {
       tooltip: null,
       activeSubTab: 'analysis', // 'compression' or 'analysis'
       // Analysis-related data
+      autoSelectAllSources: true,
       selectedSources: ['original'], // Default to original
       activeMetrics: {},
+      powerSpectrumState: {
+        fullX: null,
+        fullY: null,
+        viewX: null,
+        viewY: null,
+        roi: null,
+      },
       availableMetrics: [
         {
           id: 'histogram',
@@ -64,6 +72,18 @@ export default {
         });
       }
       return sources;
+    },
+    selectableSourceIds() {
+      return this.availableSources
+        .map(source => source.id)
+        .filter(id => id !== 'original');
+    },
+    hasSelectableSources() {
+      return this.selectableSourceIds.length > 0;
+    },
+    allSelectableSourcesSelected() {
+      if (!this.selectableSourceIds.length) return false;
+      return this.selectableSourceIds.every(id => this.selectedSources.includes(id));
     }
   },
   
@@ -98,6 +118,11 @@ export default {
             });
           }
         });
+
+        if (this.autoSelectAllSources && this.hasSelectableSources) {
+          this.selectedSources = ['original', ...this.selectableSourceIds];
+          this.autoSelectAllSources = false;
+        }
       },
       deep: true
     }
@@ -143,12 +168,22 @@ export default {
 
     toggleSource(sourceId) {
       if (sourceId === 'original') return; // Original is always selected
+      this.autoSelectAllSources = false;
 
       const idx = this.selectedSources.indexOf(sourceId);
       if (idx > -1) {
         this.selectedSources.splice(idx, 1);
       } else {
         this.selectedSources.push(sourceId);
+      }
+    },
+    toggleAllSources() {
+      if (!this.hasSelectableSources) return;
+      this.autoSelectAllSources = false;
+      if (this.allSelectableSourcesSelected) {
+        this.selectedSources = ['original'];
+      } else {
+        this.selectedSources = ['original', ...this.selectableSourceIds];
       }
     },
 
@@ -419,7 +454,8 @@ export default {
       const svg = container.append("svg")
         .attr("width", width + margin.left + margin.right)
         .attr("height", height + margin.top + margin.bottom)
-        .append("g")
+      
+      const g = svg.append("g")
         .attr("transform", `translate(${margin.left},${margin.top})`);
 
       const allData = [];
@@ -427,46 +463,154 @@ export default {
         res.data.forEach(d => allData.push(d));
       });
 
+      const filteredAllData = allData.filter(d => d.k > 0 && d.p > 0);
+      if (filteredAllData.length === 0) return;
+      const fullX = d3.extent(filteredAllData, d => d.k);
+      const fullY = d3.extent(filteredAllData, d => d.p);
+
+      this.powerSpectrumState.fullX = fullX;
+      this.powerSpectrumState.fullY = fullY;
+
+      let viewX = this.powerSpectrumState.viewX || fullX;
+      let viewY = this.powerSpectrumState.viewY || fullY;
+      if (viewX[0] < fullX[0] || viewX[1] > fullX[1]) viewX = fullX;
+      if (viewY[0] < fullY[0] || viewY[1] > fullY[1]) viewY = fullY;
+      this.powerSpectrumState.viewX = viewX;
+      this.powerSpectrumState.viewY = viewY;
+
       const x = d3.scaleLog()
-        .domain(d3.extent(allData, d => d.k))
+        .domain(viewX)
         .range([0, width]);
 
       const y = d3.scaleLog()
-        .domain(d3.extent(allData, d => d.p))
+        .domain(viewY)
         .range([height, 0]);
 
-      svg.append("g")
+      g.append("g")
         .attr("transform", `translate(0,${height})`)
         .call(d3.axisBottom(x).ticks(5, "~s"));
 
-      svg.append("g")
+      g.append("g")
         .call(d3.axisLeft(y).ticks(5, "~s"));
       
       // Labels
-      svg.append("text").attr("text-anchor", "middle").attr("x", width/2).attr("y", height + 35).text("Wavenumber (k)").style("font-size", "12px");
-      svg.append("text").attr("text-anchor", "middle").attr("transform", "rotate(-90)").attr("y", -45).attr("x", -height/2).text("Power P(k)").style("font-size", "12px");
+      g.append("text").attr("text-anchor", "middle").attr("x", width/2).attr("y", height + 35).text("Wavenumber (k)").style("font-size", "12px");
+      g.append("text").attr("text-anchor", "middle").attr("transform", "rotate(-90)").attr("y", -45).attr("x", -height/2).text("Power P(k)").style("font-size", "12px");
 
       const color = d3.scaleOrdinal(d3.schemeTableau10).domain(sources.map(s => s[0]));
+
+      const clipId = `ps-clip-${metric.id}`;
+      svg.append("defs")
+        .append("clipPath")
+        .attr("id", clipId)
+        .attr("clipPathUnits", "userSpaceOnUse")
+        .append("rect")
+        .attr("x", 0)
+        .attr("y", 0)
+        .attr("width", width)
+        .attr("height", height);
+
+      const plotLayer = g.append("g")
+        .attr("clip-path", `url(#${clipId})`);
 
       sources.forEach(([id, res]) => {
         const line = d3.line()
           .x(d => x(d.k))
           .y(d => y(d.p));
 
-        svg.append("path")
+        plotLayer.append("path")
           .datum(res.data)
+          .attr("class", "ps-line")
+          .attr("data-source-id", id)
           .attr("fill", "none")
           .attr("stroke", color(id))
           .attr("stroke-width", 2)
+          .attr("opacity", 1)
           .attr("d", line);
       });
 
-      const legend = svg.append("g").attr("transform", `translate(${width - 120}, 0)`);
+      const brush = d3.brushX()
+        .extent([[0, 0], [width, height]])
+        .on("end", (event) => {
+          if (!event.selection) return;
+          const [sx0, sx1] = event.selection;
+          const r0 = x.invert(sx0);
+          const r1 = x.invert(sx1);
+          const newX = [Math.min(r0, r1), Math.max(r0, r1)];
+          const selectedData = filteredAllData.filter(d => d.k >= newX[0] && d.k <= newX[1]);
+          const newY = selectedData.length
+            ? d3.extent(selectedData, d => d.p)
+            : fullY;
+          this.powerSpectrumState.viewX = newX;
+          this.powerSpectrumState.viewY = newY;
+          this.powerSpectrumState.roi = newX;
+          this.$nextTick(() => this.drawPowerSpectrum(metric));
+        });
+
+      g.append("g")
+        .attr("class", "ps-brush")
+        .call(brush);
+
+      const legend = g.append("g").attr("transform", `translate(${width - 120}, 0)`);
       sources.forEach(([id], i) => {
         const lg = legend.append("g").attr("transform", `translate(0, ${i * 20})`);
         lg.append("rect").attr("width", 12).attr("height", 12).attr("fill", color(id));
         lg.append("text").attr("x", 16).attr("y", 10).text(id).style("font-size", "11px").attr("alignment-baseline", "middle");
+
+        lg.style("cursor", "pointer")
+          .on("mouseenter", () => {
+            plotLayer.selectAll(".ps-line")
+              .attr("opacity", 0.15)
+              .attr("stroke-width", 1.5);
+            plotLayer.selectAll(`.ps-line[data-source-id="${id}"]`)
+              .attr("opacity", 1)
+              .attr("stroke-width", 3);
+          })
+          .on("mouseleave", () => {
+            plotLayer.selectAll(".ps-line")
+              .attr("opacity", 1)
+              .attr("stroke-width", 2);
+          });
       });
+    },
+
+    zoomPowerSpectrum(metric, factor) {
+      const fullX = this.powerSpectrumState.fullX;
+      const fullY = this.powerSpectrumState.fullY;
+      if (!fullX || !fullY) return;
+
+      const zoomLogDomain = (domain, fullDomain, zoomFactor) => {
+        const logMin = Math.log10(domain[0]);
+        const logMax = Math.log10(domain[1]);
+        const logCenter = (logMin + logMax) / 2;
+        const newSpan = (logMax - logMin) / zoomFactor;
+        let newMin = Math.pow(10, logCenter - newSpan / 2);
+        let newMax = Math.pow(10, logCenter + newSpan / 2);
+        newMin = Math.max(newMin, fullDomain[0]);
+        newMax = Math.min(newMax, fullDomain[1]);
+        return [newMin, newMax];
+      };
+
+      const viewX = this.powerSpectrumState.viewX || fullX;
+      const viewY = this.powerSpectrumState.viewY || fullY;
+
+      this.powerSpectrumState.viewX = zoomLogDomain(viewX, fullX, factor);
+      this.powerSpectrumState.viewY = zoomLogDomain(viewY, fullY, factor);
+      this.$nextTick(() => this.drawPowerSpectrum(metric));
+    },
+
+    resetPowerSpectrumView(metric) {
+      this.powerSpectrumState.viewX = null;
+      this.powerSpectrumState.viewY = null;
+      this.powerSpectrumState.roi = null;
+      this.$nextTick(() => this.drawPowerSpectrum(metric));
+    },
+
+    clearPowerSpectrumROI(metric) {
+      this.powerSpectrumState.roi = null;
+      this.powerSpectrumState.viewX = null;
+      this.powerSpectrumState.viewY = null;
+      this.$nextTick(() => this.drawPowerSpectrum(metric));
     },
 
     drawCorrelation(metric) {
@@ -552,11 +696,16 @@ export default {
 
 
     visualizeCriticalPoints(criticalPointsData, sourceId = 'original') {
-      // Store critical points data in Vuex so HelloVtk can access it
       this.$store.commit('setCriticalPoints', { 
         source: sourceId, 
         data: criticalPointsData 
       });
+      if (criticalPointsData?.segmentation) {
+        this.$store.commit('setSegmentation', {
+          source: sourceId,
+          data: criticalPointsData.segmentation
+        });
+      }
       
       // Switch to Data Visualization tab
       this.$nextTick(() => {
@@ -583,6 +732,12 @@ export default {
             source: sourceId, 
             data: data 
           });
+          if (data.segmentation) {
+            this.$store.commit('setSegmentation', {
+              source: sourceId,
+              data: data.segmentation
+            });
+          }
           count++;
         }
       });
@@ -597,7 +752,7 @@ export default {
         }
       });
       
-      this.$store.commit('setStatus', { 
+        this.$store.commit('setStatus', { 
         type: 'success', 
         message: `Visualizing critical points for ${count} sources. Switched to Data Visualization tab.` 
       });
@@ -923,7 +1078,18 @@ export default {
         <div class="card mb-3">
           <div class="card-header bg-light py-2 d-flex justify-content-between align-items-center">
             <h6 class="mb-0 small">Data Sources to Analyze</h6>
-            <span class="badge bg-secondary">{{ selectedSources.length }} selected</span>
+            <div class="d-flex align-items-center gap-2">
+              <button
+                type="button"
+                class="btn btn-sm"
+                :class="allSelectableSourcesSelected ? 'btn-outline-danger' : 'btn-outline-primary'"
+                :disabled="!hasSelectableSources"
+                @click="toggleAllSources"
+              >
+                {{ allSelectableSourcesSelected ? 'Deselect all' : 'Select all' }}
+              </button>
+              <span class="badge bg-secondary">{{ selectedSources.length }} selected</span>
+            </div>
           </div>
           <div class="card-body py-2">
             <div class="d-flex flex-wrap gap-2">
@@ -1081,6 +1247,30 @@ export default {
 
                 <!-- Power Spectrum Comparison Chart -->
                 <div v-else-if="metric.id === 'power_spectrum'" class="result-chart">
+                  <div class="d-flex align-items-center gap-2 mb-2">
+                    <button class="btn btn-sm btn-outline-primary" @click="zoomPowerSpectrum(metric, 1.6)">
+                      <i class="bi bi-zoom-in me-1"></i>Zoom In
+                    </button>
+                    <button class="btn btn-sm btn-outline-primary" @click="zoomPowerSpectrum(metric, 1 / 1.6)">
+                      <i class="bi bi-zoom-out me-1"></i>Zoom Out
+                    </button>
+                    <button class="btn btn-sm btn-outline-secondary" @click="resetPowerSpectrumView(metric)">
+                      <i class="bi bi-arrow-counterclockwise me-1"></i>Reset
+                    </button>
+                    <button
+                      v-if="powerSpectrumState.roi"
+                      class="btn btn-sm btn-outline-danger"
+                      @click="clearPowerSpectrumROI(metric)"
+                    >
+                      <i class="bi bi-x-circle me-1"></i>Clear ROI
+                    </button>
+                    <div v-if="powerSpectrumState.roi" class="ms-auto text-muted small">
+                      ROI: {{ powerSpectrumState.roi[0].toPrecision(3) }} - {{ powerSpectrumState.roi[1].toPrecision(3) }}
+                    </div>
+                    <div v-else class="ms-auto text-muted small">
+                      Drag to select ROI
+                    </div>
+                  </div>
                   <div :id="`ps-chart-${metric.id}`" class="w-100" style="height: 300px;"></div>
                 </div>
 

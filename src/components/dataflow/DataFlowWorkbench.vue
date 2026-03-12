@@ -397,6 +397,10 @@ export default {
           }
         });
       }
+      // Pull direct config for compressors like ZFP (no modules)
+      if (node.definitionId === 'zfp' && node.config?.compressor_config) {
+        config.compressor_config = { ...node.config.compressor_config };
+      }
 
       // Add error bound if present in node config or as defaults
       // For now, use some defaults if not found
@@ -423,50 +427,19 @@ export default {
         return;
       }
 
-      const inputEdges = this.edges.filter(e => e.to.nodeId === baseNode.id);
-      
+      const batchId = Date.now();
       values.forEach((val, index) => {
-        const type = 'compressor';
-        const defId = baseNode.definitionId;
-        const x = baseNode.x + (index + 1) * 50;
-        const y = baseNode.y + (index + 1) * 30;
-        
-        const label = `${baseNode.label} (v${index + 1})`;
-        const id = `${defId}-bulk-${Date.now()}-${index}`;
-        
-        // Create new node
-        const newNode = NodeFactory.createNode(type, id, label, baseNode.icon, defId, { ...baseNode.config });
-        newNode.x = x;
-        newNode.y = y;
-        newNode.definitionId = defId;
-        newNode.editorComponent = baseNode.editorComponent;
-        newNode.status = 'ready';
-        
-        // Deep copy modules
-        if (baseNode.modules) {
-          newNode.modules = JSON.parse(JSON.stringify(baseNode.modules));
-        }
-
-        this.nodes.push(newNode);
-
-        // Connect to same inputs
-        inputEdges.forEach(edge => {
-          this.addEdge(edge.from.nodeId, edge.from.portId, newNode.id, edge.to.portId);
-        });
-
         // Store this derived config in the store as well for the ConfigGraph to see
         const derivedConfig = JSON.parse(JSON.stringify(this.baseConfigurations[baseConfigName]));
         derivedConfig.compressor_config[parameter] = val;
         this.$store.commit('addDerivedConfiguration', { 
           baseName: baseConfigName, 
-          derivedName: id, 
+          derivedName: `${baseNode.definitionId}-bulk-${batchId}-${index}`, 
           config: derivedConfig 
         });
       });
 
-      this.$nextTick(() => {
-        this.updateCanvasSize();
-      });
+      this.$store.commit('setStatus', { type: 'success', message: `Generated ${values.length} variants for ${baseNode.label}.` });
     },
 
     handlePropagateParameter({ baseNodeId, parameter, values }) {
@@ -481,6 +454,15 @@ export default {
         this.selectedNode.config = { ...this.selectedNode.config, ...payload };
         console.log(`Node ${this.selectedNode.id} config updated:`, this.selectedNode.config);
       }
+    },
+    getVariantCount(node) {
+      if (!node || node.type !== 'compressor') return 0;
+      const derived = this.derivedConfigurations?.[node.id] || null;
+      return derived ? Object.keys(derived).length : 0;
+    },
+    getVariantDots(count) {
+      const maxDots = 6;
+      return Math.min(maxDots, Math.max(0, Number(count || 0)));
     },
     // Status helpers and event handlers to mirror PipelineBrowser behavior
     setNodeStatus(nodeId, status, message) {
@@ -512,6 +494,97 @@ export default {
       
       // Propagate reset to downstream nodes since data has changed
       this.resetDownstreamNodes(nodeId);
+    },
+    flattenNumericField(field) {
+      if (field == null) return null;
+      if (ArrayBuffer.isView(field)) return Array.from(field).map(v => Number(v));
+      if (!Array.isArray(field)) return null;
+      return field.flat(Infinity).map(v => Number(v));
+    },
+    normalizeSegmentation(segmentation, dimensionsHint = null) {
+      if (!segmentation || typeof segmentation !== 'object') return null;
+
+      const dims = segmentation.dimensions || {};
+      const hinted = Array.isArray(dimensionsHint) ? dimensionsHint.map(Number) : null;
+      const width = Number(dims.width || hinted?.[0] || 0);
+      const height = Number(dims.height || hinted?.[1] || 0);
+      const depth = Number(dims.depth || hinted?.[2] || 1);
+      if (!width || !height || !depth) return null;
+
+      const total = width * height * depth;
+      const result = {
+        dimensions: { width, height, depth },
+      };
+      ['ascending', 'descending', 'morse_smale'].forEach(key => {
+        const flattened = this.flattenNumericField(segmentation[key]);
+        if (Array.isArray(flattened) && flattened.length === total) {
+          result[key] = flattened;
+        }
+      });
+      if (!result.ascending && !result.descending && !result.morse_smale) {
+        return null;
+      }
+      if (segmentation.metadata && typeof segmentation.metadata === 'object') {
+        result.metadata = segmentation.metadata;
+      }
+      return result;
+    },
+    extractDimensionsFromResult(result) {
+      if (!result) return null;
+      if (Array.isArray(result.dimensions)) return result.dimensions;
+      if (Array.isArray(result.meta?.dimensions)) return result.meta.dimensions;
+      const ds = this.$store?.state?.dataset;
+      if (ds?.width && ds?.height) {
+        return [Number(ds.width), Number(ds.height), Number(ds.depth || 1)];
+      }
+      return null;
+    },
+    hasManifoldData(result) {
+      const seg = result?.segmentation;
+      if (!seg) return false;
+      return ['ascending', 'descending', 'morse_smale'].some(k => Array.isArray(seg[k]) && seg[k].length > 0);
+    },
+    handleCorrectionSuccess(payload) {
+      const nodeId = payload?.nodeId || this.selectedNode?.id;
+      if (!nodeId) return;
+
+      const sourceEdge = this.edges.find(e => e.to.nodeId === nodeId && e.to.portId === 'in-0');
+      const sourceNodeId = sourceEdge?.from?.nodeId || null;
+      const baseKey = sourceNodeId ? `${sourceNodeId}-corrected` : `${nodeId}-corrected`;
+      const node = this.nodes.find(n => n.id === nodeId);
+      let correctedKey = node?.correctedKey || baseKey;
+      if (node && node.correctedKey && node.correctedKey !== baseKey) {
+        this.$store.commit('removeComparisonData', node.correctedKey);
+        correctedKey = baseKey;
+      }
+
+      const rawResult = payload?.result || null;
+      if (!rawResult) {
+        this.handleFilterSuccess(nodeId, payload);
+        return;
+      }
+
+      const dims = this.extractDimensionsFromResult(rawResult);
+      const normalizedSegmentation = this.normalizeSegmentation(
+        rawResult.segmentation || rawResult.critical_points?.segmentation,
+        dims
+      );
+
+      const result = { ...rawResult };
+      if (normalizedSegmentation) {
+        result.segmentation = normalizedSegmentation;
+        this.$store.commit('setSegmentation', { source: correctedKey, data: normalizedSegmentation });
+      }
+
+      const cpPayload = rawResult.critical_points || (rawResult.type === 'critical_points' ? rawResult : null);
+      if (cpPayload) {
+        this.$store.commit('setCriticalPoints', { source: correctedKey, data: cpPayload });
+      }
+
+      this.handleFilterSuccess(nodeId, { ...payload, result });
+      if (node) node.correctedKey = correctedKey;
+      result.corrected_from = sourceNodeId;
+      this.$store.commit('setComparisonData', { [correctedKey]: result });
     },
     handleFilterError(nodeId, payload) {
       const node = this.nodes.find(n => n.id === nodeId);
@@ -1394,6 +1467,13 @@ export default {
                     <i :class="['bi', node.icon]" aria-hidden="true"></i>
                     <span class="fw-semibold">{{ node.label }}</span>
                     <span class="badge rounded-pill" :class="getStatusBadgeClass(node.status)">{{ getStatusLabel(node.status) }}</span>
+                    <span
+                      v-if="node.type === 'compressor' && getVariantCount(node) > 0"
+                      class="badge rounded-pill bg-info text-dark variant-badge"
+                      :title="`Variants: ${getVariantCount(node)}`"
+                    >
+                      <i class="bi bi-layers me-1"></i>{{ getVariantCount(node) }}
+                    </span>
                   </div>
                   <div class="d-flex align-items-center gap-1 ms-2">
                     <button 
@@ -1443,6 +1523,22 @@ export default {
                     </div>
                   </template>
                   <template v-else-if="node.type === 'compressor'">
+                    <div v-if="getVariantCount(node) > 0" class="variant-strip mb-2">
+                      <span class="fw-semibold">Variants</span>
+                      <div class="variant-dots">
+                        <span
+                          v-for="i in getVariantDots(getVariantCount(node))"
+                          :key="`vd-${node.id}-${i}`"
+                          class="variant-dot"
+                        ></span>
+                        <span
+                          v-if="getVariantCount(node) > getVariantDots(getVariantCount(node))"
+                          class="variant-overflow"
+                        >
+                          +{{ getVariantCount(node) - getVariantDots(getVariantCount(node)) }}
+                        </span>
+                      </div>
+                    </div>
                     <!-- Expandable Module Pipeline View -->
                     <div v-if="node.expanded && node.modules && node.modules.length" class="module-pipeline mt-2 mb-2">
                       <div class="small text-muted mb-2">
@@ -1485,6 +1581,17 @@ export default {
                     </div>
                     <div v-if="(!node.modules || !node.modules.length) && node.architecture === 'modular'">No module selections yet.</div>
                     <div v-if="node.lastUpdatedAt" class="text-muted mt-2">Last updated: {{ formatTimestamp(node.lastUpdatedAt) }}</div>
+                    <div v-if="node.description" class="text-muted small mt-2">{{ node.description }}</div>
+                  </template>
+                  <template v-else-if="node.type === 'correction'">
+                    <div v-if="node.lastRunAt">Last run: {{ formatTimestamp(node.lastRunAt) }}</div>
+                    <div v-if="node.lastResult?.num_edits !== undefined">
+                      Applied edits: <b>{{ node.lastResult.num_edits }}</b>
+                    </div>
+                    <div v-if="hasManifoldData(node.lastResult)">
+                      Manifolds: <span class="badge bg-info text-dark">Available</span>
+                    </div>
+                    <div v-else>Manifolds: <span class="text-muted">Not available</span></div>
                     <div v-if="node.description" class="text-muted small mt-2">{{ node.description }}</div>
                   </template>
                   <div v-else class="text-muted">No summary available.</div>
@@ -1623,12 +1730,7 @@ export default {
                       :input-data="getIncomingData(selectedNode.id)"
                       @config-change="onNodeConfigChange"
                       @start="(nodeId) => handleFilterStart(nodeId)"
-                      @success="($event) => {
-                        handleFilterSuccess($event.nodeId, $event);
-                        if ($event.result) {
-                          this.$store.commit('setComparisonData', { [$event.nodeId]: $event.result });
-                        }
-                      }"
+                      @success="handleCorrectionSuccess"
                       @error="($event) => handleFilterError($event.nodeId || selectedNode.id, $event)"
                       @finish="($event) => handleFilterFinish($event || selectedNode.id)"
                     />
@@ -1813,6 +1915,35 @@ export default {
   height: 8px;
   background-color: #dee2e6;
   z-index: -1;
+}
+
+.variant-badge {
+  border: 1px solid rgba(0, 0, 0, 0.08);
+}
+
+.variant-strip {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.variant-dots {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.variant-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #0dcaf0;
+  box-shadow: 0 0 0 1px rgba(13, 202, 240, 0.3);
+}
+
+.variant-overflow {
+  font-size: 0.75rem;
+  color: #0b7285;
 }
 .config-graph-overlay {
   transition: transform 0.2s ease, opacity 0.2s ease;

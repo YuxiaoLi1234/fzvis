@@ -300,6 +300,9 @@ export class CorrectionNode extends BaseNode {
     // Clean up the stored correction results from the store
     if (context?.store) {
       context.store.commit('removeComparisonData', this.id);
+      if (this.correctedKey && this.correctedKey !== this.id) {
+        context.store.commit('removeComparisonData', this.correctedKey);
+      }
     }
   }
 }

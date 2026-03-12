@@ -90,7 +90,7 @@
             @change="emitConfigChange"
           />
           <label class="form-check-label" for="preservePath">
-            Preserve Integratal Paths
+            Preserve Integratal Paths (can take more time)
           </label>
         </div>
         <div class="form-text">
