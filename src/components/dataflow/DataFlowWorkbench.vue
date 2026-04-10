@@ -9,13 +9,14 @@ import DataNormalization from '../filter/DataNormalization.vue';
 import SZ3Pipeline from '../compressor/SZ3Pipeline.vue';
 import ZFPConfig from '../compressor/ZFPConfig.vue';
 import CriticalPointsCorrection from '../correction/CriticalPointsCorrection.vue';
+import FFCzCorrection from '../correction/FFCzCorrection.vue';
 import { Splitpanes, Pane } from 'splitpanes';
 import { NodeFactory } from '../../utils/nodeClasses';
 import ConfigGraph from '../ConfigGraph.vue';
 
 export default {
   name: 'DataFlowWorkbench',
-  components: { 
+  components: {
     InputDataset,
     DataClipping,
     DataThresholdMask,
@@ -75,7 +76,7 @@ export default {
           label: 'Testing Module',
           description: 'A simple testing module that accepts two inputs and generates two outputs.',
           icon: 'bi-puzzle',
-          inputCount: 2, 
+          inputCount: 2,
           outputCount: 2,
         },
       ],
@@ -101,6 +102,12 @@ export default {
           label: 'Critical Points Correction',
           description: 'Apply fixes to correct critical points in the compressed data',
           icon: 'bi-bullseye',
+        },
+        {
+          id: 'ffcz_correction',
+          label: 'FFCz Frequency Correction',
+          description: 'Correct frequency-domain errors with configurable spatial and frequency bounds',
+          icon: 'bi-soundwave',
         },
       ],
       nodes: [],
@@ -137,6 +144,12 @@ export default {
         nodeLabel: '',
       },
       showConfigGraph: false,
+      showExploreModal: false,
+      exploreNodeId: null,
+      showPropertiesModal: false,
+      cachedDataKeys: new Set(),
+      cachingDataKeys: new Set(),
+      splitResizeRaf: null,
     };
   },
 
@@ -173,6 +186,80 @@ export default {
     compressorOptions() {
       return this.$store?.state?.compressorOptions || {};
     },
+    comparisonData() {
+      return this.$store?.state?.comparisonData || {};
+    },
+    exploreBaseConfig() {
+      if (!this.exploreNodeId) return null;
+      return this.baseConfigurations?.[this.exploreNodeId] || null;
+    },
+    exploreDerivedConfigs() {
+      if (!this.exploreNodeId) return {};
+      return this.derivedConfigurations?.[this.exploreNodeId] || {};
+    },
+    explorePlot() {
+      const baseConfig = this.exploreBaseConfig;
+      const derivedConfigs = this.exploreDerivedConfigs;
+      if (!baseConfig) return null;
+
+      const configs = [baseConfig, ...Object.values(derivedConfigs)];
+      if (!configs.length) return null;
+
+      const baseNode = this.nodes.find(n => n.id === this.exploreNodeId);
+      const isSZ3 = baseNode?.definitionId === 'sz3';
+      const moduleDefs = isSZ3 ? (baseNode?.modules || []) : [];
+      const axisKeyMap = new Map();
+      if (isSZ3 && moduleDefs.length) {
+        moduleDefs.forEach(m => axisKeyMap.set(m.key, m.label || m.id));
+      }
+
+      const keys = new Set();
+      configs.forEach(c => {
+        const cc = c?.compressor_config || {};
+        Object.keys(cc).forEach(k => keys.add(k));
+      });
+      const axes = isSZ3 && moduleDefs.length
+        ? moduleDefs.map(m => m.key).filter(k => keys.has(k))
+        : Array.from(keys).sort();
+      if (!axes.length) return null;
+
+      const valueTable = configs.map(c => {
+        const cc = c?.compressor_config || {};
+        return axes.map(k => cc[k]);
+      });
+
+      const axisMeta = axes.map((k, i) => {
+        const values = valueTable.map(row => row[i]).filter(v => v !== undefined && v !== null);
+        const allNumeric = values.every(v => typeof v === 'number' && Number.isFinite(v));
+        const label = axisKeyMap.get(k) || k;
+        const valueLabelMap = {};
+        let optionLabels = [];
+        let optionValues = [];
+        if (isSZ3) {
+          const moduleDef = moduleDefs.find(m => m.key === k);
+          if (moduleDef) {
+            const opts = this.getModuleOptionsForId('sz3', moduleDef.id) || [];
+            opts.forEach(opt => {
+              valueLabelMap[String(opt.value)] = opt.label;
+            });
+            optionLabels = opts.map(opt => opt.label);
+            optionValues = opts.map(opt => opt.value);
+          }
+        }
+        if (allNumeric) {
+          const min = Math.min(...values);
+          const max = Math.max(...values);
+          return { key: k, label, type: 'number', min, max, valueLabelMap, optionLabels, optionValues };
+        }
+        const categories = Array.from(new Set(values.map(v => String(v))));
+        return { key: k, label, type: 'category', categories, valueLabelMap, optionLabels, optionValues };
+      });
+
+      return {
+        axes: axisMeta,
+        values: valueTable,
+      };
+    },
   },
 
   watch: {
@@ -184,19 +271,50 @@ export default {
         });
       }
     },
+    datasetToken: {
+      immediate: true,
+      handler() {
+        this.$nextTick(() => {
+          this.ensureDatasetCached();
+        });
+      }
+    },
     '$store.state.bulkGenerationRequests': {
       handler(requests) {
         if (requests && requests.length > 0) {
-          const req = requests[0];
-          if (req.type === 'error-bound') {
-            this.handleErrorBoundBulkGeneration(req.payload);
-          } else if (req.type === 'propagate') {
-            this.handlePropagateParameter(req.payload);
-          }
-          this.$store.commit('clearBulkGenerationRequest', req.id);
+          requests.forEach(req => {
+            if (req.type === 'error-bound') {
+              this.handleErrorBoundBulkGeneration(req.payload);
+            } else if (req.type === 'propagate') {
+              this.handlePropagateParameter(req.payload);
+            }
+            this.$store.commit('clearBulkGenerationRequest', req.id);
+          });
         }
       },
       deep: true
+    },
+    comparisonData: {
+      deep: true,
+      handler(newData) {
+        if (!newData) return;
+        // Auto-complete compressor nodes if their variants are finished in Config Graph
+        this.nodes.forEach(node => {
+          if (node.type === 'compressor' && node.status !== 'success' && node.status !== 'running') {
+            const finishedConfig = this.getFinishedConfigResultForNode(node, newData);
+            if (finishedConfig) {
+              node.status = 'success';
+              // Promote the first finished config result to be this node's last result
+              // This activates downstream components (like correction)
+              node.lastResult = {
+                ...finishedConfig.result,
+                base_name: finishedConfig.baseId
+              };
+              node.lastRunAt = Date.now();
+            }
+          }
+        });
+      }
     }
   },
 
@@ -216,40 +334,117 @@ export default {
   },
 
   methods: {
-    onSplitResize() {
-      // Trigger layout recalculations for nested components/VTK canvas
-      window.dispatchEvent(new Event('resize'));
-      if (!this.nodes.length) {
-        this.$nextTick(() => {
-          this.initializeCanvasSize();
+    resolveConfigBaseIdForNode(node) {
+      if (!node) return null;
+
+      const baseConfigurations = this.baseConfigurations || {};
+      const derivedConfigurations = this.derivedConfigurations || {};
+      const comparisonData = this.comparisonData || {};
+
+      if (baseConfigurations[node.id] || derivedConfigurations[node.id]) {
+        return node.id;
+      }
+
+      const currentResult = node.lastResult || comparisonData[node.id] || null;
+      const explicitBase = currentResult?.base_name;
+      if (explicitBase && (baseConfigurations[explicitBase] || derivedConfigurations[explicitBase])) {
+        return explicitBase;
+      }
+
+      const containingBase = Object.keys(derivedConfigurations).find(baseName => derivedConfigurations[baseName]?.[node.id]);
+      if (containingBase) return containingBase;
+
+      const prefixedBase = Object.keys(baseConfigurations).find(baseName => node.id.startsWith(`${baseName}-`));
+      if (prefixedBase) return prefixedBase;
+
+      if (node.definitionId) {
+        const matchingBases = Object.keys(baseConfigurations).filter(baseName => {
+          return baseConfigurations[baseName]?.compressor_id === node.definitionId;
         });
+        if (matchingBases.length === 1) {
+          return matchingBases[0];
+        }
+      }
+
+      return node.id;
+    },
+    getFinishedConfigResultForNode(node, resultMap = null) {
+      if (!node) return null;
+
+      const data = resultMap || this.comparisonData || {};
+      const baseId = this.resolveConfigBaseIdForNode(node);
+      if (!baseId) return null;
+
+      const candidates = [baseId, ...Object.keys(this.derivedConfigurations?.[baseId] || {})];
+      const finishedId = candidates.find(candidateId => data?.[candidateId] && !data[candidateId]?.error);
+      if (!finishedId) return null;
+
+      return {
+        baseId,
+        resultId: finishedId,
+        result: data[finishedId]
+      };
+    },
+    onSplitResize() {
+      if (this.splitResizeRaf) return;
+      this.splitResizeRaf = window.requestAnimationFrame(() => {
+        this.splitResizeRaf = null;
+        this.initializeCanvasSize();
+        this.updateCanvasSize();
+      });
+    },
+
+    async ensureDatasetCached() {
+      const dataset = this.$store?.state?.dataset || null;
+      if (!dataset || !dataset.content) return;
+      let dataKey = dataset.data_key;
+      if (!dataKey) {
+        dataKey = crypto.randomUUID();
+        this.$store.commit('setFileData', { dataset: { ...dataset, data_key: dataKey } });
+      }
+      if (this.cachedDataKeys.has(dataKey) || this.cachingDataKeys.has(dataKey)) return;
+      this.cachingDataKeys.add(dataKey);
+      const dimensions = dataset.dimensions || [dataset.width, dataset.height, dataset.depth]
+        .filter(d => d && d !== '1' && d !== 1)
+        .map(Number);
+      const metadata = {
+        precision: dataset.precision,
+        dimensions,
+        name: dataset.name,
+        type: dataset.type,
+      };
+      try {
+        const formData = new FormData();
+        formData.append('data_key', dataKey);
+        formData.append('metadata', JSON.stringify(metadata));
+        const blob = new Blob([dataset.content], { type: 'application/octet-stream' });
+        formData.append('data', blob, dataset.name || 'data.bin');
+        await axios.post('/api/cache/upload', formData, {
+          headers: { 'Content-Type': 'multipart/form-data' }
+        });
+        this.cachedDataKeys.add(dataKey);
+      } catch (err) {
+        console.error('Failed to cache dataset:', err);
+      } finally {
+        this.cachingDataKeys.delete(dataKey);
       }
     },
-    
+
     onWindowResize() {
       // Update canvas size when window is resized
-      if (!this.nodes.length) {
-        this.initializeCanvasSize();
-      }
+      this.initializeCanvasSize();
+      this.updateCanvasSize();
     },
 
     initializeCanvasSize() {
       // Calculate canvas size based on available pane space
       const paneEl = this.$refs.graphPane?.$el;
       if (!paneEl) return;
-      
+
       const rect = paneEl.getBoundingClientRect();
       const availableWidth = Math.max(400, rect.width - 15);
-      let availableHeight = rect.height;
-      
-      if (this.selectedNode) {
-        // Properties card takes ~40% of height plus margin
-        availableHeight = Math.max(400, rect.height * 0.6);
-      } else {
-        // No properties card, use full height minus card header and margins
-        availableHeight = Math.max(400, rect.height - 60);
-      }
-      
+      const availableHeight = Math.max(400, rect.height - 60);
+
       this.canvasSize.width = availableWidth;
       this.canvasSize.height = availableHeight;
     },
@@ -259,11 +454,7 @@ export default {
     },
     clearSelection() {
       this.selectedNodeId = null;
-      if (!this.nodes.length) {
-        this.$nextTick(() => {
-          this.initializeCanvasSize();
-        });
-      }
+      this.showPropertiesModal = false;
     },
     onDragStart(event, payload) {
       const type = typeof payload === 'string' ? payload : payload?.type;
@@ -347,7 +538,7 @@ export default {
           filterType: `filter.${defId}`,
         };
       }
-      
+
       // Center the node under the mouse (assuming ~200px width, ~80px height)
       node.x = Math.max(10, Math.round(x - 100));
       node.y = Math.max(10, Math.round(y - 40));
@@ -369,6 +560,7 @@ export default {
         node.status = 'pending';
       } else if (type === 'correction') {
         if (defId === 'critical_points') node.editorComponent = markRaw(CriticalPointsCorrection);
+        else if (defId === 'ffcz_correction') node.editorComponent = markRaw(FFCzCorrection);
         else node.editorComponent = null;
         node.status = 'pending';
       }
@@ -382,7 +574,7 @@ export default {
     },
     promoteToConfigGraph(node) {
       if (node.type !== 'compressor') return;
-      
+
       const config = {
         compressor_id: node.definitionId,
         compressor_config: {}
@@ -401,12 +593,41 @@ export default {
       if (node.definitionId === 'zfp' && node.config?.compressor_config) {
         config.compressor_config = { ...node.config.compressor_config };
       }
+      // Merge node-level config (e.g., SZ3 error bound mode/value emitted by editor)
+      if (node.config?.compressor_config) {
+        config.compressor_config = {
+          ...config.compressor_config,
+          ...node.config.compressor_config,
+        };
+      }
 
       // Add error bound if present in node config or as defaults
       // For now, use some defaults if not found
       if (node.definitionId === 'sz3') {
-        config.compressor_config['sz3:error_bound_mode_str'] = 'ABS';
-        config.compressor_config['sz3:abs_error_bound'] = 1e-3;
+        const mode = config.compressor_config['sz3:error_bound_mode_str'];
+        if (!mode) {
+          config.compressor_config['sz3:error_bound_mode_str'] = 'ABS';
+        }
+        const finalMode = config.compressor_config['sz3:error_bound_mode_str'];
+        if (finalMode === 'REL') {
+          delete config.compressor_config['sz3:abs_error_bound'];
+          delete config.compressor_config['sz3:psnr_error_bound'];
+          if (config.compressor_config['sz3:rel_error_bound'] === undefined) {
+            config.compressor_config['sz3:rel_error_bound'] = 1e-3;
+          }
+        } else if (finalMode === 'PSNR') {
+          delete config.compressor_config['sz3:abs_error_bound'];
+          delete config.compressor_config['sz3:rel_error_bound'];
+          if (config.compressor_config['sz3:psnr_error_bound'] === undefined) {
+            config.compressor_config['sz3:psnr_error_bound'] = 1e-3;
+          }
+        } else {
+          delete config.compressor_config['sz3:rel_error_bound'];
+          delete config.compressor_config['sz3:psnr_error_bound'];
+          if (config.compressor_config['sz3:abs_error_bound'] === undefined) {
+            config.compressor_config['sz3:abs_error_bound'] = 1e-3;
+          }
+        }
       }
 
       config.early_config = {
@@ -422,31 +643,256 @@ export default {
 
     handleErrorBoundBulkGeneration({ baseConfigName, parameter, values }) {
       const baseNode = this.nodes.find(n => n.id === baseConfigName);
-      if (!baseNode) {
-        this.$store.commit('setStatus', { type: 'danger', message: 'Base node not found in workspace.' });
+      const baseConfig = this.baseConfigurations?.[baseConfigName];
+      if (!baseConfig) {
+        this.$store.commit('setStatus', { type: 'danger', message: 'Base configuration not found.' });
         return;
       }
 
-      const batchId = Date.now();
+      const baseSlug = String(baseConfigName).replace(/[^a-zA-Z0-9_-]/g, '_');
+      const existing = Object.keys(this.derivedConfigurations?.[baseConfigName] || {});
+
       values.forEach((val, index) => {
         // Store this derived config in the store as well for the ConfigGraph to see
-        const derivedConfig = JSON.parse(JSON.stringify(this.baseConfigurations[baseConfigName]));
+        const derivedConfig = JSON.parse(JSON.stringify(baseConfig));
+        if (!derivedConfig.compressor_config) derivedConfig.compressor_config = {};
+        this.ensureConfigDatasetFields(derivedConfig);
         derivedConfig.compressor_config[parameter] = val;
-        this.$store.commit('addDerivedConfiguration', { 
-          baseName: baseConfigName, 
-          derivedName: `${baseNode.definitionId}-bulk-${batchId}-${index}`, 
-          config: derivedConfig 
+
+        // Format value for filename
+        const valStr = this.formatValueForFilename(val);
+        let derivedName = `${baseSlug}-eb-${valStr}`;
+
+        // Handle duplicates by adding a counter
+        if (existing.includes(derivedName) || values.slice(0, index).some((v) => {
+          return this.formatValueForFilename(v) === valStr;
+        })) {
+          let counter = 2;
+          while (existing.includes(`${derivedName}-${counter}`)) {
+            counter++;
+          }
+          derivedName = `${derivedName}-${counter}`;
+        }
+
+        this.$store.commit('addDerivedConfiguration', {
+          baseName: baseConfigName,
+          derivedName,
+          config: derivedConfig
         });
       });
 
-      this.$store.commit('setStatus', { type: 'success', message: `Generated ${values.length} variants for ${baseNode.label}.` });
+      const label = baseNode?.label || baseConfigName;
+      this.$store.commit('setStatus', { type: 'success', message: `Generated ${values.length} variants for ${label}.` });
+    },
+    handleCombinatorialGeneration(payload) {
+      if (!this.selectedNode || this.selectedNode.type !== 'compressor') return;
+      const baseConfig = payload?.baseConfig || null;
+      const configs = Array.isArray(payload?.configs) ? payload.configs : [];
+      if (!baseConfig || configs.length === 0) {
+        this.$store.commit('setStatus', { type: 'warning', message: 'No configurations generated. Check your selections.' });
+        return;
+      }
+      const basePrefix = this.selectedNode.definitionId || 'compressor';
+      const existing = Object.keys(this.baseConfigurations || {}).filter(name => name.startsWith(`${basePrefix}-combo-`));
+      let nextIndex = existing
+        .map(name => {
+          const match = name.match(/-combo-(\d+)$/);
+          return match ? Number(match[1]) : -1;
+        })
+        .reduce((max, v) => Math.max(max, v), -1) + 1;
+      configs.forEach((config, index) => {
+        const baseName = `${basePrefix}-combo-${nextIndex + index}`;
+        this.ensureConfigDatasetFields(config);
+        this.$store.commit('addBaseConfiguration', { name: baseName, config });
+      });
+
+      this.$store.commit('setShowConfigGraphInPane', true);
+      this.$store.commit('setStatus', { type: 'success', message: `Generated ${configs.length} base configurations from ${this.selectedNode.label}.` });
+    },
+    ensureConfigDatasetFields(config) {
+      if (!config) return;
+      const dataset = this.$store.state.dataset || {};
+      if (!config.data_key) {
+        const existingKey = dataset.data_key || dataset.name || null;
+        if (existingKey) {
+          config.data_key = existingKey;
+        } else if (dataset.content) {
+          const newKey = crypto.randomUUID();
+          config.data_key = newKey;
+          this.$store.commit('setFileData', { dataset: { ...dataset, data_key: newKey } });
+        }
+      }
+      const dims = dataset.dimensions || [dataset.width, dataset.height, dataset.depth]
+        .filter(d => d && d !== '1' && d !== 1)
+        .map(Number);
+      if (!config.dataset_meta) {
+        config.dataset_meta = {
+          name: dataset.name || null,
+          dimensions: dims.length ? dims : null,
+          precision: dataset.precision || null,
+          endianness: dataset.endianness || 'little',
+        };
+      } else {
+        if (!config.dataset_meta.name && dataset.name) config.dataset_meta.name = dataset.name;
+        if (!config.dataset_meta.dimensions && dims.length) config.dataset_meta.dimensions = dims;
+        if (!config.dataset_meta.precision && dataset.precision) config.dataset_meta.precision = dataset.precision;
+        if (!config.dataset_meta.endianness && dataset.endianness) config.dataset_meta.endianness = dataset.endianness;
+      }
+    },
+    openExploreModal(node) {
+      if (!node || node.type !== 'compressor') return;
+      const hasBase = Boolean(this.baseConfigurations?.[node.id]);
+      if (!hasBase) {
+        this.$store.commit('setStatus', { type: 'warning', message: 'No saved base configuration for this compressor yet.' });
+        return;
+      }
+      this.exploreNodeId = node.id;
+      this.showExploreModal = true;
+    },
+    closeExploreModal() {
+      this.showExploreModal = false;
+      this.exploreNodeId = null;
+    },
+    exploreAxisX(index, width, padding) {
+      const count = this.explorePlot?.axes?.length || 1;
+      if (count <= 1) return padding;
+      const span = width - padding * 2;
+      return padding + (span * index) / (count - 1);
+    },
+    exploreValueY(axis, value, height, padding) {
+      if (value === undefined || value === null) return height - padding;
+      const span = height - padding * 2;
+      if (axis.type === 'number') {
+        if (axis.max === axis.min) return padding + span / 2;
+        const t = (Number(value) - axis.min) / (axis.max - axis.min);
+        return height - padding - t * span;
+      }
+      const idx = axis.categories.indexOf(String(value));
+      if (idx < 0) return height - padding;
+      if (axis.categories.length <= 1) return padding + span / 2;
+      const t = idx / (axis.categories.length - 1);
+      return height - padding - t * span;
+    },
+    explorePathForRow(row, width, height, padding) {
+      const axes = this.explorePlot?.axes || [];
+      const points = axes.map((axis, i) => {
+        const x = this.exploreAxisX(i, width, padding);
+        const y = this.exploreValueY(axis, row[i], height, padding);
+        return `${x},${y}`;
+      });
+      return `M ${points.join(' L ')}`;
+    },
+    exploreOptionY(axis, index, height, padding) {
+      const span = height - padding * 2;
+      const count = axis?.optionLabels?.length || 0;
+      if (count <= 1) return padding + span / 2;
+      const t = index / (count - 1);
+      return height - padding - t * span;
+    },
+    formatExploreValue(axis, value) {
+      if (value === undefined || value === null) return '—';
+      const mapped = axis?.valueLabelMap?.[String(value)];
+      if (mapped) return mapped;
+      if (axis?.type === 'number') {
+        const num = Number(value);
+        if (!Number.isFinite(num)) return String(value);
+        const abs = Math.abs(num);
+        if (abs > 0 && abs < 1e-3) return num.toExponential(2);
+        if (abs >= 1e4) return num.toExponential(2);
+        return num.toPrecision(3);
+      }
+      return String(value);
+    },
+
+    formatValueForFilename(value) {
+      if (typeof value === 'number') {
+        const num = Number(value);
+        if (!Number.isFinite(num)) return String(value).replace(/[^a-zA-Z0-9_-]/g, '_');
+        const abs = Math.abs(num);
+        // Use exponential notation for very small or very large numbers
+        if (abs > 0 && abs < 1e-4) {
+          return num.toExponential(1).replace(/[+]/g, '');
+        }
+        if (abs >= 1e4) {
+          return num.toExponential(1).replace(/[+]/g, '');
+        }
+        // For regular numbers, use a reasonable precision
+        // Remove trailing zeros and decimal point if not needed
+        let str = num.toPrecision(4);
+        str = parseFloat(str).toString();
+        return str;
+      }
+      return String(value).replace(/[^a-zA-Z0-9_-]/g, '_');
     },
 
     handlePropagateParameter({ baseNodeId, parameter, values }) {
-      // Similar to error bound but for other parameters
-      // For now, let's treat it similarly or just show a message
-      console.log('Propagating parameter from base node:', baseNodeId, parameter, values);
-      this.$store.commit('setStatus', { type: 'info', message: 'Parameter propagation not fully implemented for data flow nodes yet.' });
+      const baseNode = this.nodes.find(n => n.id === baseNodeId);
+      const baseConfig = this.baseConfigurations?.[baseNodeId];
+      if (!baseConfig) {
+        this.$store.commit('setStatus', { type: 'danger', message: 'Base configuration not found.' });
+        return;
+      }
+      const baseSlug = String(baseNodeId).replace(/[^a-zA-Z0-9_-]/g, '_');
+      const existing = Object.keys(this.derivedConfigurations?.[baseNodeId] || {});
+
+      // Check if this is an error bound or accuracy parameter
+      const isErrorBound = parameter.includes('error_bound') || parameter === 'zfp:accuracy';
+
+      values.forEach((val, index) => {
+        const derivedConfig = JSON.parse(JSON.stringify(baseConfig));
+        if (!derivedConfig.compressor_config) derivedConfig.compressor_config = {};
+        this.ensureConfigDatasetFields(derivedConfig);
+        derivedConfig.compressor_config[parameter] = val;
+
+        // Generate name based on whether it's an error bound
+        let derivedName;
+        if (isErrorBound) {
+          // Format value for filename
+          const valStr = this.formatValueForFilename(val);
+          derivedName = `${baseSlug}-eb-${valStr}`;
+
+          // Handle duplicates by adding a counter
+          if (existing.includes(derivedName) || values.slice(0, index).some((v) => {
+            return this.formatValueForFilename(v) === valStr;
+          })) {
+            let counter = 2;
+            while (existing.includes(`${derivedName}-${counter}`)) {
+              counter++;
+            }
+            derivedName = `${derivedName}-${counter}`;
+          }
+        } else {
+          // Use parameter-based naming for non-error-bound parameters
+          const paramSlug = String(parameter)
+            .split(':')
+            .pop()
+            .replace(/[^a-zA-Z0-9_-]/g, '_')
+            .toLowerCase();
+          let nextIndex = existing
+            .map(name => {
+              const match = name.match(/-prop-(\d+)$/);
+              return match ? Number(match[1]) : -1;
+            })
+            .reduce((max, v) => Math.max(max, v), -1) + 1;
+          derivedName = `${baseSlug}-${paramSlug}-${nextIndex + index}`;
+        }
+
+        this.$store.commit('addDerivedConfiguration', {
+          baseName: baseNodeId,
+          derivedName,
+          config: derivedConfig
+        });
+      });
+      this.$store.commit('setStatus', { type: 'success', message: `Generated ${values.length} variants for ${baseNode?.label || baseNodeId}.` });
+    },
+    handleExploreStateChanged(nodeId, state) {
+      const node = this.nodes.find(n => n.id === nodeId);
+      if (!node) return;
+      const next = JSON.parse(JSON.stringify(state));
+      const prev = node.exploreState ? JSON.stringify(node.exploreState) : null;
+      const nextStr = JSON.stringify(next);
+      if (prev === nextStr) return;
+      node.exploreState = next;
     },
     onNodeConfigChange(payload) {
       if (this.selectedNode) {
@@ -478,20 +924,20 @@ export default {
     handleFilterSuccess(nodeId, payload) {
       const node = this.nodes.find(n => n.id === nodeId);
       if (!node) return;
-      
+
       const result = payload?.result || payload || null;
       const context = payload?.context || null;
-      
+
       node.lastResult = result;
       node.lastRunContext = context;
       node.lastRunAt = Date.now();
-      
+
       let message = 'Filter applied successfully.';
       if (result?.dimensions && Array.isArray(result.dimensions)) {
         message = `Output dimensions ${result.dimensions.join('×')}.`;
       }
       this.setNodeStatus(nodeId, 'success', message);
-      
+
       // Propagate reset to downstream nodes since data has changed
       this.resetDownstreamNodes(nodeId);
     },
@@ -626,19 +1072,20 @@ export default {
     },
     selectNode(nodeId) {
       this.selectedNodeId = nodeId;
-      // Recalculate canvas size if empty since properties panel affects available space
-      if (!this.nodes.length) {
-        this.$nextTick(() => {
-          this.initializeCanvasSize();
-        });
-      }
+    },
+    openPropertiesModal(nodeId) {
+      this.selectedNodeId = nodeId;
+      this.showPropertiesModal = true;
+    },
+    closePropertiesModal() {
+      this.showPropertiesModal = false;
     },
     resetDownstreamNodes(nodeId) {
       // Find all nodes that depend on this node (directly or indirectly)
       const directDownstreamIds = this.edges
         .filter(e => e.from.nodeId === nodeId)
         .map(e => e.to.nodeId);
-      
+
       directDownstreamIds.forEach(childId => {
         const childNode = this.nodes.find(n => n.id === childId);
         if (childNode) {
@@ -673,11 +1120,19 @@ export default {
       }
       const node = this.nodes[idx];
 
+      const configBaseId = node.type === 'compressor'
+        ? this.resolveConfigBaseIdForNode(node)
+        : null;
+
       // Perform node-specific cleanup/reverse operations
-      node.onDestroy({ 
+      node.onDestroy({
         store: this.$store,
         filterComponents: this.filterComponents,
       });
+
+      if (configBaseId && (this.baseConfigurations?.[configBaseId] || this.derivedConfigurations?.[configBaseId])) {
+        this.$store.commit('removeConfigurationBranch', configBaseId);
+      }
 
       // Invalidate and reset all downstream nodes before removing edges
       this.resetDownstreamNodes(nodeId);
@@ -716,7 +1171,7 @@ export default {
       if (this.connecting.active) {
         this.updateTempConnectionMouse(event);
       }
-      
+
       if (!this.dragging.active) return;
       const canvasRect = this.$refs.canvas?.getBoundingClientRect();
       const node = this.nodes.find(n => n.id === this.dragging.nodeId);
@@ -762,7 +1217,7 @@ export default {
           this.$store.commit('removeComparisonData', targetNodeId);
         }
 
-        this.edges = this.edges.filter(e => 
+        this.edges = this.edges.filter(e =>
           !(e.to.nodeId === targetNodeId && e.to.portId === targetPortId)
         );
         this.addEdge(sourceNodeId, sourcePortId, targetNodeId, targetPortId);
@@ -854,16 +1309,16 @@ export default {
     // Compressor pipeline updates
     handlePipelineModulesUpdated(mods) {
       if (!this.selectedNode || this.selectedNode.type !== 'compressor') return;
-      
+
       // Only update timestamp if modules actually changed
-      const hasChanged = !this.selectedNode.modules || 
+      const hasChanged = !this.selectedNode.modules ||
         JSON.stringify(this.selectedNode.modules) !== JSON.stringify(mods);
-      
+
       this.selectedNode.modules = mods;
       if (hasChanged) {
         this.selectedNode.lastUpdatedAt = Date.now();
       }
-      
+
       const ready = mods && mods.every(m => m?.value && Object.keys(m.value).length);
       this.selectedNode.status = ready ? 'ready' : 'pending';
     },
@@ -872,19 +1327,33 @@ export default {
     },
     async handleRunCompressor(config) {
       if (!this.selectedNode || this.selectedNode.type !== 'compressor') return;
-      
+
       const nodeId = this.selectedNode.id;
       this.setNodeStatus(nodeId, 'running', 'Compressing the data...');
-      
+
       try {
+        // Data flow:
+        // 1. If compressor is connected to a filter node, use the filtered data from the store
+        //    (filters update the global store when they complete)
+        // 2. Otherwise, use the original dataset from the store
+        // The config already contains dataset_meta from this.$store.state.dataset,
+        // which is updated by filters, so we ensure we're using the correct data
+
+        const datasetToUse = this.$store.state.dataset?.content;
+        let dataKeyToUse = config.data_key;
+
         // Ensure we have a data_key if possible
-        if (!config.data_key && this.$store.state.dataset?.content) {
+        if (!dataKeyToUse && datasetToUse) {
           const newKey = await this.computeDataKey();
-          config.data_key = newKey;
-          this.$store.commit('setFileData', { 
-            dataset: { ...this.$store.state.dataset, data_key: newKey } 
+          dataKeyToUse = newKey;
+          this.$store.commit('setFileData', {
+            dataset: { ...this.$store.state.dataset, data_key: newKey }
           });
         }
+
+        // Update config with correct data key
+        // (dataset_meta is already correct from the store)
+        config.data_key = dataKeyToUse;
 
         const executeCompression = async (conf) => {
           const formData = new FormData();
@@ -899,21 +1368,22 @@ export default {
         } catch (err) {
           const serverMsg = err?.response?.data?.error;
           // If data is missing from backend cache (404), upload it and retry
-          if (err?.response?.status === 404 && serverMsg?.includes('DATA_KEY_NOT_FOUND') && this.$store.state.dataset?.content) {
+          if (err?.response?.status === 404 && serverMsg?.includes('DATA_KEY_NOT_FOUND') && datasetToUse) {
             this.setNodeStatus(nodeId, 'running', 'Uploading data to server cache...');
-            
+
             const uploadForm = new FormData();
             uploadForm.append('metric_type', 'statistics'); // Dummy metric to trigger cache storage
             uploadForm.append('parameters', JSON.stringify({
               dimensions: config.dataset_meta.dimensions,
-              precision: config.dataset_meta.precision
+              precision: config.dataset_meta.precision,
+              endianness: config.dataset_meta.endianness
             }));
             uploadForm.append('data_key', config.data_key);
-            const blob = new Blob([this.$store.state.dataset.content], { type: 'application/octet-stream' });
+            const blob = new Blob([datasetToUse], { type: 'application/octet-stream' });
             uploadForm.append('data', blob, config.dataset_meta.name || 'data.bin');
-            
+
             await axios.post('/api/analysis/compute/upload', uploadForm);
-            
+
             // Retry compression
             this.setNodeStatus(nodeId, 'running', 'Compressing the data...');
             response = await executeCompression(config);
@@ -923,7 +1393,7 @@ export default {
         }
 
         const nodeResult = response.data[nodeId];
-        
+
         // Final guard: check if node still exists and is the same type
         const finalNode = this.nodes.find(n => n.id === nodeId);
         if (!finalNode) {
@@ -949,7 +1419,7 @@ export default {
           this.setNodeStatus(nodeId, 'success', 'Compression completed.');
           finalNode.lastResult = nodeResult;
           finalNode.lastRunAt = Date.now();
-          
+
           if (this.$store) {
             this.$store.commit('setComparisonData', { [nodeId]: nodeResult });
           }
@@ -976,7 +1446,7 @@ export default {
     selectCompressorModule(nodeId, moduleIdx) {
       const node = this.nodes.find(n => n.id === nodeId);
       if (!node || node.type !== 'compressor') return;
-      
+
       // Toggle selection: if same module clicked, deselect
       if (node.selectedModuleIdx === moduleIdx) {
         node.selectedModuleIdx = null;
@@ -1003,16 +1473,16 @@ export default {
     onModuleDrop(nodeId, moduleIdx, moduleId, event) {
       const node = this.nodes.find(n => n.id === nodeId);
       if (!node || node.type !== 'compressor') return;
-      
+
       // Get the dragged option data
       const optionLabel = event.dataTransfer.getData('text/plain');
       const draggedModuleId = event.dataTransfer.getData('module-id');
-      
+
       if (!optionLabel || draggedModuleId !== moduleId) {
         event.currentTarget.style.cursor = 'pointer';
         return;
       }
-      
+
       // Find the option value from the component's data
       // We need to get this from the SZ3Pipeline component
       // For now, we'll emit an event that the component can handle
@@ -1024,18 +1494,18 @@ export default {
           // This is a simplified version - in production you'd look it up properly
           const moduleOptions = this.getModuleOptionsForId(node.definitionId, moduleId);
           const option = moduleOptions?.find(opt => opt.label === optionLabel);
-          
+
           if (option && option.state !== 'unavailable') {
             module.value = { [optionLabel]: option.value };
             node.lastUpdatedAt = Date.now();
-            
+
             // Check if all modules are configured
             const ready = node.modules.every(m => m?.value && Object.keys(m.value).length);
             node.status = ready ? 'ready' : 'pending';
           }
         }
       }
-      
+
       event.currentTarget.style.cursor = 'pointer';
     },
     getModuleOptionsForId(compressorId, moduleId) {
@@ -1055,6 +1525,7 @@ export default {
           encoder: [
             { label: 'Bypass', state: 'available', value: '0' },
             { label: 'Huffman', state: 'available', value: '1' },
+            { label: 'Arithmetic', state: 'available', value: '2' },
           ],
           lossless: [
             { label: 'Bypass', state: 'available', value: '0' },
@@ -1069,7 +1540,7 @@ export default {
       const node = this.nodes.find(n => n.id === nodeId);
       const incomingEdges = this.edges.filter(e => e.to.nodeId === nodeId);
       const data = {};
-      
+
       // Process explicit connections
       incomingEdges.forEach(edge => {
         const sourceNode = this.nodes.find(n => n.id === edge.from.nodeId);
@@ -1090,7 +1561,14 @@ export default {
             }
           };
         } else if (sourceNode.type === 'filter' || sourceNode.type === 'compressor' || sourceNode.type === 'correction') {
-          sourceData = sourceNode.lastResult || (this.comparisonData ? this.comparisonData[sourceNode.id] : null);
+          const rawData = sourceNode.lastResult || (this.comparisonData ? this.comparisonData[sourceNode.id] : null);
+          if (rawData) {
+            // Include node ID for downstream traceability (e.g. for batch processing)
+            sourceData = { ...rawData, sourceNodeId: sourceNode.id };
+          } else {
+            // Provide a placeholder with node ID to allow variants detection before the node is run
+            sourceData = { sourceNodeId: sourceNode.id, is_placeholder: true };
+          }
         }
 
         data[edge.to.portId] = sourceData;
@@ -1122,14 +1600,14 @@ export default {
         this.initializeCanvasSize();
         return;
       }
-      
+
       // Get minimum dimensions from current pane size
       const paneEl = this.$refs.graphPane?.$el;
       const rect = paneEl?.getBoundingClientRect();
-      
+
       let minWidth = 800;
       let minHeight = 600;
-      
+
       if (rect) {
         minWidth = Math.max(400, rect.width - 15);
         if (this.selectedNode) {
@@ -1138,23 +1616,23 @@ export default {
           minHeight = Math.max(400, rect.height - 60);
         }
       }
-      
+
       // Calculate required canvas size based on node positions
       let maxX = minWidth;
       let maxY = minHeight;
-      
+
       this.nodes.forEach(node => {
         // Calculate dynamic node width based on type and state
         let nodeWidth = 420; // default max node width from CSS
-        
+
         if (node.type === 'compressor' && node.modules && node.modules.length) {
           // Compressor nodes are narrower when collapsed
           nodeWidth = node.expanded ? 420 : 350;
         }
-        
+
         // Calculate dynamic node height based on type and state
         let nodeHeight = 200; // base height
-        
+
         if (node.type === 'compressor' && node.expanded && node.modules && node.modules.length) {
           // Each module box is ~60px
           // Add instruction text (~30px) and pipeline container padding (~20px)
@@ -1166,14 +1644,14 @@ export default {
           const moduleCount = node.modules.length;
           nodeHeight = 180 + (moduleCount * 20); // base + list items
         }
-        
+
         const rightEdge = (node.x || 0) + nodeWidth + 50; // 50px padding
         const bottomEdge = (node.y || 0) + nodeHeight + 50; // 50px padding
-        
+
         if (rightEdge > maxX) maxX = rightEdge;
         if (bottomEdge > maxY) maxY = bottomEdge;
       });
-      
+
       this.canvasSize.width = maxX;
       this.canvasSize.height = maxY;
     },
@@ -1189,6 +1667,229 @@ export default {
       const [label] = Object.keys(module.value);
       return label || 'Configured';
     },
+
+    /**
+     * Export the entire workflow graph to a JSON file
+     */
+    exportWorkflow() {
+      try {
+        // Serialize nodes - exclude runtime-only properties
+        const serializedNodes = this.nodes.map(node => ({
+          id: node.id,
+          label: node.label,
+          icon: node.icon,
+          type: node.type,
+          x: node.x,
+          y: node.y,
+          inputCount: node.inputCount,
+          outputCount: node.outputCount,
+          config: node.config,
+          editorComponent: node.editorComponent,
+          // Compressor-specific properties
+          ...(node.type === 'compressor' && {
+            compressorId: node.compressorId,
+            definitionId: node.definitionId,
+            architecture: node.architecture,
+            expanded: node.expanded,
+            modules: node.modules,
+            selectedModuleIdx: node.selectedModuleIdx,
+          }),
+          // Filter-specific properties
+          ...(node.type === 'filter' && {
+            definitionId: node.definitionId,
+          }),
+          // Correction-specific properties
+          ...(node.type === 'correction' && {
+            definitionId: node.definitionId,
+          }),
+          // Module-specific properties
+          ...(node.type === 'module' && {
+            definitionId: node.definitionId,
+          }),
+          // Store description if present
+          ...(node.description && { description: node.description }),
+        }));
+
+        // Serialize edges
+        const serializedEdges = this.edges.map(edge => ({
+          from: { nodeId: edge.from.nodeId, portId: edge.from.portId },
+          to: { nodeId: edge.to.nodeId, portId: edge.to.portId },
+        }));
+
+        // Create the export object
+        const workflowData = {
+          version: '1.0',
+          timestamp: new Date().toISOString(),
+          nodes: serializedNodes,
+          edges: serializedEdges,
+          counters: { ...this.counters },
+          // Include Config Graph data
+          baseConfigurations: { ...this.baseConfigurations },
+          derivedConfigurations: { ...this.derivedConfigurations },
+        };
+
+        // Convert to JSON and download
+        const json = JSON.stringify(workflowData, null, 2);
+        const blob = new Blob([json], { type: 'application/json' });
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = `workflow-${Date.now()}.json`;
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        URL.revokeObjectURL(url);
+
+        this.$store.commit('setStatus', {
+          type: 'success',
+          message: 'Workflow exported successfully!'
+        });
+      } catch (error) {
+        console.error('Failed to export workflow:', error);
+        this.$store.commit('setStatus', {
+          type: 'danger',
+          message: 'Failed to export workflow: ' + error.message
+        });
+      }
+    },
+
+    /**
+     * Import a workflow graph from a JSON file
+     */
+    importWorkflow() {
+      const input = document.createElement('input');
+      input.type = 'file';
+      input.accept = 'application/json,.json';
+
+      input.onchange = async (event) => {
+        const file = event.target.files[0];
+        if (!file) return;
+
+        try {
+          const text = await file.text();
+          const workflowData = JSON.parse(text);
+
+          // Validate the workflow data
+          if (!workflowData.version || !workflowData.nodes || !workflowData.edges) {
+            throw new Error('Invalid workflow file format');
+          }
+
+          // Clear existing workflow
+          this.nodes = [];
+          this.edges = [];
+          this.selectedNodeId = null;
+
+          // Restore counters
+          if (workflowData.counters) {
+            this.counters = { ...workflowData.counters };
+          }
+
+          // Recreate nodes using NodeFactory
+          workflowData.nodes.forEach(nodeData => {
+            const node = NodeFactory.createNode(
+              nodeData.type,
+              nodeData.id,
+              nodeData.label,
+              nodeData.icon,
+              nodeData.definitionId || nodeData.compressorId,
+              {
+                inputCount: nodeData.inputCount,
+                outputCount: nodeData.outputCount,
+                architecture: nodeData.architecture,
+              }
+            );
+
+            // Restore position
+            node.x = nodeData.x || 0;
+            node.y = nodeData.y || 0;
+
+            // Restore config
+            node.config = nodeData.config || {};
+
+            // Restore compressor-specific properties
+            if (nodeData.type === 'compressor') {
+              node.expanded = nodeData.expanded || false;
+              node.modules = nodeData.modules || [];
+              node.selectedModuleIdx = nodeData.selectedModuleIdx || null;
+              node.definitionId = nodeData.definitionId || nodeData.compressorId;
+            }
+
+            // Restore filter/correction/module definition IDs
+            if (nodeData.definitionId) {
+              node.definitionId = nodeData.definitionId;
+            }
+
+            // Restore description
+            if (nodeData.description) {
+              node.description = nodeData.description;
+            }
+
+            // Restore editor component
+            if (nodeData.editorComponent) {
+              node.editorComponent = nodeData.editorComponent;
+            }
+
+            // Set initial status based on node type
+            if (node.type === 'source') {
+              node.status = this.datasetLoaded ? 'ready' : 'empty';
+            } else {
+              node.status = 'pending';
+            }
+
+            this.nodes.push(node);
+          });
+
+          // Restore edges
+          workflowData.edges.forEach(edgeData => {
+            this.edges.push({
+              from: { nodeId: edgeData.from.nodeId, portId: edgeData.from.portId },
+              to: { nodeId: edgeData.to.nodeId, portId: edgeData.to.portId },
+            });
+          });
+
+          // Restore Config Graph data
+          if (workflowData.baseConfigurations) {
+            // Clear existing configurations
+            this.$store.state.baseConfigurations = {};
+            this.$store.state.derivedConfigurations = {};
+
+            // Restore base configurations
+            Object.entries(workflowData.baseConfigurations).forEach(([name, config]) => {
+              this.$store.commit('addBaseConfiguration', { name, config });
+            });
+
+            // Restore derived configurations
+            if (workflowData.derivedConfigurations) {
+              Object.entries(workflowData.derivedConfigurations).forEach(([baseName, derivedMap]) => {
+                Object.entries(derivedMap).forEach(([derivedName, config]) => {
+                  this.$store.commit('addDerivedConfiguration', { baseName, derivedName, config });
+                });
+              });
+            }
+          }
+
+          // Update canvas size based on imported nodes
+          this.$nextTick(() => {
+            this.updateCanvasSize();
+          });
+
+          const configCount = Object.keys(workflowData.baseConfigurations || {}).length;
+          const configMsg = configCount > 0 ? ` and ${configCount} base configuration(s)` : '';
+          this.$store.commit('setStatus', {
+            type: 'success',
+            message: `Workflow imported successfully! Loaded ${this.nodes.length} nodes, ${this.edges.length} connections${configMsg}.`
+          });
+        } catch (error) {
+          console.error('Failed to import workflow:', error);
+          this.$store.commit('setStatus', {
+            type: 'danger',
+            message: 'Failed to import workflow: ' + error.message
+          });
+        }
+      };
+
+      input.click();
+    },
   }
 };
 </script>
@@ -1196,10 +1897,10 @@ export default {
 <template>
   <div class="dataflow-workbench h-100 container-fluid py-2">
     <!-- Delete Confirmation Modal -->
-    <div 
-      class="modal fade" 
+    <div
+      class="modal fade"
       :class="{ show: deleteConfirmation.show, 'd-block': deleteConfirmation.show }"
-      tabindex="-1" 
+      tabindex="-1"
       role="dialog"
       @click.self="cancelRemoveNode"
     >
@@ -1232,9 +1933,235 @@ export default {
     </div>
     <div v-if="deleteConfirmation.show" class="modal-backdrop fade show"></div>
 
+    <!-- Novice Exploration Modal -->
+    <div
+      class="modal fade"
+      :class="{ show: showExploreModal, 'd-block': showExploreModal }"
+      tabindex="-1"
+      role="dialog"
+      @click.self="closeExploreModal"
+    >
+      <div class="modal-dialog modal-lg modal-dialog-centered" role="document">
+        <div class="modal-content">
+          <div class="modal-header">
+            <h5 class="modal-title">Novice Exploration</h5>
+            <button type="button" class="btn-close" @click="closeExploreModal" aria-label="Close"></button>
+          </div>
+          <div class="modal-body">
+            <p class="text-muted small mb-2">
+              Parallel coordinates view of generated configurations for <strong>{{ exploreNodeId }}</strong>.
+            </p>
+            <div v-if="explorePlot" class="explore-plot">
+              <svg :width="540" :height="260">
+                <g>
+                  <line
+                    v-for="(axis, idx) in explorePlot.axes"
+                    :key="`axis-${axis.key}`"
+                    :x1="exploreAxisX(idx, 540, 40)"
+                    :y1="30"
+                    :x2="exploreAxisX(idx, 540, 40)"
+                    :y2="230"
+                    stroke="#adb5bd"
+                    stroke-width="1"
+                  />
+                  <text
+                    v-for="(axis, idx) in explorePlot.axes"
+                    :key="`axis-label-${axis.key}`"
+                    :x="exploreAxisX(idx, 540, 40)"
+                    y="18"
+                    text-anchor="middle"
+                    font-size="14"
+                    font-weight="500"
+                    fill="#495057"
+                  >
+                    {{ (axis.label || axis.key).replace(/^.*?:/, '') }}
+                  </text>
+                  <g v-for="(axis, idx) in explorePlot.axes" :key="`axis-options-${axis.key}`">
+                    <text
+                      v-for="(optLabel, optIdx) in axis.optionLabels"
+                      :key="`axis-option-${axis.key}-${optIdx}`"
+                      :x="exploreAxisX(idx, 540, 40) + 6"
+                      :y="exploreOptionY(axis, optIdx, 260, 40)"
+                      text-anchor="start"
+                      font-size="12"
+                      fill="#6c757d"
+                    >
+                      {{ optLabel }}
+                    </text>
+                  </g>
+                  <text
+                    v-for="(axis, idx) in explorePlot.axes"
+                    :key="`axis-value-${axis.key}`"
+                    :x="exploreAxisX(idx, 540, 40)"
+                    y="245"
+                    text-anchor="middle"
+                    font-size="12"
+                    fill="#6c757d"
+                  >
+                    {{ formatExploreValue(axis, explorePlot.values[0]?.[idx]) }}
+                  </text>
+                </g>
+                <g>
+                  <path
+                    v-for="(row, idx) in explorePlot.values"
+                    :key="`row-${idx}`"
+                    :d="explorePathForRow(row, 540, 260, 40)"
+                    :stroke="idx === 0 ? '#0d6efd' : 'rgba(13,110,253,0.25)'"
+                    :stroke-width="idx === 0 ? 2 : 1"
+                    fill="none"
+                  />
+                </g>
+              </svg>
+            </div>
+            <div v-else class="text-muted small">
+              No configurations available for visualization.
+            </div>
+          </div>
+          <div class="modal-footer">
+            <button type="button" class="btn btn-secondary" @click="closeExploreModal">Close</button>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div v-if="showExploreModal" class="modal-backdrop fade show"></div>
+
+    <!-- Node Properties Modal -->
+    <div
+      class="modal fade"
+      :class="{ show: showPropertiesModal, 'd-block': showPropertiesModal }"
+      tabindex="-1"
+      role="dialog"
+      @click.self="closePropertiesModal"
+    >
+      <div class="modal-dialog modal-lg modal-dialog-centered modal-dialog-scrollable" role="document">
+        <div class="modal-content">
+          <div class="modal-header">
+            <h5 class="modal-title">
+              <i v-if="selectedNode" :class="['bi', selectedNode.icon, 'me-2']"></i>
+              {{ selectedNode ? selectedNode.label : 'Node Properties' }}
+            </h5>
+            <button type="button" class="btn-close" @click="closePropertiesModal" aria-label="Close"></button>
+          </div>
+          <div class="modal-body" v-if="selectedNode">
+            <template v-if="selectedNode.type === 'source'">
+              <keep-alive>
+                <InputDataset />
+              </keep-alive>
+            </template>
+
+            <template v-else-if="selectedNode.type === 'filter'">
+              <p v-if="selectedNode.description" class="text-muted small mb-3">
+                {{ selectedNode.description }}
+              </p>
+              <template v-if="selectedNode.editorComponent">
+                <keep-alive>
+                  <component
+                    :is="selectedNode.editorComponent"
+                    :key="selectedNode.id"
+                    :nodeId="selectedNode.id"
+                    v-bind="selectedNode.props"
+                    @filter-start="() => handleFilterStart(selectedNode.id)"
+                    @filter-success="($event) => handleFilterSuccess($event.nodeId || selectedNode.id, $event)"
+                    @filter-error="($event) => handleFilterError($event.nodeId || selectedNode.id, $event)"
+                    @filter-invalid="($event) => handleFilterInvalid($event.nodeId || selectedNode.id, $event)"
+                    @filter-finish="() => handleFilterFinish(selectedNode.id)"
+                    @dataset-change="() => handleFilterDatasetChange(selectedNode.id)"
+                  />
+                </keep-alive>
+              </template>
+              <p v-else class="text-muted small mb-0">No filter UI available.</p>
+            </template>
+
+            <template v-else-if="selectedNode.type === 'module'">
+              <p v-if="selectedNode.description" class="text-muted small mb-3">
+                {{ selectedNode.description }}
+              </p>
+              <div class="alert alert-info small mb-3">
+                <i class="bi bi-info-circle"></i>
+                This module requires {{ selectedNode.inputs.length }} input{{ selectedNode.inputs.length > 1 ? 's' : '' }}.
+                {{ selectedNode.inputs.length > 1 ? 'Connect multiple data sources or filters to the input ports.' : 'Connect a data source or filter to the input port.' }}
+              </div>
+              <template v-if="selectedNode.editorComponent">
+                <keep-alive>
+                  <component
+                    :is="selectedNode.editorComponent"
+                    :key="selectedNode.id"
+                    @config-change="onNodeConfigChange"
+                  />
+                </keep-alive>
+              </template>
+              <p v-else class="text-muted small mb-0">No module UI available.</p>
+            </template>
+
+            <template v-else-if="selectedNode.type === 'compressor'">
+              <div class="mb-3" v-if="selectedNode.definitionId">
+                <label class="form-label fw-semibold">
+                  Compressor: {{ selectedNode.label }}
+                </label>
+                <p class="text-muted small mb-0">
+                  {{ selectedNode.description }}
+                </p>
+              </div>
+              <template v-if="selectedNode.editorComponent">
+                <keep-alive>
+                  <component
+                    :is="selectedNode.editorComponent"
+                    :key="`compressor-${selectedNode.id}-${selectedNode.selectedModuleIdx ?? 'all'}`"
+                    :node-id="selectedNode.id"
+                    :focused-module-idx="selectedNode.selectedModuleIdx"
+                    :modules="selectedNode.modules"
+                    :config="selectedNode.config"
+                    :explore-state="selectedNode.exploreState"
+                    :status="selectedNode.status"
+                    @config-change="onNodeConfigChange"
+                    @pipeline-modules-updated="handlePipelineModulesUpdated"
+                    @run-compressor="handleRunCompressor"
+                    @generate-configs="handleCombinatorialGeneration"
+                    @explore-state-changed="($event) => handleExploreStateChanged(selectedNode.id, $event)"
+                  />
+                </keep-alive>
+              </template>
+              <p v-else class="text-muted small mb-0">No compressor UI available.</p>
+            </template>
+
+            <template v-else-if="selectedNode.type === 'correction'">
+              <p v-if="selectedNode.description" class="text-muted small mb-3">
+                {{ selectedNode.description }}
+              </p>
+              <template v-if="selectedNode.editorComponent">
+                <keep-alive>
+                  <component
+                    :is="selectedNode.editorComponent"
+                    :key="selectedNode.id"
+                    :nodeId="selectedNode.id"
+                    :config="selectedNode.config"
+                    :input-data="getIncomingData(selectedNode.id)"
+                    @config-change="onNodeConfigChange"
+                    @start="(nodeId) => handleFilterStart(nodeId)"
+                    @success="handleCorrectionSuccess"
+                    @error="($event) => handleFilterError($event.nodeId || selectedNode.id, $event)"
+                    @finish="($event) => handleFilterFinish($event || selectedNode.id)"
+                  />
+                </keep-alive>
+              </template>
+              <p v-else class="text-muted small mb-0">No correction UI available.</p>
+            </template>
+
+            <template v-else>
+              <p class="text-muted small mb-0">No editor available for this node type ({{ selectedNode.type }}).</p>
+            </template>
+          </div>
+          <div class="modal-footer">
+            <button type="button" class="btn btn-secondary" @click="closePropertiesModal">Close</button>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div v-if="showPropertiesModal" class="modal-backdrop fade show"></div>
+
     <Splitpanes class="default-theme w-100 h-100" :dbl-click-splitter="false" @resized="onSplitResize">
       <!-- Left: Node Palette -->
-      <Pane :size="30" min-size="20" max-size="30" class="h-100 overflow-auto">
+      <Pane :size="30" min-size="20" max-size="50" class="h-100 overflow-auto">
         <div class="card shadow-sm">
           <div class="card-header d-flex align-items-center justify-content-between py-2">
             <span class="fw-semibold">Pipeline Components</span>
@@ -1244,7 +2171,7 @@ export default {
             <button
               type="button"
               class="list-group-item d-flex align-items-center justify-content-between text-start"
-              :class="{ 
+              :class="{
                 'node-disabled': !canAddNodeType('source'),
                 'node-enabled': canAddNodeType('source')
               }"
@@ -1260,7 +2187,7 @@ export default {
             </button>
 
             <!-- Data Filters -->
-            <div 
+            <div
               class="list-group-item bg-light fw-semibold d-flex justify-content-between align-items-center cursor-pointer"
               @click="paletteState.filters = !paletteState.filters"
             >
@@ -1270,14 +2197,14 @@ export default {
               </div>
               <span class="badge bg-secondary">{{ availableFilters.length }}</span>
             </div>
-            
+
             <template v-if="paletteState.filters">
               <button
                 v-for="filter in availableFilters"
                 :key="`pf-${filter.id}`"
                 type="button"
                 class="list-group-item d-flex align-items-center justify-content-between text-start"
-                :class="{ 
+                :class="{
                   'node-disabled': !canAddNodeType('filter'),
                   'node-enabled': canAddNodeType('filter')
                 }"
@@ -1296,8 +2223,9 @@ export default {
               </button>
             </template>
 
-            <!-- Compression Modules -->
-            <div 
+            <!--
+            Compression Modules (future integration)
+            <div
               class="list-group-item bg-light fw-semibold d-flex justify-content-between align-items-center cursor-pointer"
               @click="paletteState.modules = !paletteState.modules"
             >
@@ -1314,7 +2242,7 @@ export default {
                 :key="`pm-${mod.id}`"
                 type="button"
                 class="list-group-item d-flex align-items-center justify-content-between text-start"
-                :class="{ 
+                :class="{
                   'node-disabled': !canAddNodeType('module'),
                   'node-enabled': canAddNodeType('module')
                 }"
@@ -1332,9 +2260,10 @@ export default {
                 <i class="bi bi-arrows-move text-muted" aria-hidden="true" title="Drag to canvas"></i>
               </button>
             </template>
+            -->
 
             <!-- Compressor Configs -->
-            <div 
+            <div
               class="list-group-item bg-light fw-semibold d-flex justify-content-between align-items-center cursor-pointer"
               @click="paletteState.compressors = !paletteState.compressors"
             >
@@ -1351,7 +2280,7 @@ export default {
                 :key="`pc-${comp.id}`"
                 type="button"
                 class="list-group-item d-flex align-items-center justify-content-between text-start"
-                :class="{ 
+                :class="{
                   'node-disabled': !canAddNodeType('compressor'),
                   'node-enabled': canAddNodeType('compressor')
                 }"
@@ -1371,7 +2300,7 @@ export default {
             </template>
 
             <!-- Corrections -->
-            <div 
+            <div
               class="list-group-item bg-light fw-semibold d-flex justify-content-between align-items-center cursor-pointer"
               @click="paletteState.corrections = !paletteState.corrections"
             >
@@ -1388,7 +2317,7 @@ export default {
                 :key="`pc-${corr.id}`"
                 type="button"
                 class="list-group-item d-flex align-items-center justify-content-between text-start"
-                :class="{ 
+                :class="{
                   'node-disabled': !canAddNodeType('correction'),
                   'node-enabled': canAddNodeType('correction')
                 }"
@@ -1414,18 +2343,39 @@ export default {
       <Pane ref="graphPane" :size="70" min-size="40" class="h-100 overflow-auto">
         <div class="work-area d-flex flex-column h-100">
           <div
-            class="card shadow-sm canvas d-flex flex-column"
+            class="card shadow-sm canvas d-flex flex-column graph-card"
             :style="{ width: canvasSize.width + 'px' }"
             @dragover.prevent
             @drop="onCanvasDrop"
           >
             <div class="card-header d-flex align-items-center justify-content-between py-2">
-              <span class="fw-semibold">Data Flow Graph</span>
-              <small class="text-muted">Drag components from the left to compose a pipeline</small>
+              <div class="d-flex align-items-center">
+                <span class="fw-semibold">Data Flow Graph</span>
+                <small class="text-muted px-3">Drag components from the left panel</small>
+              </div>
+              <div class="d-flex align-items-center gap-2">
+                <button
+                  type="button"
+                  class="btn btn-sm btn-outline-primary"
+                  @click="exportWorkflow"
+                  title="Export workflow to JSON file"
+                  :disabled="nodes.length === 0"
+                >
+                  <i class="bi bi-download me-1"></i>Export
+                </button>
+                <button
+                  type="button"
+                  class="btn btn-sm btn-outline-secondary"
+                  @click="importWorkflow"
+                  title="Import workflow from JSON file"
+                >
+                  <i class="bi bi-upload me-1"></i>Import
+                </button>
+              </div>
             </div>
-            <div 
+            <div
               ref="canvas"
-              class="card-body p-0 position-relative flex-grow-1" 
+              class="card-body p-0 position-relative flex-grow-1"
               @click="clearSelection"
               :style="{ height: canvasSize.height + 'px' }"
             >
@@ -1461,6 +2411,7 @@ export default {
                 :data-node-id="node.id"
                 @mousedown.stop="startDrag(node, $event)"
                 @click.stop="selectNode(node.id)"
+                @dblclick.stop="openPropertiesModal(node.id)"
               >
                 <div class="card-header py-1 d-flex align-items-center justify-content-between">
                   <div class="d-flex align-items-center gap-2 flex-wrap flex-grow-1">
@@ -1476,7 +2427,7 @@ export default {
                     </span>
                   </div>
                   <div class="d-flex align-items-center gap-1 ms-2">
-                    <button 
+                    <button
                       v-if="node.type === 'compressor'"
                       type="button"
                       class="btn btn-sm btn-outline-primary"
@@ -1485,7 +2436,7 @@ export default {
                     >
                       <i class="bi bi-box-arrow-in-up"></i>
                     </button>
-                    <button 
+                    <button
                       v-if="node.type === 'compressor' && node.modules && node.modules.length"
                       type="button"
                       class="btn btn-sm btn-outline-secondary"
@@ -1508,7 +2459,7 @@ export default {
                     </div>
                   </div>
                   <template v-else-if="node.type === 'filter'">
-                    <div v-if="node.lastRunAt">Last run: {{ formatTimestamp(node.lastRunAt) }}</div>
+                    <!-- <div v-if="node.lastRunAt">Last run: {{ formatTimestamp(node.lastRunAt) }}</div> -->
                     <div v-if="node.lastResult?.dimensions">
                       Output dimensions: {{ node.lastResult.dimensions.join('×') }}
                     </div>
@@ -1545,8 +2496,8 @@ export default {
                         <i class="bi bi-info-circle me-1"></i>
                         Click a module to configure it in the properties pane below.
                       </div>
-                      <div 
-                        v-for="(module, idx) in node.modules" 
+                      <div
+                        v-for="(module, idx) in node.modules"
                         :key="module.id"
                         class="module-box"
                         :class="{'selected': node.selectedModuleIdx === idx}"
@@ -1568,7 +2519,7 @@ export default {
                         <div v-if="idx < node.modules.length - 1" class="module-connector"></div>
                       </div>
                     </div>
-                    
+
                     <!-- Collapsed summary view -->
                     <div v-if="!node.expanded && Array.isArray(node.modules) && node.modules.length">
                       <div class="fw-semibold mt-1">Modules</div>
@@ -1580,11 +2531,11 @@ export default {
                       </ul>
                     </div>
                     <div v-if="(!node.modules || !node.modules.length) && node.architecture === 'modular'">No module selections yet.</div>
-                    <div v-if="node.lastUpdatedAt" class="text-muted mt-2">Last updated: {{ formatTimestamp(node.lastUpdatedAt) }}</div>
+                    <!-- <div v-if="node.lastUpdatedAt" class="text-muted mt-2">Last updated: {{ formatTimestamp(node.lastUpdatedAt) }}</div> -->
                     <div v-if="node.description" class="text-muted small mt-2">{{ node.description }}</div>
                   </template>
                   <template v-else-if="node.type === 'correction'">
-                    <div v-if="node.lastRunAt">Last run: {{ formatTimestamp(node.lastRunAt) }}</div>
+                    <!-- <div v-if="node.lastRunAt">Last run: {{ formatTimestamp(node.lastRunAt) }}</div> -->
                     <div v-if="node.lastResult?.num_edits !== undefined">
                       Applied edits: <b>{{ node.lastResult.num_edits }}</b>
                     </div>
@@ -1630,118 +2581,14 @@ export default {
                   <div class="mt-1">Drag a node from the left palette to start.</div>
                 </div>
               </div>
-            </div>
-          </div>
 
-          <div v-if="selectedNode" class="card shadow-sm mt-2 properties-card">
-            <div class="card-header d-flex align-items-center justify-content-between py-2">
-              <span class="fw-semibold">Properties</span>
-              <button type="button" class="btn btn-sm btn-outline-secondary" title="Hide" @click="clearSelection">
-                <i class="bi bi-x-lg"></i>
-              </button>
-            </div>
-            <div class="card-body overflow-auto">
-              <template v-if="selectedNode.type === 'source'">
-                <keep-alive>
-                  <InputDataset />
-                </keep-alive>
-              </template>
-
-              <template v-else-if="selectedNode.type === 'filter'">
-                <p v-if="selectedNode.description" class="text-muted small mb-1">
-                  {{ selectedNode.description }}
-                </p>
-                <template v-if="selectedNode.editorComponent">
-                  <keep-alive>
-                    <component
-                      :is="selectedNode.editorComponent"
-                      :key="selectedNode.id"
-                      :nodeId="selectedNode.id"
-                      v-bind="selectedNode.props"
-                      @filter-start="() => handleFilterStart(selectedNode.id)"
-                      @filter-success="($event) => handleFilterSuccess($event.nodeId || selectedNode.id, $event)"
-                      @filter-error="($event) => handleFilterError($event.nodeId || selectedNode.id, $event)"
-                      @filter-invalid="($event) => handleFilterInvalid($event.nodeId || selectedNode.id, $event)"
-                      @filter-finish="() => handleFilterFinish(selectedNode.id)"
-                      @dataset-change="() => handleFilterDatasetChange(selectedNode.id)"
-                    />
-                  </keep-alive>
-                </template>
-                <p v-else class="text-muted small mb-0">No filter UI available.</p>
-              </template>
-
-              <template v-else-if="selectedNode.type === 'module'">
-                <p v-if="selectedNode.description" class="text-muted small mb-3">
-                  {{ selectedNode.description }}
-                </p>
-                <div class="alert alert-info small mb-3">
-                  <i class="bi bi-info-circle"></i> 
-                  This module requires {{ selectedNode.inputs.length }} input{{ selectedNode.inputs.length > 1 ? 's' : '' }}. 
-                  {{ selectedNode.inputs.length > 1 ? 'Connect multiple data sources or filters to the input ports.' : 'Connect a data source or filter to the input port.' }}
-                </div>
-                <template v-if="selectedNode.editorComponent">
-                  <keep-alive>
-                    <component
-                      :is="selectedNode.editorComponent"
-                      :key="selectedNode.id"
-                      @config-change="onNodeConfigChange"
-                    />
-                  </keep-alive>
-                </template>
-                <p v-else class="text-muted small mb-0">No module UI available.</p>
-              </template>
-
-              <template v-else-if="selectedNode.type === 'compressor'">
-                <div class="mb-3" v-if="selectedNode.definitionId">
-                  <label class="form-label fw-semibold">
-                    Compressor: {{ selectedNode.label }}
-                  </label>
-                  <p class="text-muted small mb-0">
-                    {{ selectedNode.description }}
-                  </p>
-                </div>
-                <template v-if="selectedNode.editorComponent">
-                  <keep-alive>
-                    <component
-                      :is="selectedNode.editorComponent"
-                      :key="`compressor-${selectedNode.id}-${selectedNode.selectedModuleIdx ?? 'all'}`"
-                      :focused-module-idx="selectedNode.selectedModuleIdx"
-                      :modules="selectedNode.modules"
-                      :status="selectedNode.status"
-                      @pipeline-modules-updated="handlePipelineModulesUpdated"
-                      @run-compressor="handleRunCompressor"
-                    />
-                  </keep-alive>
-                </template>
-                <p v-else class="text-muted small mb-0">No compressor UI available.</p>
-              </template>
-
-              <template v-else-if="selectedNode.type === 'correction'">
-                <p v-if="selectedNode.description" class="text-muted small mb-3">
-                  {{ selectedNode.description }}
-                </p>
-                <template v-if="selectedNode.editorComponent">
-                  <keep-alive>
-                    <component
-                      :is="selectedNode.editorComponent"
-                      :key="selectedNode.id"
-                      :nodeId="selectedNode.id"
-                      :config="selectedNode.config"
-                      :input-data="getIncomingData(selectedNode.id)"
-                      @config-change="onNodeConfigChange"
-                      @start="(nodeId) => handleFilterStart(nodeId)"
-                      @success="handleCorrectionSuccess"
-                      @error="($event) => handleFilterError($event.nodeId || selectedNode.id, $event)"
-                      @finish="($event) => handleFilterFinish($event || selectedNode.id)"
-                    />
-                  </keep-alive>
-                </template>
-                <p v-else class="text-muted small mb-0">No correction UI available.</p>
-              </template>
-
-              <template v-else>
-                <p class="text-muted small mb-0">No editor available for this node type ({{ selectedNode.type }}).</p>
-              </template>
+              <!-- Instruction hint -->
+              <div v-if="nodes.length" class="position-absolute bottom-0 start-0 w-100 text-center pb-2">
+                <small class="text-muted">
+                  <i class="bi bi-info-circle me-1"></i>
+                  Double-click a node to open its properties
+                </small>
+              </div>
             </div>
           </div>
         </div>
@@ -1759,16 +2606,13 @@ export default {
 
 .work-area {
   min-height: 0; /* allow children to shrink and scroll inside */
-}
-
-.properties-card {
-  flex: 0 1 auto; /* Don't grow, allow shrink, size based on content */
-  max-height: 40%;
   display: flex;
   flex-direction: column;
 }
-.properties-card :deep(.card-body) {
-  overflow-y: auto;
+
+.graph-card {
+  flex: 1 1 auto;
+  min-height: 0;
 }
 
 .df-node {
@@ -1945,6 +2789,14 @@ export default {
   font-size: 0.75rem;
   color: #0b7285;
 }
+
+.explore-plot {
+  border: 1px solid #dee2e6;
+  border-radius: 8px;
+  background: #fff;
+  padding: 8px;
+  overflow: auto;
+}
 .config-graph-overlay {
   transition: transform 0.2s ease, opacity 0.2s ease;
   backdrop-filter: blur(5px);
@@ -1957,5 +2809,15 @@ export default {
 
 .card-header.bg-primary.bg-gradient {
   background: linear-gradient(45deg, #0d6efd, #0dcaf0) !important;
+}
+
+/* Instruction hint at bottom of canvas */
+.position-absolute.bottom-0 small {
+  background: rgba(255, 255, 255, 0.9);
+  padding: 4px 12px;
+  border-radius: 4px;
+  display: inline-block;
+  backdrop-filter: blur(4px);
+  pointer-events: none;
 }
 </style>

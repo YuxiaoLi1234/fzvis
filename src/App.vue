@@ -6,12 +6,14 @@ import AppFooter from './components/AppFooter.vue'
 import { Splitpanes, Pane } from 'splitpanes'
 import axios from 'axios';
 import DataFlowWorkbench from './components/dataflow/DataFlowWorkbench.vue'
+import CaseStudyVis from './components/vis/CaseStudyVis.vue'
 
 export default {
   name: 'App',
   components: {
     AppHeader,
     DataFlowWorkbench,
+    CaseStudyVis,
     MetricVis,
     HelloThree,
     AppFooter,
@@ -172,6 +174,11 @@ export default {
                     <i class="bi bi-bar-chart-line me-1"></i>Metrics & Analysis
                   </button>
                 </li>
+                <li class="nav-item" role="presentation">
+                  <button class="nav-link" id="case-study-tab" data-bs-toggle="tab" data-bs-target="#case-study" type="button" role="tab" aria-selected="false">
+                    <i class="bi bi-diagram-3 me-1"></i>Developer
+                  </button>
+                </li>
               </ul>
               <div class="tab-content flex-grow-1">
                 <div id="datavis" class="tab-pane fade show active h-100" role="tabpanel" aria-labelledby="datavis-tab">
@@ -182,6 +189,11 @@ export default {
                 <div id="metrics" class="tab-pane fade h-100" role="tabpanel" aria-labelledby="metrics-tab">
                   <div class="h-100 overflow-hidden">
                     <MetricVis />
+                  </div>
+                </div>
+                <div id="case-study" class="tab-pane fade h-100" role="tabpanel" aria-labelledby="case-study-tab">
+                  <div class="h-100 overflow-hidden">
+                    <CaseStudyVis />
                   </div>
                 </div>
               </div>

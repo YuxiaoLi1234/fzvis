@@ -130,7 +130,7 @@
         <div class="card-header d-flex justify-content-between align-items-center">
           <div>
             <i class="bi bi-diagram-3 me-2"></i>
-            <span>Parameter Explorer</span>
+            <span>Config Graph</span>
           </div>
           <button type="button" class="btn btn-sm btn-outline-secondary" @click="toggleConfigGraphPane" title="Close">
             <i class="bi bi-x-lg"></i>
@@ -145,6 +145,7 @@
             :compressorOptions="compressorOptions"
             @error-bound-bulk-generation="handleErrorBoundBulkGeneration"
             @propagate-parameter="handlePropagateParameter"
+            @rename-derived-configuration="handleRenameDerivedConfiguration"
           />
         </div>
       </div>
@@ -375,6 +376,9 @@ export default {
     },
     handlePropagateParameter(payload) {
       this.$store.commit('requestBulkGeneration', { type: 'propagate', payload });
+    },
+    handleRenameDerivedConfiguration(payload) {
+      this.$store.commit('renameDerivedConfiguration', payload);
     },
   }
 }

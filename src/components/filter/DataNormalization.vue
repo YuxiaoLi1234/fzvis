@@ -67,7 +67,7 @@
 
 <script>
 import BaseDataFilter from './BaseDataFilter.vue';
-import { getDatasetMinMax, toNumericArray } from '../../utils/datasetUtils.js';
+import { getDatasetMinMax, computeMinMax, toNumericArray } from '../../utils/datasetUtils.js';
 
 export default {
   name: 'DataNormalization',
@@ -156,7 +156,7 @@ export default {
     },
     getDatasetRange() {
       const ds = this.$store?.state?.dataset || null;
-      return getDatasetMinMax(ds || this.datasetBuffer, this.datasetPrecision);
+      return getDatasetMinMax(ds || this.datasetBuffer, this.datasetPrecision, ds?.endianness || this.$store?.state?.dataset?.endianness);
     },
     applyNormalization() {
       if (!this.canApply) return;
@@ -198,20 +198,21 @@ export default {
       return true;
     },
     async performOperation(context) {
-      const sourceArray = toNumericArray(this.$store?.state?.dataset, this.datasetPrecision)
-        || toNumericArray(this.datasetBuffer, this.datasetPrecision)
-        || this.toNumericArrayFromDataset();
-      if (!sourceArray) {
+      // Use the improved toNumericArray which now handles endianness
+      const sourceData = toNumericArray(this.$store?.state?.dataset || this.datasetBuffer, this.datasetPrecision);
+      if (!sourceData) {
         throw new Error('Dataset buffer unavailable.');
       }
+      
+      // Always use Float32Array for normalization results to avoid truncation
+      const array = Float32Array.from(sourceData);
 
-      const array = typeof sourceArray.slice === 'function'
-        ? sourceArray.slice()
-        : Float64Array.from(sourceArray);
-
-      const range = this.autoRange || this.getDatasetRange();
-      const srcMin = range?.min;
-      const srcMax = range?.max;
+      // Re-compute range from the actual correct-endian numeric data to be absolutely sure
+      const { min: srcMin, max: srcMax } = computeMinMax(array) || { min: 0, max: 1 };
+      
+      console.log(`[Normalization] Source precision: ${this.datasetPrecision}, endianness: ${this.$store?.state?.dataset?.endianness || 'little'}`);
+      console.log(`[Normalization] Source range (computed from correct-endian data): [${srcMin}, ${srcMax}]`);
+      
       if (!Number.isFinite(srcMin) || !Number.isFinite(srcMax) || srcMin === srcMax) {
         throw new Error('Invalid dataset range for normalization.');
       }
@@ -229,11 +230,24 @@ export default {
         }
       }
 
+      // Final range check
+      let actualMin = Infinity;
+      let actualMax = -Infinity;
+      for (let i = 0; i < array.length; i++) {
+        const v = array[i];
+        if (Number.isFinite(v)) {
+          if (v < actualMin) actualMin = v;
+          if (v > actualMax) actualMax = v;
+        }
+      }
+      console.log(`[Normalization] Target range: [${targetMin}, ${targetMax}], Actual result range: [${actualMin}, ${actualMax}]`);
+
       const buffer = array.buffer;
       this.$store.commit('setFileData', {
         content: buffer,
         dimensions: Array.isArray(this.datasetDimensions) ? [...this.datasetDimensions] : null,
-        precision: this.datasetPrecision,
+        precision: 'f', // Normalization output is now float32
+        endianness: 'little', // Filtered result in JS is native endian (typically little)
         isFilterResult: true,
       });
 
@@ -290,12 +304,14 @@ export default {
   applyFilter: async function(dataset, params) {
     const { targetMin, targetMax } = params;
     
-    // Get TypedArray based on precision
-    const TypedArray = dataset.precision === 'd' ? Float64Array : Float32Array;
-    const sourceData = new TypedArray(dataset.content);
-    const resultData = sourceData.slice(); // Create a copy
+    // Use the improved toNumericArray helper
+    const sourceData = toNumericArray(dataset, dataset.precision, dataset.endianness);
+    if (!sourceData) throw new Error('Failed to interpret source data');
+
+    // Always use Float32Array for results to prevent truncation
+    const resultData = Float32Array.from(sourceData);
     
-    // Compute data range
+    // Compute data range from correctly-interpreted data
     let srcMin = Infinity;
     let srcMax = -Infinity;
     for (let i = 0; i < resultData.length; i++) {
@@ -307,8 +323,11 @@ export default {
     }
     
     if (!Number.isFinite(srcMin) || !Number.isFinite(srcMax) || srcMin === srcMax) {
+      console.error('[Normalization Static] Invalid dataset range:', { srcMin, srcMax });
       throw new Error('Invalid dataset range for normalization');
     }
+    
+    console.log(`[Normalization Static] Source range: [${srcMin}, ${srcMax}], Target: [${targetMin}, ${targetMax}]`);
     
     // Apply normalization
     const scale = (targetMax - targetMin) / (srcMax - srcMin);
@@ -319,10 +338,23 @@ export default {
       }
     }
     
+    // Actual resulting range check
+    let actualMin = Infinity;
+    let actualMax = -Infinity;
+    for (let i = 0; i < resultData.length; i++) {
+      const v = resultData[i];
+      if (Number.isFinite(v)) {
+        if (v < actualMin) actualMin = v;
+        if (v > actualMax) actualMax = v;
+      }
+    }
+    console.log(`[Normalization Static] Result actual range: [${actualMin}, ${actualMax}]`);
+
     return {
       content: resultData.buffer,
       dimensions: dataset.dimensions,
-      precision: dataset.precision,
+      precision: 'f',
+      endianness: 'little', // Result buffer is native endian
       name: dataset.name,
       type: dataset.type,
     };

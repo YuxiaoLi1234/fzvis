@@ -1,8 +1,8 @@
 <template>
-  <div class="critical-points-preservation">
+  <div class="ffcz-correction">
     <div class="card-header bg-light py-2 px-3 border-bottom d-flex align-items-center justify-content-between">
       <div class="d-flex align-items-center gap-3">
-        <h6 class="mb-0 text-muted small fw-bold">Preservation Filter</h6>
+        <h6 class="mb-0 text-muted small fw-bold">FFCz Frequency Correction</h6>
         <div class="form-check small mb-0 ms-2" v-if="allVariants.length > 0">
           <input class="form-check-input" type="checkbox" id="selectAllVariants" :checked="allChecked" @change="toggleSelectAll">
           <label class="form-check-label text-muted" for="selectAllVariants">Select All</label>
@@ -62,67 +62,82 @@
             <span class="badge" :class="selectedVariant.isBase ? 'bg-primary' : 'bg-info'">{{ selectedVariant.isBase ? 'Base' : 'Variant' }}</span>
           </div>
 
+          <!-- Spatial Error Bound -->
           <div class="mb-3">
-            <label class="form-label text-muted small fw-semibold">Relative Error Bound (Per Variant)</label>
-            <div class="input-group input-group-sm">
-              <input
-                v-if="variantConfigs[selectedVariantId]"
-                type="number"
-                class="form-control"
-                v-model.number="variantConfigs[selectedVariantId].threshold"
-                step="0.0001"
-                min="0"
-                max="1"
-              />
-              <input
-                v-else
-                type="number"
-                class="form-control"
-                v-model.number="localConfig.threshold"
-                step="0.0001"
-                min="0"
-                max="1"
-              />
-              <button class="btn btn-outline-secondary" type="button" @click="resetToCompressorEB" title="Reset to compressor's error bound">
-                <i class="bi bi-arrow-counterclockwise"></i>
-              </button>
+            <label class="form-label text-muted small fw-semibold">Spatial Error Bound</label>
+            <div class="row g-2">
+              <div class="col-4">
+                <select class="form-select form-select-sm" v-model="localConfig.spatial_mode">
+                  <option value="REL">Relative</option>
+                  <option value="ABS">Absolute</option>
+                </select>
+              </div>
+              <div class="col-8">
+                <div class="input-group input-group-sm">
+                  <input
+                    type="number"
+                    class="form-control"
+                    v-model.number="localConfig.spatial_value"
+                    step="0.0001"
+                    min="0"
+                  />
+                  <button class="btn btn-outline-secondary" type="button" @click="resetToCompressorEB" title="Reset to compressor's error bound">
+                    <i class="bi bi-arrow-counterclockwise"></i>
+                  </button>
+                </div>
+              </div>
             </div>
-            <div class="form-text">MSz fixes topological faults within this bound.</div>
+            <div class="form-text">Spatial error bound from the base compressor.</div>
           </div>
 
-          <div class="row g-2">
-            <div class="col-6 mb-3">
-              <label class="form-label text-muted small fw-semibold">Connectivity</label>
-              <select class="form-select form-select-sm" v-model.number="localConfig.connectivityType">
-                <option :value="0">Linear (0)</option>
-                <option :value="1">Full (1)</option>
-              </select>
+          <!-- Frequency Error Mode -->
+          <div class="mb-3">
+            <label class="form-label text-muted small fw-semibold">Frequency Error Mode</label>
+            <select class="form-select form-select-sm" v-model="localConfig.freq_mode">
+              <option value="REL">Relative</option>
+              <option value="ABS">Absolute</option>
+            </select>
+            <div class="form-text">Error mode for frequency domain correction.</div>
+          </div>
+
+          <!-- Frequency Bounds -->
+          <div class="mb-3">
+            <label class="form-label text-muted small fw-semibold">Frequency Error Bounds (Sweep)</label>
+            <div class="mb-2">
+              <textarea
+                class="form-control form-control-sm font-monospace"
+                v-model="freqBoundsText"
+                rows="3"
+                placeholder="1e-5, 2e-5, 5e-5, 1e-4, 2e-4, 5e-4, 1e-3"
+              ></textarea>
+              <div class="form-text">Comma-separated list of frequency bounds to sweep.</div>
             </div>
-            <div class="col-6 mb-3">
-              <label class="form-label text-muted small fw-semibold">Accelerator</label>
-              <select class="form-select form-select-sm" v-model="localConfig.accelerator">
-                <option value="">None</option>
-                <option value="omp">OpenMP</option>
-                <option value="cuda">CUDA</option>
-              </select>
+            <div class="d-flex gap-2">
+              <button class="btn btn-sm btn-outline-secondary" @click="setPreset('fine')">Fine Sweep</button>
+              <button class="btn btn-sm btn-outline-secondary" @click="setPreset('coarse')">Coarse Sweep</button>
+              <button class="btn btn-sm btn-outline-secondary" @click="setPreset('single')">Single (1e-4)</button>
             </div>
           </div>
 
+          <!-- Return Corrected Data Option -->
           <div class="mb-3">
-            <label class="form-label d-block text-muted small fw-bold">Preserve Features (Global)</label>
-            <div class="d-flex flex-wrap gap-3 p-2 border rounded bg-light-subtle">
-              <div class="form-check form-check-inline small mb-0">
-                <input class="form-check-input" type="checkbox" id="v-min" v-model="localConfig.preserveMin"/>
-                <label class="form-check-label" for="v-min">Minima</label>
-              </div>
-              <div class="form-check form-check-inline small mb-0">
-                <input class="form-check-input" type="checkbox" id="v-max" v-model="localConfig.preserveMax"/>
-                <label class="form-check-label" for="v-max">Maxima</label>
-              </div>
-              <div class="form-check form-check-inline small mb-0">
-                <input class="form-check-input" type="checkbox" id="v-path" v-model="localConfig.preservePath"/>
-                <label class="form-check-label" for="v-path">Paths</label>
-              </div>
+            <div class="form-check">
+              <input
+                class="form-check-input"
+                type="checkbox"
+                id="returnCorrectedData"
+                v-model="localConfig.return_corrected_data"
+              />
+              <label class="form-check-label text-muted small fw-semibold" for="returnCorrectedData">
+                Return corrected data for analysis
+              </label>
+            </div>
+            <div v-if="localConfig.return_corrected_data" class="alert alert-warning mt-2 py-2 px-3 small mb-0">
+              <i class="bi bi-exclamation-triangle me-1"></i>
+              <strong>Storage Warning:</strong> Each frequency bound will generate a full corrected dataset.
+              <span v-if="estimatedStorageSize">
+                Estimated: ~{{ estimatedStorageSize }} per bound × {{ parseFreqBounds().length }} bounds = {{ totalEstimatedStorage }}
+              </span>
             </div>
           </div>
         </div>
@@ -130,7 +145,7 @@
         <div v-else class="d-flex align-items-center justify-content-center text-muted p-3" style="min-height: 300px;">
           <div class="text-center">
             <i class="bi bi-mouse2 fs-3 d-block mb-2"></i>
-            <p>Select a compressor variant to configure its correction.</p>
+            <p>Select a compressor variant to configure FFCz correction.</p>
           </div>
         </div>
 
@@ -142,7 +157,7 @@
             :disabled="!isAnyChecked || !isValid || status === 'running' || batchStatus.running"
           >
             <i class="bi bi-play-fill me-1"></i>
-            Apply to Selected ({{ checkedVariants.length }})
+            Run FFCz Sweep for Selected ({{ checkedVariants.length }})
           </button>
 
           <button
@@ -152,7 +167,7 @@
             @click="applyBatchCorrection"
           >
             <i class="bi bi-stack me-1"></i>
-            Batch Correct All ({{ allVariants.length }})
+            Batch Sweep All ({{ allVariants.length }})
           </button>
 
           <div v-if="batchStatus.running" class="mt-2">
@@ -175,7 +190,7 @@
 import { requestWithFallback } from '@/utils/datasetUtils';
 
 export default {
-  name: 'CriticalPointsCorrection',
+  name: 'FFCzCorrection',
   props: {
     config: {
       type: Object,
@@ -193,18 +208,18 @@ export default {
   data() {
     return {
       localConfig: {
-        threshold: 0.001,
-        connectivityType: 0,
-        accelerator: '',
-        preserveMin: true,
-        preserveMax: true,
-        preservePath: false,
+        spatial_mode: 'REL',
+        spatial_value: 0.001,
+        freq_mode: 'REL',
+        freq_bounds: [1e-5, 2e-5, 5e-5, 1e-4, 2e-4, 5e-4, 1e-3],
+        return_corrected_data: false,
         ...this.config
       },
+      freqBoundsText: '',
       selectedVariantId: null,
-      variantConfigs: {}, // Map of variantId -> config object
-      variantResults: {}, // Map of variantId -> status ('done', 'running', 'error')
-      checkedVariants: [], // IDs of variants selected via checkbox
+      variantConfigs: {},
+      variantResults: {},
+      checkedVariants: [],
       status: null,
       statusMessage: '',
       batchStatus: {
@@ -223,9 +238,9 @@ export default {
       return this.checkedVariants.length > 0;
     },
     isValid() {
-      const target = this.localConfig;
-      return target && target.threshold >= 0 &&
-             target.threshold <= 1 &&
+      const bounds = this.parseFreqBounds();
+      return bounds.length > 0 &&
+             this.localConfig.spatial_value > 0 &&
              this.hasRequiredInputs;
     },
     hasRequiredInputs() {
@@ -240,45 +255,28 @@ export default {
       return this.inputData['in-0'] || null;
     },
     sourceNodeId() {
-      console.log('[CriticalPointsCorrection] Debug sourceNodeId:');
-      console.log('  - compressedDataset:', this.compressedDataset);
-      console.log('  - inputData:', this.inputData);
-      console.log('  - comparisonData keys:', Object.keys(this.$store.state.comparisonData || {}));
-
       return this.getConfigBaseId();
     },
     allVariants() {
       const baseId = this.sourceNodeId;
-      console.log('[CriticalPointsCorrection] Debug allVariants:');
-      console.log('  - resolved baseId:', baseId);
-
-      if (!baseId) {
-        console.log('  - No baseId, returning empty array');
-        return [];
-      }
+      if (!baseId) return [];
 
       const comparisonData = this.$store.state.comparisonData || {};
       const derivedMap = this.$store.state.derivedConfigurations?.[baseId] || {};
-      console.log('  - comparisonData keys:', Object.keys(comparisonData));
-      console.log('  - derivedMap keys:', Object.keys(derivedMap));
       const results = [];
 
       const baseResult = comparisonData[baseId];
       if (baseResult && !baseResult.error) {
-        console.log('  - Adding base compressor:', baseId);
         results.push({
           id: baseId,
           isBase: true,
           ...baseResult
         });
-      } else {
-        console.log('  - Base compressor not found in comparisonData');
       }
 
       Object.keys(derivedMap).forEach(key => {
         const variant = comparisonData[key];
         if (variant && !variant.error && !results.some(r => r.id === key)) {
-          console.log('  - Adding variant:', key);
           results.push({
             id: key,
             isBase: false,
@@ -287,11 +285,38 @@ export default {
         }
       });
 
-      console.log('  - Total variants found:', results.length);
       return results;
     },
     selectedVariant() {
       return this.allVariants.find(v => v.id === this.selectedVariantId) || null;
+    },
+    estimatedStorageSize() {
+      // Estimate storage size based on original dataset dimensions
+      const orig = this.originalDataset;
+      if (!orig || !orig.meta?.dimensions) return null;
+
+      const dims = orig.meta.dimensions;
+      const numElements = dims.reduce((a, b) => a * b, 1);
+      const bytesPerElement = 4; // float32
+      const sizeBytes = numElements * bytesPerElement;
+
+      // Format size in human-readable format
+      if (sizeBytes < 1024) return `${sizeBytes}B`;
+      if (sizeBytes < 1024 * 1024) return `${(sizeBytes / 1024).toFixed(1)}KB`;
+      if (sizeBytes < 1024 * 1024 * 1024) return `${(sizeBytes / (1024 * 1024)).toFixed(1)}MB`;
+      return `${(sizeBytes / (1024 * 1024 * 1024)).toFixed(2)}GB`;
+    },
+    totalEstimatedStorage() {
+      if (!this.estimatedStorageSize) return null;
+      const numBounds = this.parseFreqBounds().length;
+
+      // Extract numeric value and unit from estimatedStorageSize
+      const match = this.estimatedStorageSize.match(/^([\d.]+)(\w+)$/);
+      if (!match) return `× ${numBounds} bounds`;
+
+      const [, value, unit] = match;
+      const total = parseFloat(value) * numBounds;
+      return `~${total.toFixed(1)}${unit} total`;
     }
   },
   methods: {
@@ -303,14 +328,12 @@ export default {
 
       const directId = compressed?.base_name || compressed?.sourceNodeId || null;
       if (directId && (baseConfigurations[directId] || derivedConfigurations[directId])) {
-        console.log('  - Using direct config base:', directId);
         return directId;
       }
 
       if (directId) {
         const containingBase = Object.keys(derivedConfigurations).find(baseName => derivedConfigurations[baseName]?.[directId]);
         if (containingBase) {
-          console.log('  - Mapped source node to containing base:', containingBase);
           return containingBase;
         }
       }
@@ -320,33 +343,18 @@ export default {
         if (matchedSourceId) {
           const matched = comparisonData[matchedSourceId];
           if (matched?.base_name && (baseConfigurations[matched.base_name] || derivedConfigurations[matched.base_name])) {
-            console.log('  - Resolved base from matched result:', matched.base_name);
             return matched.base_name;
           }
           const containingBase = Object.keys(derivedConfigurations).find(baseName => derivedConfigurations[baseName]?.[matchedSourceId]);
           if (containingBase) {
-            console.log('  - Resolved base from matched variant:', containingBase);
             return containingBase;
           }
           if (baseConfigurations[matchedSourceId] || derivedConfigurations[matchedSourceId]) {
-            console.log('  - Matched base by data_key:', matchedSourceId);
             return matchedSourceId;
           }
         }
       }
 
-      const compressorId = compressed?.compressor_id;
-      if (compressorId) {
-        const matchingBases = Object.keys(baseConfigurations).filter(baseName => {
-          return baseConfigurations[baseName]?.compressor_id === compressorId;
-        });
-        if (matchingBases.length === 1) {
-          console.log('  - Resolved unique base by compressor:', matchingBases[0]);
-          return matchingBases[0];
-        }
-      }
-
-      console.log('  - Could not resolve config base id');
       return directId;
     },
     getVariantLabel(v) {
@@ -358,7 +366,6 @@ export default {
       const parts = [];
       if (v.compressor_id) parts.push(v.compressor_id.toUpperCase());
 
-      // Look for specific error bound keys from SZ3 and ZFP
       if (config['sz3:abs_error_bound'] !== undefined) parts.push(`abs: ${config['sz3:abs_error_bound']}`);
       if (config['sz3:rel_error_bound'] !== undefined) parts.push(`rel: ${config['sz3:rel_error_bound']}`);
       if (config['zfp:accuracy'] !== undefined) parts.push(`acc: ${config['zfp:accuracy']}`);
@@ -368,37 +375,54 @@ export default {
     getCorrectionStatus(id) {
       return this.variantResults[id] || null;
     },
-    initializeVariantThreshold(id) {
+    initializeVariantSpatialValue(id) {
       const v = this.allVariants.find(item => item.id === id);
       if (!v || !v.compressor_config) return;
 
       const cfg = v.compressor_config;
       let eb = null;
 
-      // Propagate SZ3 error bounds
       if (v.compressor_id === 'sz3') {
         const mode = cfg['sz3:error_bound_mode_str'];
         if (mode === 'ABS' && cfg['sz3:abs_error_bound'] !== undefined) eb = Number(cfg['sz3:abs_error_bound']);
         else if (mode === 'REL' && cfg['sz3:rel_error_bound'] !== undefined) eb = Number(cfg['sz3:rel_error_bound']);
-        else if (mode === 'PSNR' && cfg['sz3:psnr_error_bound'] !== undefined) eb = Number(cfg['sz3:psnr_error_bound']);
-        // Fallback to any detected bound if mode is missing
-        else eb = cfg['sz3:abs_error_bound'] || cfg['sz3:rel_error_bound'] || cfg['sz3:psnr_error_bound'] || null;
-      }
-      // Propagate ZFP accuracy
-      else if (v.compressor_id === 'zfp') {
+        else eb = cfg['sz3:abs_error_bound'] || cfg['sz3:rel_error_bound'] || null;
+      } else if (v.compressor_id === 'zfp') {
         if (cfg['zfp:accuracy'] !== undefined) eb = Number(cfg['zfp:accuracy']);
       }
 
       if (eb !== null) {
-        this.variantConfigs = {
-          ...this.variantConfigs,
-          [id]: { ...this.variantConfigs[id], threshold: eb }
-        };
+        this.localConfig.spatial_value = eb;
       }
     },
     resetToCompressorEB() {
       if (this.selectedVariantId) {
-        this.initializeVariantThreshold(this.selectedVariantId);
+        this.initializeVariantSpatialValue(this.selectedVariantId);
+      }
+    },
+    parseFreqBounds() {
+      const text = this.freqBoundsText.trim();
+      if (!text) return [];
+
+      const parts = text.split(',').map(s => s.trim()).filter(s => s.length > 0);
+      const bounds = [];
+
+      for (const part of parts) {
+        const num = parseFloat(part);
+        if (!isNaN(num) && num > 0) {
+          bounds.push(num);
+        }
+      }
+
+      return bounds;
+    },
+    setPreset(type) {
+      if (type === 'fine') {
+        this.freqBoundsText = '1e-5, 2e-5, 5e-5, 1e-4, 2e-4, 5e-4, 1e-3';
+      } else if (type === 'coarse') {
+        this.freqBoundsText = '1e-4, 5e-4, 1e-3';
+      } else if (type === 'single') {
+        this.freqBoundsText = '1e-4';
       }
     },
     toggleSelectAll() {
@@ -407,9 +431,6 @@ export default {
       } else {
         this.checkedVariants = this.allVariants.map(v => v.id);
       }
-    },
-    emitConfigChange() {
-      this.$emit('config-change', this.localConfig);
     },
     async applyCorrectionToSelected() {
       if (this.checkedVariants.length === 0) return;
@@ -423,7 +444,7 @@ export default {
       };
 
       this.status = 'running';
-      this.statusMessage = `Processing ${ids.length} selected variants...`;
+      this.statusMessage = `Running FFCz sweep for ${ids.length} selected variants...`;
 
       for (const id of ids) {
         const variant = this.allVariants.find(v => v.id === id);
@@ -433,21 +454,26 @@ export default {
         }
 
         this.variantResults = { ...this.variantResults, [id]: 'running' };
-        const vThreshold = this.variantConfigs[id]?.threshold ?? this.localConfig.threshold;
 
         try {
-          const result = await this.runCorrectionTask(variant, this.nodeId, id, vThreshold);
-          if (result) {
+          const results = await this.runFFCzSweep(variant, this.nodeId, id);
+          if (results && results.length > 0) {
             this.variantResults = { ...this.variantResults, [id]: 'done' };
             this.batchStatus.results.push(id);
-            const resultId = `${id}-corrected`;
-            this.$store.commit('setComparisonData', { [resultId]: result });
+
+            // Store each frequency bound result as a separate comparison entry
+            const comparisonUpdates = {};
+            results.forEach((result) => {
+              const resultId = `${id}-ffcz-${result.freq_bound}`;
+              comparisonUpdates[resultId] = result;
+            });
+            this.$store.commit('setComparisonData', comparisonUpdates);
           } else {
             this.variantResults = { ...this.variantResults, [id]: 'error' };
           }
         } catch (err) {
           this.variantResults = { ...this.variantResults, [id]: 'error' };
-          console.error(`Error correcting variant ${id}:`, err);
+          console.error(`Error running FFCz for variant ${id}:`, err);
         }
 
         this.batchStatus.processed++;
@@ -455,7 +481,7 @@ export default {
 
       this.batchStatus.running = false;
       this.status = 'success';
-      this.statusMessage = `Completed ${this.batchStatus.results.length}/${ids.length} corrections.`;
+      this.statusMessage = `Completed FFCz sweep for ${this.batchStatus.results.length}/${ids.length} variants.`;
 
       if (this.batchStatus.results.length > 0) {
         this.$emit('success', {
@@ -464,18 +490,24 @@ export default {
         });
       }
     },
-    async runCorrectionTask(dataset, nodeId, variantId = null, overrideThreshold = null) {
+    async runFFCzSweep(dataset, nodeId, variantId = null) {
       if (!dataset || !this.originalDataset) return null;
+
       this.status = 'running';
       try {
-        const formData = new FormData();
-        // Consolidate shared settings with either variant-specific threshold or override
-        const config = { ...this.localConfig };
-        if (overrideThreshold !== null) {
-          config.threshold = overrideThreshold;
-        } else if (variantId && this.variantConfigs[variantId]) {
-          config.threshold = this.variantConfigs[variantId].threshold;
+        const freq_bounds = this.parseFreqBounds();
+        if (freq_bounds.length === 0) {
+          throw new Error('No valid frequency bounds specified');
         }
+
+        const formData = new FormData();
+        const config = {
+          spatial_mode: this.localConfig.spatial_mode,
+          spatial_value: this.localConfig.spatial_value,
+          freq_mode: this.localConfig.freq_mode,
+          freq_bounds: freq_bounds,
+          return_corrected_data: this.localConfig.return_corrected_data || false
+        };
 
         formData.append('original_key', this.originalDataset.data_key || '');
         formData.append('compressed_key', dataset.data_key || '');
@@ -486,24 +518,51 @@ export default {
         }));
 
         const datasets = { [this.originalDataset.data_key]: this.originalDataset, [dataset.data_key]: dataset };
-        const response = await requestWithFallback({ method: 'post', url: '/api/correction/critical_points', data: formData }, datasets);
+        const response = await requestWithFallback({ method: 'post', url: '/api/correction/ffcz', data: formData }, datasets);
         const result = response.data;
+
         if (result.error) throw new Error(result.error);
-        if (result.data_key) {
-          const dataResp = await requestWithFallback({ method: 'get', url: `/api/decompressed/${result.data_key}`, responseType: 'arraybuffer' }, {});
-          result.decp_data = dataResp.data;
+
+        // Transform results to match comparison data format
+        const sweepResults = [];
+        for (const r of result.results) {
+          const sweepResult = {
+            freq_bound: r.freq_bound,
+            ffcz_bytes: r.ffcz_bytes,
+            compression_ratio: r.compression_ratio,
+            total_bytes: r.total_bytes,
+            metrics: {
+              ...(dataset.metrics || {}),
+              ...(r.metrics || {})
+            },
+            compressor_id: dataset.compressor_id,
+            compressor_config: dataset.compressor_config,
+            base_variant_id: variantId
+          };
+
+          // Fetch corrected data if available
+          if (r.data_key) {
+            try {
+              const dataResp = await requestWithFallback({
+                method: 'get',
+                url: `/api/decompressed/${r.data_key}`,
+                responseType: 'arraybuffer'
+              }, {});
+              sweepResult.decp_data = dataResp.data;
+              sweepResult.data_key = r.data_key;
+            } catch (err) {
+              console.warn(`Failed to fetch corrected data for freq_bound ${r.freq_bound}:`, err);
+            }
+          }
+
+          sweepResults.push(sweepResult);
         }
 
-        // Supplement the correction results with the original compressor's metrics
-        result.metrics = {
-          ...(dataset.metrics || {}),
-          ...(result.metrics || {})
-        };
-
-        return { ...result, config, compressor_id: dataset.compressor_id, compressor_config: dataset.compressor_config };
+        return sweepResults;
       } catch (error) {
         this.status = 'error';
-        this.statusMessage = error.message || 'Correction failed';
+        this.statusMessage = error.message || 'FFCz sweep failed';
+        console.error('FFCz error:', error);
         return null;
       }
     },
@@ -513,16 +572,23 @@ export default {
 
       for (const v of vars) {
         this.selectedVariantId = v.id;
-        const result = await this.runCorrectionTask(v, this.nodeId, v.id);
-        if (result) {
+        const results = await this.runFFCzSweep(v, this.nodeId, v.id);
+        if (results && results.length > 0) {
           this.variantResults = { ...this.variantResults, [v.id]: 'done' };
-          this.$store.commit('setComparisonData', { [`${v.id}-corrected`]: result });
+
+          const comparisonUpdates = {};
+          results.forEach((result) => {
+            const resultId = `${v.id}-ffcz-${result.freq_bound}`;
+            comparisonUpdates[resultId] = result;
+          });
+          this.$store.commit('setComparisonData', comparisonUpdates);
           this.batchStatus.results.push(v.id);
         } else {
           this.variantResults = { ...this.variantResults, [v.id]: 'error' };
         }
         this.batchStatus.processed++;
       }
+
       this.batchStatus.running = false;
       this.status = 'success';
       this.statusMessage = `Batch complete: ${this.batchStatus.results.length}/${vars.length} succeeded.`;
@@ -532,22 +598,22 @@ export default {
     allVariants: {
       immediate: true,
       handler(newVariants) {
-        if (newVariants.length > 0) {
-          if (!this.selectedVariantId) {
-            this.selectedVariantId = newVariants[0].id;
-          }
-          // Initialize threshold for all variants if not already done
-          newVariants.forEach(v => {
-            if (!this.variantConfigs[v.id]) {
-              this.initializeVariantThreshold(v.id);
-            }
-          });
+        if (newVariants.length > 0 && !this.selectedVariantId) {
+          this.selectedVariantId = newVariants[0].id;
         }
       }
     },
     selectedVariantId(id) {
-      if (id && !this.variantConfigs[id]) {
-        this.initializeVariantThreshold(id);
+      if (id) {
+        this.initializeVariantSpatialValue(id);
+      }
+    },
+    'localConfig.freq_bounds': {
+      immediate: true,
+      handler(bounds) {
+        if (Array.isArray(bounds)) {
+          this.freqBoundsText = bounds.join(', ');
+        }
       }
     }
   }
@@ -555,11 +621,11 @@ export default {
 </script>
 
 <style scoped>
-.critical-points-preservation {
+.ffcz-correction {
   background: white;
 }
 .correction-content {
-  min-height: 600px; /* Ensure enough height for the two-column layout */
+  min-height: 600px;
 }
 .correction-sidebar {
   max-height: 600px;
@@ -596,9 +662,5 @@ export default {
 @keyframes fadeIn {
   from { opacity: 0; transform: translateY(5px); }
   to { opacity: 1; transform: translateY(0); }
-}
-.status-indicator {
-  width: 20px;
-  text-align: center;
 }
 </style>

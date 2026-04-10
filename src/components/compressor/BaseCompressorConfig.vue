@@ -28,6 +28,10 @@ export default {
       type: Boolean,
       default: true,
     },
+    nodeId: {
+      type: String,
+      default: null,
+    },
   },
   emits: [
     'config-start',

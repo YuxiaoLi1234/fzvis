@@ -406,8 +406,31 @@ export default {
     const { mode, lower, upper, replacement } = params;
     
     // Get TypedArray based on precision
-    const TypedArray = dataset.precision === 'd' ? Float64Array : Float32Array;
-    const sourceData = new TypedArray(dataset.content);
+    const precisionMap = {
+      f: Float32Array,
+      d: Float64Array,
+      i8: Int8Array,
+      u8: Uint8Array,
+      i16: Int16Array,
+      u16: Uint16Array,
+      i32: Int32Array,
+      u32: Uint32Array,
+    };
+    const TypedArray = precisionMap[dataset.precision] || Float32Array;
+    const bytesPerElement = TypedArray.BYTES_PER_ELEMENT || 1;
+    const buffer = (dataset.endianness === 'big' && bytesPerElement > 1)
+      ? (() => {
+          const src = new Uint8Array(dataset.content);
+          const out = new Uint8Array(src.length);
+          for (let i = 0; i < src.length; i += bytesPerElement) {
+            for (let j = 0; j < bytesPerElement; j += 1) {
+              out[i + j] = src[i + bytesPerElement - 1 - j];
+            }
+          }
+          return out.buffer;
+        })()
+      : dataset.content;
+    const sourceData = new TypedArray(buffer);
     const resultData = sourceData.slice(); // Create a copy
     
     const lowerThreshold = lower ?? -Infinity;

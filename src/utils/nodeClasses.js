@@ -269,6 +269,7 @@ export class CorrectionNode extends BaseNode {
     // Map correction IDs to their respective components
     const componentMap = {
       'critical_points': 'CriticalPointsPreservation',
+      'ffcz_correction': 'FFCzCorrection',
     };
     this.editorComponent = componentMap[correctionId] || null;
   }
@@ -276,10 +277,6 @@ export class CorrectionNode extends BaseNode {
   static canAdd(existingNodes) {
     const sourceNode = existingNodes.find(n => n instanceof DataSourceNode);
     if (!sourceNode || sourceNode.status !== 'ready') return false;
-
-    // Only allow one correction node in the graph
-    const existingCorrectionNode = existingNodes.find(n => n instanceof CorrectionNode);
-    if (existingCorrectionNode) return false;
 
     // Require at least one compressor node
     const compressorNode = existingNodes.find(n =>

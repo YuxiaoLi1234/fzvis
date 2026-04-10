@@ -4,6 +4,10 @@ import threading
 import signal
 import logging
 import traceback
+import tempfile
+import shutil
+from pathlib import Path
+from ffcz_correction import sweep_ffcz_frequency_bounds
 
 # Configure logger for this module
 logger = logging.getLogger(__name__)
@@ -67,81 +71,176 @@ def _derive_edits_with_data_size_check(orig_f64, decp_f64, config, connectivity_
 
 
 def compute_power_spectrum(data_array, parameters):
-    """Compute power spectrum using existing plotPowerSpectrum.py logic"""
+    """Compute power spectrum and relative error if original data is available"""
     import base64
     from io import BytesIO
     import matplotlib
     matplotlib.use('Agg')
     import matplotlib.pyplot as plt
-    
+
     dim = parameters.get('dim', len(data_array.shape))
-    
-    # Compute FFT
-    fft_result = np.fft.fftn(data_array)
-    power_spectrum = np.abs(fft_result) ** 2
-    
-    # Create k-space grid
-    if dim == 1:
-        N = data_array.shape[0]
-        kx = np.fft.fftfreq(N, d=1.0)
-        k_magnitude = np.abs(kx)
-    elif dim == 2:
-        Ny, Nx = data_array.shape
-        ky = np.fft.fftfreq(Ny, d=1.0)
-        kx = np.fft.fftfreq(Nx, d=1.0)
-        kx_grid, ky_grid = np.meshgrid(kx, ky)
-        k_magnitude = np.sqrt(kx_grid**2 + ky_grid**2)
-    else:  # 3D
-        Nz, Ny, Nx = data_array.shape
-        kz = np.fft.fftfreq(Nz, d=1.0)
-        ky = np.fft.fftfreq(Ny, d=1.0)
-        kx = np.fft.fftfreq(Nx, d=1.0)
-        kx_grid, ky_grid, kz_grid = np.meshgrid(kx, ky, kz, indexing='ij')
-        k_magnitude = np.sqrt(kx_grid**2 + ky_grid**2 + kz_grid**2)
-    
-    # Flatten arrays
-    k_flat = k_magnitude.flatten()
-    power_flat = power_spectrum.flatten()
-    
-    # Remove zero frequency
-    non_zero_mask = k_flat > 0
-    k_flat = k_flat[non_zero_mask]
-    power_flat = power_flat[non_zero_mask]
-    
-    # Bin the power spectrum
-    k_bins = np.logspace(np.log10(k_flat.min()), np.log10(k_flat.max()), 50)
-    bin_indices = np.digitize(k_flat, k_bins)
-    
-    binned_k = []
-    binned_power = []
-    for i in range(1, len(k_bins)):
-        mask = bin_indices == i
-        if np.any(mask):
-            binned_k.append(np.mean(k_flat[mask]))
-            binned_power.append(np.mean(power_flat[mask]))
-    
-    # Create plot
-    plt.figure(figsize=(10, 6))
-    plt.loglog(binned_k, binned_power, 'o-', linewidth=2, markersize=4)
-    plt.xlabel('Wavenumber k', fontsize=12)
-    plt.ylabel('Power Spectrum P(k)', fontsize=12)
-    plt.title('Power Spectrum', fontsize=14)
-    plt.grid(True, alpha=0.3)
-    
-    # Save to base64
+
+    def compute_binned_spectrum(data, dim):
+        """Helper function to compute binned power spectrum"""
+        # Step 1: Compute density contrast (fluctuations around mean)
+        mean_density = np.mean(data)
+        delta = (data - mean_density) / mean_density
+
+        # Step 2: Compute FFT and shift zero frequency to center
+        delta_k = np.fft.fftn(delta)
+        delta_k = np.fft.fftshift(delta_k)
+
+        # Step 3: Calculate power spectrum (magnitude squared)
+        power_spectrum = np.abs(delta_k) ** 2
+
+        # Step 4: Create k-space grid matching actual data dimensions
+        if dim == 1:
+            N = data.shape[0]
+            k_values = np.fft.fftfreq(N, d=1.0 / N)
+            k_magnitude = np.abs(k_values)
+        elif dim == 2:
+            Ny, Nx = data.shape
+            ky_values = np.fft.fftfreq(Ny, d=1.0 / Ny)
+            kx_values = np.fft.fftfreq(Nx, d=1.0 / Nx)
+            ky_grid, kx_grid = np.meshgrid(ky_values, kx_values, indexing='ij')
+            k_magnitude = np.sqrt(kx_grid**2 + ky_grid**2)
+        else:  # 3D
+            Nz, Ny, Nx = data.shape
+            kz_values = np.fft.fftfreq(Nz, d=1.0 / Nz)
+            ky_values = np.fft.fftfreq(Ny, d=1.0 / Ny)
+            kx_values = np.fft.fftfreq(Nx, d=1.0 / Nx)
+            kz_grid, ky_grid, kx_grid = np.meshgrid(kz_values, ky_values, kx_values, indexing='ij')
+            k_magnitude = np.sqrt(kx_grid**2 + ky_grid**2 + kz_grid**2)
+
+        # Shift zero frequency to center
+        k_magnitude = np.fft.fftshift(k_magnitude)
+
+        # Flatten arrays
+        k_flat = k_magnitude.flatten()
+        power_flat = power_spectrum.flatten()
+
+        # Remove zero frequency (avoid zero for log scale)
+        non_zero_mask = k_flat > 0
+        k_flat = k_flat[non_zero_mask]
+        power_flat = power_flat[non_zero_mask]
+
+        # Step 5: Bin the power spectrum using logspace bins
+        k_min = np.min(k_flat)
+        k_max = np.max(k_flat)
+        num_bins = 40
+        bins = np.logspace(np.log10(k_min), np.log10(k_max), num_bins)
+
+        binned_k = []
+        binned_power = []
+        for i in range(len(bins) - 1):
+            bin_mask = (k_flat >= bins[i]) & (k_flat < bins[i+1])
+            if np.any(bin_mask):
+                binned_k.append(np.mean(k_flat[bin_mask]))
+                binned_power.append(np.mean(power_flat[bin_mask]))
+
+        return binned_k, binned_power
+
+    # Compute power spectrum for decompressed data
+    binned_k, binned_power = compute_binned_spectrum(data_array, dim)
+
+    # Check if original data is available for comparison
+    original_data = parameters.get('original_data')
+    has_original = original_data is not None
+
+    # Compute relative error if original data is available
+    binned_k_orig = None
+    relative_error = None
+    if has_original:
+        binned_k_orig, binned_power_orig = compute_binned_spectrum(np.array(original_data), dim)
+        # Compute relative error: (P'(k) - P(k)) / P(k)
+        # Match bins between original and decompressed
+        min_len = min(len(binned_k), len(binned_k_orig))
+        binned_k = binned_k[:min_len]
+        binned_power = binned_power[:min_len]
+        binned_k_orig = binned_k_orig[:min_len]
+        binned_power_orig = binned_power_orig[:min_len]
+
+        # Calculate relative error, avoiding division by zero
+        relative_error = []
+        for p_orig, p_decp in zip(binned_power_orig, binned_power):
+            if p_orig > 0:
+                rel_err = (p_decp - p_orig) / p_orig
+                relative_error.append(rel_err)
+            else:
+                relative_error.append(0.0)
+
+    from matplotlib.ticker import LogLocator
+
+    # Create plots: one or two depending on whether we have original data
+    num_plots = 2 if has_original else 1
+    fig, axes = plt.subplots(num_plots, 1, figsize=(8, 6 * num_plots))
+    if num_plots == 1:
+        axes = [axes]  # Make it iterable
+
+    # Plot 1: Power Spectrum
+    ax = axes[0]
+    if has_original:
+        ax.loglog(binned_k_orig, binned_power_orig, 'o-', linewidth=2.5, markersize=5,
+                 label='Original', color='blue', alpha=0.7)
+        ax.loglog(binned_k, binned_power, 's--', linewidth=2.5, markersize=5,
+                 label='Decompressed', color='red', alpha=0.7)
+        ax.legend(fontsize=14, loc='best', framealpha=0.9)
+    else:
+        ax.loglog(binned_k, binned_power, 'o-', linewidth=2.5, markersize=5)
+
+    ax.set_xlabel('Wavenumber k', fontsize=16, fontweight='bold')
+    ax.set_ylabel('Power Spectrum P(k)', fontsize=16, fontweight='bold')
+    ax.set_title('Power Spectrum', fontsize=18, fontweight='bold', pad=15)
+    ax.tick_params(axis='both', which='major', labelsize=14, width=1.5, length=6)
+    ax.tick_params(axis='both', which='minor', labelsize=12, width=1, length=4)
+    ax.xaxis.set_major_locator(LogLocator(base=10.0, numticks=6))
+    ax.yaxis.set_major_locator(LogLocator(base=10.0, numticks=6))
+    plt.setp(ax.xaxis.get_majorticklabels(), rotation=45, ha='right')
+    ax.grid(True, alpha=0.3, linewidth=1.2)
+    ax.grid(True, which='minor', alpha=0.15, linewidth=0.8)
+
+    # Plot 2: Relative Error (if original data available)
+    if has_original:
+        ax2 = axes[1]
+        ax2.semilogx(binned_k, relative_error, 'o-', linewidth=2.5, markersize=5, color='green')
+        ax2.axhline(y=0, color='black', linestyle='--', linewidth=1.5, alpha=0.5, label='Original (zero error)')
+
+        ax2.set_xlabel('Wavenumber k', fontsize=16, fontweight='bold')
+        ax2.set_ylabel('Relative Error (P\'(k) - P(k)) / P(k)', fontsize=16, fontweight='bold')
+        ax2.set_title('Power Spectrum Relative Error', fontsize=18, fontweight='bold', pad=15)
+        ax2.tick_params(axis='both', which='major', labelsize=14, width=1.5, length=6)
+        ax2.tick_params(axis='both', which='minor', labelsize=12, width=1, length=4)
+        ax2.xaxis.set_major_locator(LogLocator(base=10.0, numticks=6))
+        plt.setp(ax2.xaxis.get_majorticklabels(), rotation=45, ha='right')
+        ax2.grid(True, alpha=0.3, linewidth=1.2)
+        ax2.grid(True, which='minor', alpha=0.15, linewidth=0.8)
+        ax2.legend(fontsize=12, loc='best', framealpha=0.9)
+
+    # Tighter layout with extra padding for rotated labels
+    plt.tight_layout(pad=1.5)
+
+    # Save to base64 with higher DPI for publication quality
     buf = BytesIO()
-    plt.savefig(buf, format='png', dpi=100, bbox_inches='tight')
+    plt.savefig(buf, format='png', dpi=150, bbox_inches='tight', facecolor='white', edgecolor='none')
     plt.close()
     buf.seek(0)
     img_base64 = base64.b64encode(buf.read()).decode('utf-8')
-    
-    return {
+
+    result = {
         'type': 'power_spectrum',
         'data': [
             {'k': float(k), 'p': float(p)}
             for k, p in zip(binned_k, binned_power)
         ]
     }
+
+    if has_original and relative_error:
+        result['relative_error'] = [
+            {'k': float(k), 'error': float(e)}
+            for k, e in zip(binned_k, relative_error)
+        ]
+
+    return result
 
 
 def compute_histogram(data_array, parameters):
@@ -299,6 +398,104 @@ def compute_wavelet(data_array, parameters):
         }
 
 
+def _gaussian_kernel_1d(size, sigma):
+    radius = size // 2
+    x = np.arange(-radius, radius + 1, dtype=np.float64)
+    kernel = np.exp(-(x ** 2) / (2 * sigma ** 2))
+    kernel /= np.sum(kernel)
+    return kernel
+
+
+def _gaussian_filter_2d(arr, size=11, sigma=1.5):
+    if size < 1:
+        return arr
+    if size % 2 == 0:
+        size += 1
+    kernel = _gaussian_kernel_1d(size, sigma)
+    radius = size // 2
+    padded = np.pad(arr, ((radius, radius), (radius, radius)), mode='reflect')
+    temp = np.apply_along_axis(lambda m: np.convolve(m, kernel, mode='valid'), axis=1, arr=padded)
+    filtered = np.apply_along_axis(lambda m: np.convolve(m, kernel, mode='valid'), axis=0, arr=temp)
+    return filtered
+
+
+def _normalize_to_unit(arr, min_val=None, max_val=None):
+    if min_val is None or max_val is None:
+        min_val = np.min(arr)
+        max_val = np.max(arr)
+    denom = max_val - min_val
+    if denom == 0:
+        return np.zeros_like(arr, dtype=np.float64)
+    return (arr - min_val) / denom
+
+
+def _quantize(arr, bins=256):
+    if bins <= 1:
+        return arr
+    levels = bins - 1
+    return np.round(arr * levels) / levels
+
+
+def _compute_dssim_2d(x, y, window_size, sigma, c1, c2, bins):
+    min_val = min(np.min(x), np.min(y))
+    max_val = max(np.max(x), np.max(y))
+    x_n = _normalize_to_unit(x, min_val, max_val)
+    y_n = _normalize_to_unit(y, min_val, max_val)
+    x_q = _quantize(x_n, bins=bins)
+    y_q = _quantize(y_n, bins=bins)
+    mu_x = _gaussian_filter_2d(x_q, size=window_size, sigma=sigma)
+    mu_y = _gaussian_filter_2d(y_q, size=window_size, sigma=sigma)
+    mu_x2 = mu_x * mu_x
+    mu_y2 = mu_y * mu_y
+    sigma_x2 = _gaussian_filter_2d(x_q * x_q, size=window_size, sigma=sigma) - mu_x2
+    sigma_y2 = _gaussian_filter_2d(y_q * y_q, size=window_size, sigma=sigma) - mu_y2
+    sigma_xy = _gaussian_filter_2d(x_q * y_q, size=window_size, sigma=sigma) - (mu_x * mu_y)
+    s1 = (2 * mu_x * mu_y + c1) / (mu_x2 + mu_y2 + c1)
+    s2 = (2 * sigma_xy + c2) / (sigma_x2 + sigma_y2 + c2)
+    local_dssim = s1 * s2
+    return float(np.mean(local_dssim))
+
+
+def compute_dssim(data_array, parameters):
+    """Compute DSSIM between original data and data_array using the provided algorithm."""
+    original = parameters.get('original_data')
+    if original is None:
+        return {
+            'type': 'text',
+            'content': 'DSSIM requires original_data (comparison_key) in parameters.'
+        }
+    window_size = int(parameters.get('window_size', 11))
+    sigma = float(parameters.get('sigma', 1.5))
+    bins = int(parameters.get('bins', 256))
+    c1 = float(parameters.get('c1', 1e-8))
+    c2 = float(parameters.get('c2', 1e-8))
+
+    x = np.array(original, dtype=np.float64)
+    y = np.array(data_array, dtype=np.float64)
+    if x.shape != y.shape:
+        return {
+            'type': 'text',
+            'content': f'DSSIM requires matching shapes. Got {x.shape} vs {y.shape}.'
+        }
+    if x.ndim == 2:
+        value = _compute_dssim_2d(x, y, window_size, sigma, c1, c2, bins)
+    elif x.ndim == 3:
+        values = []
+        for idx in range(x.shape[0]):
+            values.append(_compute_dssim_2d(x[idx], y[idx], window_size, sigma, c1, c2, bins))
+        value = float(np.mean(values))
+    else:
+        return {
+            'type': 'text',
+            'content': f'DSSIM supports 2D or 3D arrays. Got ndim={x.ndim}.'
+        }
+    return {
+        'type': 'scalar',
+        'label': 'DSSIM',
+        'value': f'{value:.6f}'
+    }
+
+
 def compute_critical_points(data_array, parameters):
     """Compute critical points (minima/maxima) for a single dataset using MSZ."""
     def _flatten_segmentation_field(field):
@@ -436,9 +633,15 @@ def compute_critical_points(data_array, parameters):
                     'content': 'Critical point extraction is supported for 2D and 3D data only.'
                 }
 
-        config = parameters.get('config', {})
+        config = parameters.get('config', {}) or {}
+        
+        # Support flat parameters for common critical point settings
+        accelerator_name = parameters.get('accelerator', config.get('accelerator', 'omp'))
+        # Ensure we have a valid config for helper functions
+        config = { **config, 'accelerator': accelerator_name }
+        
         accelerator = _get_msz_accelerator(config)
-        connectivity_type = int(config.get('connectivityType', 0))
+        connectivity_type = int(parameters.get('connectivityType', config.get('connectivityType', 0)))
         
         # Validate data dimensions match expected size
         expected_size = width * height * depth
@@ -453,7 +656,7 @@ def compute_critical_points(data_array, parameters):
         # Ensure contiguous array for C++ binding
         arr_data = np.ascontiguousarray(data_array, dtype=np.float64)
         
-        compute_segmentation = bool(config.get('computeSegmentation', True))
+        compute_segmentation = bool(parameters.get('computeSegmentation', config.get('computeSegmentation', True)))
         logger.info(
             f"Calling msz.extract_critical_points with dims: W={width}, H={height}, D={depth}, "
             f"compute_segmentation={compute_segmentation}, connectivity={connectivity_type}, "
@@ -495,52 +698,39 @@ def compute_critical_points(data_array, parameters):
         maxima_list = result.get('maxima', [])
         saddles_list = result.get('saddles', [])
         
-        # Convert CriticalPoint objects to dictionaries
-        # The C++ binding already provides x, y, z coordinates and values
-        minima_points = []
-        maxima_points = []
-        saddles_points = []
-        
+        # Convert CriticalPoint objects to flat numeric lists [x, y, z, value, ...]
+        # This significantly reduces memory and JSON size for large sets.
+        minima_flat = []
         for cp_obj in minima_list:
-            minima_points.append({
-                'index': int(cp_obj.index),
-                'x': int(cp_obj.x),
-                'y': int(cp_obj.y),
-                'z': int(cp_obj.z),
-                'value': float(cp_obj.value)
-            })
+            minima_flat.extend([int(cp_obj.x), int(cp_obj.y), int(cp_obj.z), float(cp_obj.value)])
         
+        maxima_flat = []
         for cp_obj in maxima_list:
-            maxima_points.append({
-                'index': int(cp_obj.index),
-                'x': int(cp_obj.x),
-                'y': int(cp_obj.y),
-                'z': int(cp_obj.z),
-                'value': float(cp_obj.value)
-            })
-
+            maxima_flat.extend([int(cp_obj.x), int(cp_obj.y), int(cp_obj.z), float(cp_obj.value)])
+        
+        saddles_flat = []
         for cp_obj in saddles_list:
-            saddles_points.append({
-                'index': int(cp_obj.index),
-                'x': int(cp_obj.x),
-                'y': int(cp_obj.y),
-                'z': int(cp_obj.z),
-                'value': float(cp_obj.value)
-            })
+            saddles_flat.extend([int(cp_obj.x), int(cp_obj.y), int(cp_obj.z), float(cp_obj.value)])
+        
+        # Log counts for debugging
+        logger.info(f"Critical points: {len(minima_list)} minima, {len(maxima_list)} maxima, {len(saddles_list)} saddles")
 
         res = {
             'type': 'critical_points',
             'minima': {
-                'count': len(minima_points),
-                'points': minima_points
+                'count': len(minima_list),
+                'points': minima_flat,
+                'format': 'flat' # Hint for frontend
             },
             'maxima': {
-                'count': len(maxima_points),
-                'points': maxima_points
+                'count': len(maxima_list),
+                'points': maxima_flat,
+                'format': 'flat'
             },
             'saddles': {
-                'count': len(saddles_points),
-                'points': saddles_points
+                'count': len(saddles_list),
+                'points': saddles_flat,
+                'format': 'flat'
             },
             'dimensions': {
                 'width': width,
@@ -628,9 +818,15 @@ def compute_critical_points_faults(data_array, parameters):
         orig_data = np.ascontiguousarray(original, dtype=np.float64)
         decp_data = np.ascontiguousarray(decompressed, dtype=np.float64)
 
-        config = params.get('config', {})
+        config = params.get('config', {}) or {}
+        
+        # Support flat parameters for top-level keys
+        acc_name = params.get('accelerator', config.get('accelerator', 'omp'))
+        # Reconstruct config for helper functions
+        config = { **config, 'accelerator': acc_name }
+        
         accelerator = _get_msz_accelerator(config)
-        connectivity_type = int(config.get('connectivityType', 0))
+        connectivity_type = int(params.get('connectivityType', config.get('connectivityType', 0)))
 
         # Count faults using MSZ
         try:
@@ -776,16 +972,267 @@ def apply_critical_points_correction(original, decompressed, parameters):
         num_changed = np.count_nonzero(diff)
         logger.info(f"Correction complete. Max diff: {max_diff}, changed elements: {num_changed}")
 
-        return {
+        # 3. Compress edits and calculate total size and ratio
+        compressed_edits_size = 0
+        try:
+            statusIdx, compressed_edits = msz.compress_edits_zstd(edits)
+            if statusIdx == msz.ERR_NO_ERROR:
+                compressed_edits_size = len(compressed_edits)
+                logger.info(f"Edits compressed successfully. Size: {compressed_edits_size} bytes")
+            else:
+                logger.warning(f"Failed to compress edits (status: {statusIdx})")
+        except Exception as ce_err:
+            logger.warning(f"Error compressing edits: {ce_err}")
+
+        # Calculate overall compression ratio if original data size and compressed size are available
+        metadata = parameters.get('metadata', {})
+        compressed_metrics = metadata.get('compressed_metrics', {})
+        
+        # Try to find compressed data size in metrics (common libpressio keys)
+        comp_data_size = (
+            compressed_metrics.get('size:compressed_size') or 
+            compressed_metrics.get('pressio:compressed_size') or
+            compressed_metrics.get('compressed_size')
+        )
+        
+        # Fallback: search for any key ending in ':compressed_size'
+        if comp_data_size is None:
+            for k, v in compressed_metrics.items():
+                if k.endswith(':compressed_size') and isinstance(v, (int, float)):
+                    comp_data_size = v
+                    break
+        
+        res = {
             'status': 'success',
             'num_edits': len(edits),
-            'corrected_data': final_corrected_data
+            'compressed_edits_size': compressed_edits_size,
+            'corrected_data': final_corrected_data,
+            'metrics': {
+                'qoi:num_edits': len(edits),
+                'qoi:compressed_edits_size': compressed_edits_size,
+            }
         }
+
+        # Calculate ratio if we have all parts
+        if comp_data_size is not None:
+            # original_size in bytes
+            orig_size = original.nbytes
+            total_compressed_size = comp_data_size + compressed_edits_size
+            if total_compressed_size > 0:
+                overall_ratio = orig_size / total_compressed_size
+                res['overall_compression_ratio'] = float(overall_ratio)
+                res['compressed_data_size'] = int(comp_data_size)
+                
+                # Add to metrics for standard visualization
+                res['metrics']['qoi:overall_compression_ratio'] = float(overall_ratio)
+                res['metrics']['qoi:total_compressed_size'] = int(total_compressed_size)
+                
+                logger.info(f"Overall compression ratio: {overall_ratio:.6f}")
+
+        return res
 
     except Exception as e:
         logger.error(f'Error applying correction: {e}')
         logger.error(traceback.format_exc())
         return {'error': f'Error applying correction: {e}'}
+
+
+def apply_ffcz_correction(original, decompressed, parameters):
+    """
+    Apply FFCz frequency-domain correction sweep.
+    Runs FFCz with multiple frequency bounds and returns metrics for each.
+
+    Args:
+        original: Original numpy array
+        decompressed: Base decompressed numpy array
+        parameters: Dict containing 'config' and 'metadata'
+
+    Returns:
+        Dict with sweep results, metrics, and file sizes
+    """
+    try:
+        config = parameters.get('config', {})
+        metadata = parameters.get('metadata', {})
+
+        # Extract dimensions
+        dims = metadata.get('dimensions')
+        logger.info(f"FFCz: metadata dimensions = {dims}")
+        logger.info(f"FFCz: original.shape = {original.shape}, decompressed.shape = {decompressed.shape}")
+
+        if not dims or len(dims) not in (2, 3):
+            # Fallback to array shape
+            # FFCz expects dimensions in the order they appear in the file
+            # numpy.tofile() writes in C-order (row-major), so dims should match shape directly
+            if len(original.shape) == 2:
+                dims = (original.shape[0], original.shape[1])  # H, W (as stored in file)
+            elif len(original.shape) == 3:
+                dims = (original.shape[0], original.shape[1], original.shape[2])  # D, H, W (as stored in file)
+            else:
+                return {'error': 'FFCz correction requires 2D or 3D data'}
+
+        logger.info(f"FFCz: Using dimensions = {dims} for FFCz command (matching file layout)")
+
+        # Determine data type
+        if original.dtype == np.float32:
+            dtype = 'float'
+        elif original.dtype == np.float64:
+            dtype = 'double'
+        else:
+            # Convert to float32 by default
+            original = original.astype(np.float32)
+            decompressed = decompressed.astype(np.float32)
+            dtype = 'float'
+
+        # Get configuration parameters
+        spatial_mode = config.get('spatial_mode', 'REL')
+        spatial_value = float(config.get('spatial_value', 1e-3))
+        freq_mode = config.get('freq_mode', 'REL')
+        freq_bounds = config.get('freq_bounds', [1e-4])
+        return_corrected_data = config.get('return_corrected_data', False)
+
+        # Ensure freq_bounds is a list
+        if not isinstance(freq_bounds, list):
+            freq_bounds = [freq_bounds]
+
+        # Get base compressed size if available
+        compressed_metrics = metadata.get('compressed_metrics', {})
+        base_compressed_bytes = (
+            compressed_metrics.get('size:compressed_size') or
+            compressed_metrics.get('pressio:compressed_size') or
+            compressed_metrics.get('compressed_size')
+        )
+        if base_compressed_bytes is None:
+            for k, v in compressed_metrics.items():
+                if k.endswith(':compressed_size') and isinstance(v, (int, float)):
+                    base_compressed_bytes = int(v)
+                    break
+
+        # Create temporary directory and files
+        temp_dir = tempfile.mkdtemp(prefix='ffcz_')
+        try:
+            original_file = Path(temp_dir) / 'original.raw'
+            decomp_file = Path(temp_dir) / 'decomp.raw'
+            work_dir = Path(temp_dir) / 'work'
+
+            # Write data to files
+            logger.info(f"Writing original data to {original_file}")
+            original_to_write = original.astype(np.float32 if dtype == 'float' else np.float64)
+            original_to_write.tofile(original_file)
+            original_size = Path(original_file).stat().st_size
+            logger.info(f"Wrote original data: {original_size} bytes, shape={original.shape}, dtype={original.dtype}")
+
+            logger.info(f"Writing decompressed data to {decomp_file}")
+            decompressed_to_write = decompressed.astype(np.float32 if dtype == 'float' else np.float64)
+            decompressed_to_write.tofile(decomp_file)
+            decomp_size = Path(decomp_file).stat().st_size
+            logger.info(f"Wrote decompressed data: {decomp_size} bytes, shape={decompressed.shape}, dtype={decompressed.dtype}")
+
+            # Find FFCz binary
+            ffcz_bin = shutil.which('ffcz')
+            if not ffcz_bin:
+                # Try common locations
+                common_paths = [
+                    '/home/guoxil/usr/local/bin/ffcz',
+                    '/usr/local/bin/ffcz',
+                    '/usr/bin/ffcz',
+                ]
+                for path in common_paths:
+                    if Path(path).exists():
+                        ffcz_bin = path
+                        break
+
+            if not ffcz_bin:
+                return {'error': 'FFCz binary not found. Please ensure ffcz is installed.'}
+
+            logger.info(f"Running FFCz sweep with {len(freq_bounds)} frequency bounds")
+
+            # Run FFCz sweep
+            results = sweep_ffcz_frequency_bounds(
+                ffcz_bin=ffcz_bin,
+                original_path=str(original_file),
+                base_decomp_path=str(decomp_file),
+                dims=tuple(dims),
+                dtype=dtype,
+                spatial_mode=spatial_mode,
+                spatial_value=spatial_value,
+                freq_mode=freq_mode,
+                freq_bounds=freq_bounds,
+                workdir=str(work_dir),
+                base_compressed_bytes=base_compressed_bytes,
+                return_corrected_data=return_corrected_data,
+            )
+
+            logger.info(f"FFCz sweep completed with {len(results)} results")
+
+            # Format results for frontend
+            formatted_results = []
+            for row in results:
+                result = {
+                    'freq_bound': row['freq_bound'],
+                    'ffcz_bytes': row['ffcz_bytes'],
+                    'metrics': {}
+                }
+
+                # Add metrics with FFCz: prefix
+                if row.get('freq_bound') is not None:
+                    result['metrics']['FFCz:frequency_error_bound'] = row['freq_bound']
+                if row.get('mae') is not None:
+                    result['metrics']['FFCz:MAE'] = row['mae']
+                if row.get('mse') is not None:
+                    result['metrics']['FFCz:MSE'] = row['mse']
+                if row.get('rmse') is not None:
+                    result['metrics']['FFCz:RMSE'] = row['rmse']
+                if row.get('nrmse') is not None:
+                    result['metrics']['FFCz:NRMSE'] = row['nrmse']
+                if row.get('psnr') is not None:
+                    result['metrics']['FFCz:PSNR'] = row['psnr']
+                if row.get('ssnr') is not None:
+                    result['metrics']['FFCz:SSNR'] = row['ssnr']
+                if row.get('max_relative_frequency_error') is not None:
+                    result['metrics']['FFCz:max_freq_error'] = row['max_relative_frequency_error']
+                if row.get('additional_storage') is not None:
+                    result['metrics']['FFCz:additional_storage'] = row['additional_storage']
+
+                # Add compression info if available
+                if 'compression_ratio' in row:
+                    result['compression_ratio'] = row['compression_ratio']
+                    result['total_bytes'] = row['total_bytes']
+                    result['base_compressed_bytes'] = row['base_compressed_bytes']
+                    # Add to metrics for comparison charts
+                    result['metrics']['FFCz:compression_ratio'] = row['compression_ratio']
+                    result['metrics']['FFCz:total_bytes'] = row['total_bytes']
+                    result['metrics']['FFCz:ffcz_bytes'] = row['ffcz_bytes']
+
+                # Add corrected data if available
+                if 'corrected_data' in row:
+                    result['corrected_data'] = row['corrected_data']
+
+                formatted_results.append(result)
+
+            return {
+                'status': 'success',
+                'results': formatted_results,
+                'config': {
+                    'spatial_mode': spatial_mode,
+                    'spatial_value': spatial_value,
+                    'freq_mode': freq_mode,
+                    'dims': dims,
+                    'dtype': dtype,
+                }
+            }
+
+        finally:
+            # Clean up temporary directory
+            try:
+                shutil.rmtree(temp_dir)
+                logger.info(f"Cleaned up temporary directory {temp_dir}")
+            except Exception as e:
+                logger.warning(f"Failed to clean up temporary directory {temp_dir}: {e}")
+
+    except Exception as e:
+        logger.error(f'Error applying FFCz correction: {e}')
+        logger.error(traceback.format_exc())
+        return {'error': f'Error applying FFCz correction: {e}'}
 
 
 # Wrap all handlers with error handling to prevent crashes
@@ -796,6 +1243,8 @@ METRIC_HANDLERS = {
     'entropy': safe_handler(compute_entropy),
     'correlation': safe_handler(compute_correlation),
     'wavelet': safe_handler(compute_wavelet),
+    'dssim': safe_handler(compute_dssim),
     'critical_points': safe_handler(compute_critical_points),
     'critical_points_correction': safe_handler(apply_critical_points_correction),
+    'ffcz_correction': safe_handler(apply_ffcz_correction),
 }

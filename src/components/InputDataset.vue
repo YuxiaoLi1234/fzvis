@@ -10,19 +10,37 @@
       <small class="py-0 mt-0 text-muted">Click submit button to parse the NetCDF file.</small>
     </div>
 
-    <div v-else class="row g-3 align-items-center my-2">
-      <!-- precision -->
-      <div class="col-md-6">
-        <div class="row g-1 align-items-center">
-          <div class="col">
-            <select class="form-select" aria-label="precision" v-model="precision">
-              <option value="" disabled selected>Data precision</option>
-              <option value="f">single (f)</option>
-              <option value="d">double (d)</option>
-            </select>
+      <div v-else class="row g-3 align-items-center my-2">
+        <!-- precision -->
+        <div class="col-md-6">
+          <div class="row g-1 align-items-center">
+            <div class="col">
+              <select class="form-select" aria-label="precision" v-model="precision">
+                <option value="" disabled selected>Data precision</option>
+                <option value="f">float32 (f)</option>
+                <option value="d">float64 (d)</option>
+                <option value="i8">int8 (i8)</option>
+                <option value="u8">uint8 (u8)</option>
+                <option value="i16">int16 (i16)</option>
+                <option value="u16">uint16 (u16)</option>
+                <option value="i32">int32 (i32)</option>
+                <option value="u32">uint32 (u32)</option>
+              </select>
+            </div>
           </div>
         </div>
-      </div>
+        <!-- endianness -->
+        <div class="col-md-6">
+          <div class="row g-1 align-items-center">
+            <div class="col">
+              <select class="form-select" aria-label="endianness" v-model="endianness">
+                <option value="" disabled selected>Endianness</option>
+                <option value="little">Little-endian</option>
+                <option value="big">Big-endian</option>
+              </select>
+            </div>
+          </div>
+        </div>
       <!-- depth -->
       <div class="col-md-6">
         <div class="row g-1 align-items-center">
@@ -165,6 +183,12 @@
                     {{ dataset.name }}
                     <span class="badge bg-secondary" v-if="dataset.type === 'raw' && dataset.precision === 'f'">float32</span>
                     <span class="badge bg-secondary" v-if="dataset.type === 'raw' && dataset.precision === 'd'">float64</span>
+                    <span class="badge bg-secondary" v-if="dataset.type === 'raw' && dataset.precision === 'i8'">int8</span>
+                    <span class="badge bg-secondary" v-if="dataset.type === 'raw' && dataset.precision === 'u8'">uint8</span>
+                    <span class="badge bg-secondary" v-if="dataset.type === 'raw' && dataset.precision === 'i16'">int16</span>
+                    <span class="badge bg-secondary" v-if="dataset.type === 'raw' && dataset.precision === 'u16'">uint16</span>
+                    <span class="badge bg-secondary" v-if="dataset.type === 'raw' && dataset.precision === 'i32'">int32</span>
+                    <span class="badge bg-secondary" v-if="dataset.type === 'raw' && dataset.precision === 'u32'">uint32</span>
                     <span class="badge bg-info ms-1">{{ dataset.size }}</span>
                   </div>
                   <div v-if="dataset.type === 'raw'">
@@ -229,6 +253,7 @@ export default {
       width: null,
       height: null,
       precision: "",
+      endianness: "little",
       fileContent: "",
       file: null,
       datasetToChange: null,
@@ -258,10 +283,10 @@ export default {
       }
       // Modify dimensions of the existing dataset
       if (!this.file && this.currentDataset) {
-        return this.width && this.height && this.depth && this.precision;
+        return this.width && this.height && this.depth && this.precision && this.endianness;
       }
       // Upload a new dataset
-      return this.file && this.width && this.height && this.depth && this.precision;
+      return this.file && this.width && this.height && this.depth && this.precision && this.endianness;
     },
 
     // Check if there is a slicable dimension for a variable in NetCDF file
@@ -309,6 +334,7 @@ export default {
       if (!ds) {
         this.isNetCDF = false;
         this.precision = "";
+        this.endianness = "little";
         this.width = null;
         this.height = null;
         this.depth = null;
@@ -322,7 +348,8 @@ export default {
         this.width = Number(dims?.[0]) || null;
         this.height = Number(dims?.[1]) || null;
         this.depth = Number(dims?.[2]) || null;
-        if (ds.precision) this.precision = ds.precision;
+      if (ds.precision) this.precision = ds.precision;
+      if (ds.endianness) this.endianness = ds.endianness;
       }
     },
     // Initialize tooltips in the DOM
@@ -399,11 +426,15 @@ export default {
           content: this.fileContent,
           dimensions: [Number(this.width), Number(this.height), Number(this.depth)],
           precision: this.precision,
+          endianness: this.endianness,
           vars: this.currentDataset?.vars || undefined,
           size: this.currentDataset?.size || undefined,
         }
       });
       this.$store.commit("setComparisonData", null);
+      if (!this.isNetCDF && this.fileContent) {
+        this.logDataRange(this.fileContent, this.precision, 'Local dataset');
+      }
     },
 
     uploadFile() {
@@ -428,6 +459,7 @@ export default {
         formData.append("height", this.height);
         formData.append("depth", this.depth);
         formData.append("precision", this.precision);
+        formData.append("endianness", this.endianness);
       }
 
   axios.post(`${this.baseURL}/upload`, formData, {
@@ -454,6 +486,7 @@ export default {
               content: null,
               dimensions: serverDataset?.dimensions || null,
               precision: serverDataset?.precision || "",
+              endianness: serverDataset?.endianness || "little",
               vars: serverDataset?.vars || undefined,
               size: serverDataset?.size || undefined,
             }
@@ -466,11 +499,15 @@ export default {
               content: this.fileContent,
               dimensions: [Number(this.width), Number(this.height), Number(this.depth)],
               precision: this.precision,
+              endianness: this.endianness,
               // vars will be cleared in the store for raw datasets
               vars: undefined,
               size: undefined,
             }
           });
+          if (this.fileContent) {
+            this.logDataRange(this.fileContent, this.precision, serverDataset?.name || 'Uploaded dataset');
+          }
         }
       })
       .catch(error => {
@@ -494,6 +531,7 @@ export default {
           this.height = this.datasetToChange.height;
           this.depth = this.datasetToChange.depth;
           this.precision = this.datasetToChange.precision;
+          this.endianness = this.datasetToChange.endianness || 'little';
           // Show progress in status bar
           this.$store.commit("setProgress", { active: true, percent: 0, message: "Downloading dataset..." });
           this.$store.commit("setStatus", { type: "info", message: "Downloading dataset..." });
@@ -519,10 +557,14 @@ export default {
                 content: this.fileContent,
                 dimensions: [Number(this.width), Number(this.height), Number(this.depth)],
                 precision: this.precision,
+                endianness: this.endianness,
                 vars: undefined,
                 size: undefined,
               }
             });
+            if (this.fileContent) {
+              this.logDataRange(this.fileContent, this.precision, this.datasetToChange.name);
+            }
             this.$store.commit("setProgress", { active: false, percent: 100, message: "Download complete" });
             this.$store.commit("setStatus", { type: "success", message: "Downloaded file successfully!" });
           }).catch(error => {
@@ -535,16 +577,17 @@ export default {
           this.ncSelectedVar = "";
           this.isNetCDF = true;
           this.$store.commit("setFileData", {
-            dataset: {
-              name: this.datasetToChange.name,
-              type: "netcdf",
-              content: null,
-              dimensions: this.datasetToChange.dimensions || null,
-              precision: this.datasetToChange.precision || "",
-              vars: this.datasetToChange.vars || undefined,
-              size: this.datasetToChange.size || undefined,
-            }
-          });
+              dataset: {
+                name: this.datasetToChange.name,
+                type: "netcdf",
+                content: null,
+                dimensions: this.datasetToChange.dimensions || null,
+                precision: this.datasetToChange.precision || "",
+                endianness: this.datasetToChange.endianness || "little",
+                vars: this.datasetToChange.vars || undefined,
+                size: this.datasetToChange.size || undefined,
+              }
+            });
         }
       }
         
@@ -599,6 +642,24 @@ export default {
       else if (dtype === "float64") {
         this.precision = "d";
       }
+      else if (dtype === "int8") {
+        this.precision = "i8";
+      }
+      else if (dtype === "uint8") {
+        this.precision = "u8";
+      }
+      else if (dtype === "int16") {
+        this.precision = "i16";
+      }
+      else if (dtype === "uint16") {
+        this.precision = "u16";
+      }
+      else if (dtype === "int32") {
+        this.precision = "i32";
+      }
+      else if (dtype === "uint32") {
+        this.precision = "u32";
+      }
 
       // Set dimensions
       let dims = this.currentDataset.vars[this.ncSelectedVar].shape;
@@ -618,11 +679,18 @@ export default {
         this.height = slicedDims[0];
         this.width = slicedDims[1];
         this.depth = 1;
-      }
-      else if (slicedDims.length === 3) {
-        this.depth = slicedDims[timeDimensionIndex > 0 ? timeDimensionIndex : 0];
-        this.height = slicedDims[(timeDimensionIndex === 2 || timeDimensionIndex === -1) ? 0 : 1];
-        this.width = slicedDims[(timeDimensionIndex === 2 || timeDimensionIndex === -1) ? 1 : 2];
+      } else if (slicedDims.length === 3) {
+        if (timeDimensionIndex >= 0) {
+          const spatialIdx = [0, 1, 2].filter(i => i !== timeDimensionIndex);
+          this.depth = slicedDims[timeDimensionIndex];
+          this.height = slicedDims[spatialIdx[0]];
+          this.width = slicedDims[spatialIdx[1]];
+        } else {
+          // No time dimension: preserve axis order as [depth, height, width]
+          this.depth = slicedDims[0];
+          this.height = slicedDims[1];
+          this.width = slicedDims[2];
+        }
       }
 
       const slices = this.sliceParams
@@ -664,6 +732,60 @@ export default {
         this.$store.commit("setProgress", { active: false, percent: 0, message: "Download failed" });
         this.$store.commit("setStatus", { type: "danger", message: `Download file failed. ${error}` });
       });
+    },
+
+    getTypedArrayConstructor(precision) {
+      const map = {
+        f: Float32Array,
+        d: Float64Array,
+        i8: Int8Array,
+        u8: Uint8Array,
+        i16: Int16Array,
+        u16: Uint16Array,
+        i32: Int32Array,
+        u32: Uint32Array,
+      };
+      return map[precision] || null;
+    },
+
+    logDataRange(buffer, precision, label = 'dataset', endianness = this.endianness) {
+      const ctor = this.getTypedArrayConstructor(precision);
+      if (!ctor) {
+        console.warn(`[Dataset] Unsupported precision '${precision}' for range log.`);
+        return;
+      }
+      const viewBuffer = this.maybeSwapEndian(buffer, precision, endianness);
+      const view = new ctor(viewBuffer);
+      let min = Infinity;
+      let max = -Infinity;
+      for (let i = 0; i < view.length; i += 1) {
+        const v = view[i];
+        if (Number.isFinite(v)) {
+          if (v < min) min = v;
+          if (v > max) max = v;
+        }
+      }
+      console.log(`[Dataset] ${label} range (${precision}): [${min}, ${max}]`);
+    },
+
+    maybeSwapEndian(buffer, precision, endianness) {
+      if (!buffer || !(buffer instanceof ArrayBuffer)) return buffer;
+      if (!endianness || endianness === 'little') return buffer;
+      const bytesPerElement = {
+        f: 4, d: 8,
+        i8: 1, u8: 1,
+        i16: 2, u16: 2,
+        i32: 4, u32: 4,
+      }[precision] || 1;
+      if (bytesPerElement === 1) return buffer;
+      const src = new Uint8Array(buffer);
+      const out = new Uint8Array(src.length);
+      for (let i = 0; i < src.length; i += bytesPerElement) {
+        for (let j = 0; j < bytesPerElement; j += 1) {
+          out[i + j] = src[i + bytesPerElement - 1 - j];
+        }
+      }
+      return out.buffer;
     },
   },
   

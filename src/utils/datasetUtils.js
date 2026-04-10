@@ -15,14 +15,15 @@ import axios from 'axios';
  * @param {'f'|'d'|undefined} precisionHint
  * @returns {Float32Array|Float64Array|TypedArray|null}
  */
-export function toNumericArray(datasetOrBuffer, precisionHint) {
+export function toNumericArray(datasetOrBuffer, precisionHint, endiannessHint) {
   if (!datasetOrBuffer) return null;
   try {
     // Vuex dataset object
     if (datasetOrBuffer && typeof datasetOrBuffer === 'object' && 'content' in datasetOrBuffer) {
       const buf = datasetOrBuffer.content;
       const prec = datasetOrBuffer.precision || precisionHint;
-      return toNumericArray(buf, prec);
+      const end = datasetOrBuffer.endianness || endiannessHint || 'little';
+      return toNumericArray(buf, prec, end);
     }
     // TypedArray
     if (ArrayBuffer.isView(datasetOrBuffer)) {
@@ -30,8 +31,33 @@ export function toNumericArray(datasetOrBuffer, precisionHint) {
     }
     // Raw ArrayBuffer
     if (datasetOrBuffer instanceof ArrayBuffer) {
-      const prec = precisionHint === 'd' ? 'd' : 'f';
-      return prec === 'd' ? new Float64Array(datasetOrBuffer) : new Float32Array(datasetOrBuffer);
+      const prec = (precisionHint || 'f').toLowerCase();
+      const endianness = (endiannessHint || 'little').toLowerCase();
+      
+      const map = {
+        f: Float32Array, d: Float64Array,
+        i8: Int8Array, u8: Uint8Array,
+        i16: Int16Array, u16: Uint16Array,
+        i32: Int32Array, u32: Uint32Array,
+      };
+      const Ctor = map[prec] || Float32Array;
+      const bytesPerElement = Ctor.BYTES_PER_ELEMENT || 1;
+
+      let buffer = datasetOrBuffer;
+      const isBigEndian = endianness === 'big' || endianness === 'be' || endianness === '>';
+      
+      if (isBigEndian && bytesPerElement > 1) {
+        const src = new Uint8Array(datasetOrBuffer);
+        const out = new Uint8Array(src.length);
+        for (let i = 0; i < src.length; i += bytesPerElement) {
+          for (let j = 0; j < bytesPerElement; j += 1) {
+            out[i + j] = src[i + bytesPerElement - 1 - j];
+          }
+        }
+        buffer = out.buffer;
+      }
+
+      return new Ctor(buffer);
     }
     // Plain array
     if (Array.isArray(datasetOrBuffer)) {
@@ -73,8 +99,8 @@ export function computeMinMax(arr) {
  * @param {'f'|'d'|undefined} precisionHint
  * @returns {{min:number, max:number}|null}
  */
-export function getDatasetMinMax(datasetOrBuffer, precisionHint) {
-  const arr = toNumericArray(datasetOrBuffer, precisionHint);
+export function getDatasetMinMax(datasetOrBuffer, precisionHint, endiannessHint) {
+  const arr = toNumericArray(datasetOrBuffer, precisionHint, endiannessHint);
   return computeMinMax(arr);
 }
 

@@ -47,14 +47,19 @@ export default createStore({
         state.originalDataset = null;
         return;
       }
+      const next = { ...payload };
+      if (next.endianness == null) {
+        next.endianness = 'little';
+      }
       state.originalDataset = {
-        name: payload.name ?? null,
-        type: payload.type ?? 'raw',
-        content: payload.content ?? null,
-        dimensions: payload.dimensions ?? null,
-        precision: payload.precision ?? null,
-        size: payload.size,
-        vars: payload.vars,
+        name: next.name ?? null,
+        type: next.type ?? 'raw',
+        content: next.content ?? null,
+        dimensions: next.dimensions ?? null,
+        precision: next.precision ?? null,
+        endianness: next.endianness,
+        size: next.size,
+        vars: next.vars,
       };
       // Also clear filter operations
       state.filterOperations = [];
@@ -103,6 +108,7 @@ export default createStore({
           content: payload.content ?? state.dataset?.content ?? null,
           dimensions: payload.dimensions ?? state.dataset?.dimensions ?? null,
           precision: payload.precision ?? state.dataset?.precision ?? null,
+          endianness: payload.endianness ?? state.dataset?.endianness ?? 'little',
           size: payload.size ?? state.dataset?.size,
           vars: payload.vars ?? state.dataset?.vars,
         };
@@ -133,6 +139,7 @@ export default createStore({
           content: next.content,
           dimensions: next.dimensions,
           precision: next.precision,
+          endianness: next.endianness,
           size: next.size,
           vars: next.vars,
         };
@@ -218,6 +225,146 @@ export default createStore({
         [derivedName]: config
       };
       state.savedConfigurations = { ...state.savedConfigurations, [derivedName]: config };
+    },
+    renameBaseConfiguration(state, { oldName, newName }) {
+      if (!oldName || !newName || oldName === newName) return;
+      if (!state.baseConfigurations || !(oldName in state.baseConfigurations)) return;
+      if (state.baseConfigurations[newName]) return;
+
+      const nextBase = { ...state.baseConfigurations };
+      const baseConfig = nextBase[oldName];
+      delete nextBase[oldName];
+      nextBase[newName] = baseConfig;
+      state.baseConfigurations = nextBase;
+
+      if (state.derivedConfigurations) {
+        const nextDerived = { ...state.derivedConfigurations };
+        if (oldName in nextDerived) {
+          const derivedConfigs = nextDerived[oldName];
+          delete nextDerived[oldName];
+          nextDerived[newName] = derivedConfigs;
+        }
+        state.derivedConfigurations = nextDerived;
+      }
+
+      if (state.comparisonData) {
+        const nextComparison = { ...state.comparisonData };
+        Object.keys(nextComparison).forEach(key => {
+          const item = nextComparison[key];
+          if (item?.base_name === oldName) {
+            nextComparison[key] = { ...item, base_name: newName };
+          }
+        });
+        state.comparisonData = nextComparison;
+      }
+    },
+    renameDerivedConfiguration(state, { oldName, newName, baseName }) {
+      if (!oldName || !newName || oldName === newName) return;
+      if (!baseName) return;
+
+      // Update derivedConfigurations
+      if (state.derivedConfigurations && state.derivedConfigurations[baseName]) {
+        const derivedMap = state.derivedConfigurations[baseName];
+        if (oldName in derivedMap) {
+          const nextDerivedMap = { ...derivedMap };
+          const config = nextDerivedMap[oldName];
+          delete nextDerivedMap[oldName];
+          nextDerivedMap[newName] = config;
+          state.derivedConfigurations = {
+            ...state.derivedConfigurations,
+            [baseName]: nextDerivedMap
+          };
+        }
+      }
+
+      // Update savedConfigurations
+      if (state.savedConfigurations && (oldName in state.savedConfigurations)) {
+        const nextSaved = { ...state.savedConfigurations };
+        const savedConfig = nextSaved[oldName];
+        delete nextSaved[oldName];
+        nextSaved[newName] = savedConfig;
+        state.savedConfigurations = nextSaved;
+      }
+    },
+    removeConfigurationBranch(state, baseName) {
+      if (!baseName) return;
+
+      const derivedIds = Object.keys(state.derivedConfigurations?.[baseName] || {});
+      const resultIds = [baseName, ...derivedIds];
+
+      if (state.baseConfigurations && baseName in state.baseConfigurations) {
+        const nextBase = { ...state.baseConfigurations };
+        delete nextBase[baseName];
+        state.baseConfigurations = nextBase;
+      }
+
+      if (state.derivedConfigurations && baseName in state.derivedConfigurations) {
+        const nextDerived = { ...state.derivedConfigurations };
+        delete nextDerived[baseName];
+        state.derivedConfigurations = nextDerived;
+      }
+
+      if (state.savedConfigurations) {
+        const nextSaved = { ...state.savedConfigurations };
+        let changed = false;
+        resultIds.forEach(id => {
+          if (id in nextSaved) {
+            delete nextSaved[id];
+            changed = true;
+          }
+        });
+        if (changed) {
+          state.savedConfigurations = nextSaved;
+        }
+      }
+
+      if (state.comparisonData) {
+        const nextComparison = { ...state.comparisonData };
+        let changed = false;
+        resultIds.forEach(id => {
+          if (id in nextComparison) {
+            delete nextComparison[id];
+            changed = true;
+          }
+        });
+        if (changed) {
+          state.comparisonData = Object.keys(nextComparison).length > 0 ? nextComparison : null;
+        }
+      }
+
+      if (state.criticalPoints?.decompressed) {
+        const nextCritical = { ...state.criticalPoints.decompressed };
+        let changed = false;
+        resultIds.forEach(id => {
+          if (id in nextCritical) {
+            delete nextCritical[id];
+            changed = true;
+          }
+        });
+        if (changed) {
+          state.criticalPoints = {
+            ...state.criticalPoints,
+            decompressed: nextCritical
+          };
+        }
+      }
+
+      if (state.segmentation?.decompressed) {
+        const nextSegmentation = { ...state.segmentation.decompressed };
+        let changed = false;
+        resultIds.forEach(id => {
+          if (id in nextSegmentation) {
+            delete nextSegmentation[id];
+            changed = true;
+          }
+        });
+        if (changed) {
+          state.segmentation = {
+            ...state.segmentation,
+            decompressed: nextSegmentation
+          };
+        }
+      }
     },
     setCriticalPoints(state, payload) {
       if (!payload) {
