@@ -32,6 +32,7 @@ export default {
       activeEditingNode: null,
       isTreeDisabled: false,
       isPipelineView: false,
+      pipelineSelections: {},
     };
   },
 
@@ -44,6 +45,7 @@ export default {
       handler(newVal) {
         this.tokens.clear();
         this.tokens.add(newVal);
+        this.pipelineSelections = {};
         this.configurations = {
           "name": "pressio",
           "compressor_id": "pressio",
@@ -233,12 +235,23 @@ export default {
           delete current[slot];
           delete current['composite:plugins'];
         }
+        this.pipelineSelections[path] = {
+          slot,
+          type: 'metric',
+          selected: ids,
+        };
       } else {
         // const prev = current[slot];
         if (option) {
           current[slot] = option.id;
+          this.pipelineSelections[path] = {
+            slot,
+            type: 'compressor',
+            selected: option.id,
+          };
         } else {
           delete current[slot];
+          delete this.pipelineSelections[path];
         }
       }
       
@@ -291,9 +304,60 @@ export default {
       console.log('Updated configuration:', JSON.stringify(this.configurations, null, 2));
     },
 
+    buildLinearPipelineConfig() {
+      const pipeline = this.$refs.progressivePipeline;
+      if (!pipeline?.getOrderedModules) return null;
+
+      const orderedModules = pipeline.getOrderedModules();
+      const selectedStages = orderedModules
+        .map((module) => {
+          const selection = this.pipelineSelections[module.path];
+          if (!selection || selection.type !== 'compressor' || !selection.selected) return null;
+          return {
+            stageId: module.stageId,
+            module,
+            value: selection.selected,
+          };
+        })
+        .filter(Boolean);
+
+      if (!selectedStages.length) return null;
+
+      const prefix = this.compressorId;
+      const stages = selectedStages.map(stage => stage.value);
+      const connections = selectedStages
+        .slice(1)
+        .map((stage, idx) => `${stage.stageId} <- s${idx}:codes`);
+
+      return {
+        compressor_id: this.compressorId,
+        compressor_config: {
+          [`${prefix}:stages`]: stages,
+          [`${prefix}:connections`]: connections,
+        },
+        early_config: JSON.parse(JSON.stringify(this.configurations.early_config || {})),
+        module_api: {
+          type: 'linear',
+          stages: selectedStages.map(stage => ({
+            id: stage.stageId,
+            module: stage.value,
+            path: stage.module.path,
+          })),
+          connections,
+        },
+      };
+    },
+
     saveConfiguration() {
-      // Emit the current progressive composition config as-is
       const config = JSON.parse(JSON.stringify(this.configurations));
+      if (this.isPipelineView) {
+        const normalized = this.buildLinearPipelineConfig();
+        if (normalized) {
+          normalized.legacy_config = config;
+          this.$emit('save-configuration', normalized);
+          return;
+        }
+      }
       this.$emit('save-configuration', config);
     },
 
@@ -313,6 +377,7 @@ export default {
       this.treeRoot = null;
       this.activeEditingNode = null;
       this.isTreeDisabled = false;
+      this.pipelineSelections = {};
       this.getHighLevelOptions();
     },
   },
@@ -350,6 +415,7 @@ export default {
       <template v-else>
         <ProgressivePipeline
           v-if="treeRoot"
+          ref="progressivePipeline"
           :tree-root="treeRoot"
           :option-types="optionTypes"
           :disabled="isTreeDisabled"

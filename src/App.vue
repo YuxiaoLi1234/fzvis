@@ -24,6 +24,8 @@ export default {
   data() {
     return {
       isAuthenticated: false,
+      passcodeRequired: true,
+      authStatusLoaded: false,
       passcode: '',
       authError: '',
       isAuthenticating: false,
@@ -36,28 +38,44 @@ export default {
     axios.interceptors.response.use(
       (response) => response,
       (error) => {
-        if (error.response && error.response.status === 401) {
+        if (error.response && error.response.status === 401 && this.passcodeRequired) {
           this.logout();
         }
         return Promise.reject(error);
       }
     );
 
-    const token = localStorage.getItem("fzvis_token");
-    if (token) {
-      axios.defaults.headers.common['Authorization'] = `Bearer ${token}`;
-      // Verify token validity
-      axios.get('/api/verify')
-        .then(() => {
-          this.isAuthenticated = true;
-        })
-        .catch(() => {
-          // If verification fails, the interceptor will handle logout
-        });
-    }
+    this.initializeAuth();
   },
 
   methods: {
+    async initializeAuth() {
+      try {
+        const { data } = await axios.get('/api/auth-status');
+        this.passcodeRequired = Boolean(data.passcodeRequired);
+
+        if (!this.passcodeRequired) {
+          this.isAuthenticated = true;
+          localStorage.removeItem('fzvis_token');
+          delete axios.defaults.headers.common['Authorization'];
+          return;
+        }
+
+        const token = localStorage.getItem("fzvis_token");
+        if (!token) {
+          return;
+        }
+
+        axios.defaults.headers.common['Authorization'] = `Bearer ${token}`;
+        await axios.get('/api/verify');
+        this.isAuthenticated = true;
+      } catch (_err) {
+        this.isAuthenticated = false;
+      } finally {
+        this.authStatusLoaded = true;
+      }
+    },
+
     logout() {
       this.isAuthenticated = false;
       this.passcode = '';
@@ -119,7 +137,7 @@ export default {
 <template>
   <div class="d-flex flex-column vh-100 overflow-hidden">
     <!-- Bootstrap Modal for Passcode -->
-    <div v-if="!isAuthenticated" class="modal show d-block" tabindex="-1" role="dialog">
+    <div v-if="authStatusLoaded && passcodeRequired && !isAuthenticated" class="modal show d-block" tabindex="-1" role="dialog">
       <div class="modal-dialog modal-dialog-centered" role="document">
         <div class="modal-content">
           <div class="modal-header">
@@ -150,7 +168,7 @@ export default {
       </div>
     </div>
 
-    <div v-else class="d-flex flex-column vh-100 overflow-hidden pt-2 px-3">
+    <div v-else-if="authStatusLoaded" class="d-flex flex-column vh-100 overflow-hidden pt-2 px-3">
       <AppHeader />
 
       <div class="d-flex flex-grow-1 overflow-hidden mb-3 position-relative">

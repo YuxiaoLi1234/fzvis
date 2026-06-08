@@ -1,5 +1,4 @@
 import numpy as np
-import msz
 import threading
 import signal
 import logging
@@ -7,10 +6,39 @@ import traceback
 import tempfile
 import shutil
 from pathlib import Path
-from ffcz_correction import sweep_ffcz_frequency_bounds
+
+try:
+    import msz
+    MSZ_IMPORT_ERROR = None
+except Exception as exc:  # Optional dependency: keep unrelated metrics available.
+    msz = None
+    MSZ_IMPORT_ERROR = exc
+
+try:
+    from ffcz_correction import sweep_ffcz_frequency_bounds
+    FFCZ_IMPORT_ERROR = None
+except Exception as exc:  # Optional helper/binary integration.
+    sweep_ffcz_frequency_bounds = None
+    FFCZ_IMPORT_ERROR = exc
 
 # Configure logger for this module
 logger = logging.getLogger(__name__)
+
+def _optional_dependency_message(feature, dependency, error):
+    detail = f": {error}" if error else ""
+    return f"{feature} is disabled because optional dependency '{dependency}' is not available{detail}."
+
+
+def _optional_dependency_error(feature, dependency, error):
+    return {'error': _optional_dependency_message(feature, dependency, error)}
+
+
+def _optional_dependency_text(feature, dependency, error):
+    return {
+        'type': 'text',
+        'content': _optional_dependency_message(feature, dependency, error)
+    }
+
 
 def safe_handler(handler_func):
     """
@@ -31,6 +59,8 @@ def safe_handler(handler_func):
 
 def _get_msz_accelerator(config):
     """Helper to map accelerator string from config to msz constant."""
+    if msz is None:
+        raise RuntimeError(_optional_dependency_message('MSz functionality', 'msz', MSZ_IMPORT_ERROR))
     if not isinstance(config, dict):
         return msz.ACCELERATOR_NONE
     
@@ -498,6 +528,9 @@ def compute_dssim(data_array, parameters):
 
 def compute_critical_points(data_array, parameters):
     """Compute critical points (minima/maxima) for a single dataset using MSZ."""
+    if msz is None:
+        return _optional_dependency_text('Critical point extraction', 'msz', MSZ_IMPORT_ERROR)
+
     def _flatten_segmentation_field(field):
         if field is None:
             return None
@@ -782,6 +815,9 @@ def compute_critical_points_faults(data_array, parameters):
     Compute critical point faults using MSZ.
     Can be called as a standalone handler or helper.
     """
+    if msz is None:
+        return _optional_dependency_error('Critical point fault computation', 'msz', MSZ_IMPORT_ERROR)
+
     # If parameters is Actually a numpy array, it means this was called as a helper
     if isinstance(parameters, np.ndarray):
         original = data_array
@@ -868,6 +904,9 @@ def apply_critical_points_correction(original, decompressed, parameters):
     Apply topology-preserving correction to decompressed data using MSz.
     Uses derive_edits followed by apply_edits.
     """
+    if msz is None:
+        return _optional_dependency_error('Critical point correction', 'msz', MSZ_IMPORT_ERROR)
+
     try:
         config = parameters.get('config', {})
         dims = parameters.get('dimensions') or parameters.get('metadata', {}).get('dimensions')
@@ -1050,6 +1089,9 @@ def apply_ffcz_correction(original, decompressed, parameters):
     Returns:
         Dict with sweep results, metrics, and file sizes
     """
+    if sweep_ffcz_frequency_bounds is None:
+        return _optional_dependency_error('FFCz correction', 'ffcz_correction', FFCZ_IMPORT_ERROR)
+
     try:
         config = parameters.get('config', {})
         metadata = parameters.get('metadata', {})

@@ -268,7 +268,7 @@ export class CorrectionNode extends BaseNode {
 
     // Map correction IDs to their respective components
     const componentMap = {
-      'critical_points': 'CriticalPointsPreservation',
+      'morse_smale_correction': 'CriticalPointsPreservation',
       'ffcz_correction': 'FFCzCorrection',
     };
     this.editorComponent = componentMap[correctionId] || null;

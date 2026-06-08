@@ -8,6 +8,7 @@ import DataThresholdMask from '../filter/DataThresholdMask.vue';
 import DataNormalization from '../filter/DataNormalization.vue';
 import SZ3Pipeline from '../compressor/SZ3Pipeline.vue';
 import ZFPConfig from '../compressor/ZFPConfig.vue';
+import BaseCompressionModule from '../module/BaseCompressionModule.vue';
 import CriticalPointsCorrection from '../correction/CriticalPointsCorrection.vue';
 import FFCzCorrection from '../correction/FFCzCorrection.vue';
 import { Splitpanes, Pane } from 'splitpanes';
@@ -23,6 +24,7 @@ export default {
     DataNormalization,
     SZ3Pipeline,
     ZFPConfig,
+    BaseCompressionModule,
     CriticalPointsCorrection,
     Splitpanes,
     Pane,
@@ -54,30 +56,29 @@ export default {
       ],
       // Modules imported from PipelineBrowser definitions
       availableModules: [
-        // Example: Add more modules with different configurations
         {
-          id: 'merger',
-          label: 'Data Merger',
-          description: 'Merges three data streams into one.',
-          icon: 'bi-bezier2',
-          inputCount: 2,
+          id: 'lorenzo',
+          label: 'Lorenzo Predictor',
+          description: 'Predictive stage that generates compact code streams and optional outlier paths.',
+          icon: 'bi-activity',
+          inputCount: 1,
           outputCount: 1,
         },
         {
-          id: 'splitter',
-          label: 'Data Splitter',
-          description: 'Splits one data stream into two.',
-          icon: 'bi-diagram-3',
+          id: 'diff',
+          label: 'Diff Encoder',
+          description: 'Difference-codes a stage output stream for lower-entropy transport.',
+          icon: 'bi-distribute-vertical',
           inputCount: 1,
-          outputCount: 2,
+          outputCount: 1,
         },
         {
-          id: 'testing',
-          label: 'Testing Module',
-          description: 'A simple testing module that accepts two inputs and generates two outputs.',
-          icon: 'bi-puzzle',
-          inputCount: 2,
-          outputCount: 2,
+          id: 'passthrough',
+          label: 'Passthrough',
+          description: 'Carries auxiliary streams such as outlier errors without transforming values.',
+          icon: 'bi-arrow-left-right',
+          inputCount: 1,
+          outputCount: 1,
         },
       ],
       availableCompressors: [
@@ -98,8 +99,8 @@ export default {
       ],
       availableCorrections: [
         {
-          id: 'critical_points',
-          label: 'Critical Points Correction',
+          id: 'morse_smale_correction',
+          label: 'Morse-Smale Segmentation Correction',
           description: 'Apply fixes to correct critical points in the compressed data',
           icon: 'bi-bullseye',
         },
@@ -558,8 +559,11 @@ export default {
         else if (defId === 'zfp') node.editorComponent = markRaw(ZFPConfig);
         else node.editorComponent = null;
         node.status = 'pending';
+      } else if (type === 'module') {
+        node.editorComponent = markRaw(BaseCompressionModule);
+        node.status = 'pending';
       } else if (type === 'correction') {
-        if (defId === 'critical_points') node.editorComponent = markRaw(CriticalPointsCorrection);
+        if (defId === 'morse_smale_correction') node.editorComponent = markRaw(CriticalPointsCorrection);
         else if (defId === 'ffcz_correction') node.editorComponent = markRaw(FFCzCorrection);
         else node.editorComponent = null;
         node.status = 'pending';
@@ -1610,43 +1614,28 @@ export default {
 
       if (rect) {
         minWidth = Math.max(400, rect.width - 15);
-        if (this.selectedNode) {
-          minHeight = Math.max(400, rect.height * 0.6);
-        } else {
-          minHeight = Math.max(400, rect.height - 60);
-        }
+        minHeight = Math.max(400, rect.height - 60);
       }
 
-      // Calculate required canvas size based on node positions
+      // Calculate required canvas size based on rendered node bounds when available.
       let maxX = minWidth;
       let maxY = minHeight;
+      const footerReserve = this.nodes.length ? 44 : 0;
+      const canvasEl = this.$refs.canvas;
+      const renderedNodes = canvasEl
+        ? Array.from(canvasEl.querySelectorAll('[data-node-id]'))
+        : [];
+      const measuredNodes = new Map(
+        renderedNodes.map((el) => [el.dataset.nodeId, { width: el.offsetWidth, height: el.offsetHeight }])
+      );
 
       this.nodes.forEach(node => {
-        // Calculate dynamic node width based on type and state
-        let nodeWidth = 420; // default max node width from CSS
+        const measured = measuredNodes.get(node.id);
+        const nodeWidth = measured?.width || 420;
+        const nodeHeight = measured?.height || 220;
 
-        if (node.type === 'compressor' && node.modules && node.modules.length) {
-          // Compressor nodes are narrower when collapsed
-          nodeWidth = node.expanded ? 420 : 350;
-        }
-
-        // Calculate dynamic node height based on type and state
-        let nodeHeight = 200; // base height
-
-        if (node.type === 'compressor' && node.expanded && node.modules && node.modules.length) {
-          // Each module box is ~60px
-          // Add instruction text (~30px) and pipeline container padding (~20px)
-          const moduleCount = node.modules.length;
-          const moduleHeight = moduleCount * 60 + (moduleCount - 1) * 6; // 6px margin between modules
-          nodeHeight = 150 + moduleHeight + 50; // base content + modules + padding
-        } else if (node.type === 'compressor' && node.modules && node.modules.length) {
-          // Collapsed view with module list
-          const moduleCount = node.modules.length;
-          nodeHeight = 180 + (moduleCount * 20); // base + list items
-        }
-
-        const rightEdge = (node.x || 0) + nodeWidth + 50; // 50px padding
-        const bottomEdge = (node.y || 0) + nodeHeight + 50; // 50px padding
+        const rightEdge = (node.x || 0) + nodeWidth + 50;
+        const bottomEdge = (node.y || 0) + nodeHeight + 50 + footerReserve;
 
         if (rightEdge > maxX) maxX = rightEdge;
         if (bottomEdge > maxY) maxY = bottomEdge;
@@ -1660,6 +1649,131 @@ export default {
       const date = new Date(timestamp);
       return date.toLocaleString();
     },
+    getWorkflowDefinition(type, definitionId) {
+      if (!definitionId) return null;
+      const registries = {
+        filter: this.availableFilters,
+        module: this.availableModules,
+        compressor: this.availableCompressors,
+        correction: this.availableCorrections,
+      };
+      return registries[type]?.find(def => def.id === definitionId) || null;
+    },
+    getWorkflowNodeDefaults(type, definitionId) {
+      const definition = this.getWorkflowDefinition(type, definitionId);
+      const fallback = {
+        source: { label: 'Data Source', icon: 'bi-database' },
+        filter: { label: 'Filter', icon: 'bi-funnel' },
+        module: { label: 'Module', icon: 'bi-puzzle' },
+        compressor: { label: 'Compressor', icon: 'bi-cpu', architecture: 'parametric' },
+        correction: { label: 'Correction', icon: 'bi-gear' },
+      }[type] || { label: 'Node', icon: 'bi-box' };
+
+      return {
+        ...fallback,
+        ...(definition || {}),
+      };
+    },
+    stripWorkflowMetadata(value) {
+      if (Array.isArray(value)) {
+        return value.map(item => this.stripWorkflowMetadata(item));
+      }
+      if (!value || typeof value !== 'object') {
+        return value;
+      }
+
+      return Object.entries(value).reduce((acc, [key, entry]) => {
+        if (['timestamp', 'createdAt', 'updatedAt', 'lastUpdatedAt'].includes(key)) {
+          return acc;
+        }
+        acc[key] = this.stripWorkflowMetadata(entry);
+        return acc;
+      }, {});
+    },
+    hasWorkflowValue(value) {
+      if (Array.isArray(value)) return value.length > 0;
+      if (!value || typeof value !== 'object') return value !== undefined && value !== null;
+      return Object.keys(value).length > 0;
+    },
+    serializeWorkflowNode(node) {
+      const definition = node.definitionId || node.compressorId || null;
+      const defaults = this.getWorkflowNodeDefaults(node.type, definition);
+      const data = {
+        id: node.id,
+        type: node.type,
+      };
+
+      if (definition) data.definition = definition;
+      if (node.label && node.label !== defaults.label) data.label = node.label;
+      if (Number.isFinite(node.x) || Number.isFinite(node.y)) {
+        data.position = {
+          x: Number.isFinite(node.x) ? Math.round(node.x) : 0,
+          y: Number.isFinite(node.y) ? Math.round(node.y) : 0,
+        };
+      }
+      if (this.hasWorkflowValue(node.config)) {
+        data.config = this.stripWorkflowMetadata(node.config);
+      }
+      if (node.type === 'compressor') {
+        const architecture = node.architecture || defaults.architecture;
+        if (architecture && architecture !== defaults.architecture) data.architecture = architecture;
+        if (this.hasWorkflowValue(node.modules)) {
+          data.modules = this.stripWorkflowMetadata(node.modules);
+        }
+      }
+
+      return data;
+    },
+    normalizeWorkflowEndpoint(endpoint, defaultPortId) {
+      if (typeof endpoint === 'string') {
+        return { nodeId: endpoint, portId: defaultPortId };
+      }
+      return {
+        nodeId: endpoint?.nodeId || endpoint?.node || endpoint?.id,
+        portId: endpoint?.portId || endpoint?.port || defaultPortId,
+      };
+    },
+    normalizeWorkflowEdge(edge) {
+      if (Array.isArray(edge)) {
+        return {
+          from: this.normalizeWorkflowEndpoint(edge[0], 'out-0'),
+          to: this.normalizeWorkflowEndpoint(edge[1], 'in-0'),
+        };
+      }
+      return {
+        from: this.normalizeWorkflowEndpoint(edge?.from, 'out-0'),
+        to: this.normalizeWorkflowEndpoint(edge?.to, 'in-0'),
+      };
+    },
+    applyWorkflowEditorComponent(node, definitionId) {
+      if (node.type === 'source') {
+        node.editorComponent = markRaw(InputDataset);
+      } else if (node.type === 'filter') {
+        if (definitionId === 'clipping') node.editorComponent = markRaw(DataClipping);
+        else if (definitionId === 'threshold_mask') node.editorComponent = markRaw(DataThresholdMask);
+        else if (definitionId === 'normalization') node.editorComponent = markRaw(DataNormalization);
+        else node.editorComponent = null;
+      } else if (node.type === 'compressor') {
+        if (definitionId === 'sz3') node.editorComponent = markRaw(SZ3Pipeline);
+        else if (definitionId === 'zfp') node.editorComponent = markRaw(ZFPConfig);
+        else node.editorComponent = null;
+      } else if (node.type === 'module') {
+        node.editorComponent = markRaw(BaseCompressionModule);
+      } else if (node.type === 'correction') {
+        if (definitionId === 'morse_smale_correction') node.editorComponent = markRaw(CriticalPointsCorrection);
+        else if (definitionId === 'ffcz_correction') node.editorComponent = markRaw(FFCzCorrection);
+        else node.editorComponent = null;
+      }
+    },
+    recalculateWorkflowCounters() {
+      const counters = { source: 0, filter: 0, module: 0, compressor: 0, correction: 0 };
+      this.nodes.forEach(node => {
+        if (!(node.type in counters)) return;
+        const match = String(node.id || '').match(/-(\d+)$/);
+        counters[node.type] = Math.max(counters[node.type], match ? Number(match[1]) : counters[node.type] + 1);
+      });
+      this.counters = counters;
+    },
     describeModuleSelection(module) {
       if (!module || !module.value || !Object.keys(module.value).length) {
         return 'Not configured';
@@ -1669,66 +1783,35 @@ export default {
     },
 
     /**
-     * Export the entire workflow graph to a JSON file
+     * Export the workflow graph as compact, LLM-friendly JSON.
      */
     exportWorkflow() {
       try {
-        // Serialize nodes - exclude runtime-only properties
-        const serializedNodes = this.nodes.map(node => ({
-          id: node.id,
-          label: node.label,
-          icon: node.icon,
-          type: node.type,
-          x: node.x,
-          y: node.y,
-          inputCount: node.inputCount,
-          outputCount: node.outputCount,
-          config: node.config,
-          editorComponent: node.editorComponent,
-          // Compressor-specific properties
-          ...(node.type === 'compressor' && {
-            compressorId: node.compressorId,
-            definitionId: node.definitionId,
-            architecture: node.architecture,
-            expanded: node.expanded,
-            modules: node.modules,
-            selectedModuleIdx: node.selectedModuleIdx,
-          }),
-          // Filter-specific properties
-          ...(node.type === 'filter' && {
-            definitionId: node.definitionId,
-          }),
-          // Correction-specific properties
-          ...(node.type === 'correction' && {
-            definitionId: node.definitionId,
-          }),
-          // Module-specific properties
-          ...(node.type === 'module' && {
-            definitionId: node.definitionId,
-          }),
-          // Store description if present
-          ...(node.description && { description: node.description }),
-        }));
-
-        // Serialize edges
+        const serializedNodes = this.nodes.map(node => this.serializeWorkflowNode(node));
         const serializedEdges = this.edges.map(edge => ({
-          from: { nodeId: edge.from.nodeId, portId: edge.from.portId },
-          to: { nodeId: edge.to.nodeId, portId: edge.to.portId },
+          from: edge.from.portId === 'out-0'
+            ? edge.from.nodeId
+            : { node: edge.from.nodeId, port: edge.from.portId },
+          to: edge.to.portId === 'in-0'
+            ? edge.to.nodeId
+            : { node: edge.to.nodeId, port: edge.to.portId },
         }));
+        const baseConfigurations = this.stripWorkflowMetadata({ ...this.baseConfigurations });
+        const derivedConfigurations = this.stripWorkflowMetadata({ ...this.derivedConfigurations });
+        const hasConfigurations = this.hasWorkflowValue(baseConfigurations) || this.hasWorkflowValue(derivedConfigurations);
 
-        // Create the export object
         const workflowData = {
-          version: '1.0',
-          timestamp: new Date().toISOString(),
+          version: '1.1',
           nodes: serializedNodes,
           edges: serializedEdges,
-          counters: { ...this.counters },
-          // Include Config Graph data
-          baseConfigurations: { ...this.baseConfigurations },
-          derivedConfigurations: { ...this.derivedConfigurations },
+          ...(hasConfigurations && {
+            configurations: {
+              base: baseConfigurations,
+              derived: derivedConfigurations,
+            },
+          }),
         };
 
-        // Convert to JSON and download
         const json = JSON.stringify(workflowData, null, 2);
         const blob = new Blob([json], { type: 'application/json' });
         const url = URL.createObjectURL(blob);
@@ -1770,7 +1853,7 @@ export default {
           const workflowData = JSON.parse(text);
 
           // Validate the workflow data
-          if (!workflowData.version || !workflowData.nodes || !workflowData.edges) {
+          if (!Array.isArray(workflowData.nodes) || !Array.isArray(workflowData.edges)) {
             throw new Error('Invalid workflow file format');
           }
 
@@ -1786,37 +1869,41 @@ export default {
 
           // Recreate nodes using NodeFactory
           workflowData.nodes.forEach(nodeData => {
+            const definitionId = nodeData.definition || nodeData.definitionId || nodeData.compressorId || null;
+            const defaults = this.getWorkflowNodeDefaults(nodeData.type, definitionId);
+            const position = nodeData.position || {};
+            const nodeConfig = nodeData.config || {};
             const node = NodeFactory.createNode(
               nodeData.type,
               nodeData.id,
-              nodeData.label,
-              nodeData.icon,
-              nodeData.definitionId || nodeData.compressorId,
+              nodeData.label || defaults.label,
+              nodeData.icon || defaults.icon,
+              definitionId,
               {
-                inputCount: nodeData.inputCount,
-                outputCount: nodeData.outputCount,
-                architecture: nodeData.architecture,
+                inputCount: nodeData.inputCount || nodeData.input_count || defaults.inputCount,
+                outputCount: nodeData.outputCount || nodeData.output_count || defaults.outputCount,
+                architecture: nodeData.architecture || nodeConfig.architecture || defaults.architecture,
               }
             );
 
             // Restore position
-            node.x = nodeData.x || 0;
-            node.y = nodeData.y || 0;
+            node.x = position.x ?? nodeData.x ?? 0;
+            node.y = position.y ?? nodeData.y ?? 0;
 
             // Restore config
-            node.config = nodeData.config || {};
+            node.config = nodeConfig;
 
             // Restore compressor-specific properties
             if (nodeData.type === 'compressor') {
               node.expanded = nodeData.expanded || false;
               node.modules = nodeData.modules || [];
               node.selectedModuleIdx = nodeData.selectedModuleIdx || null;
-              node.definitionId = nodeData.definitionId || nodeData.compressorId;
+              node.definitionId = definitionId;
             }
 
             // Restore filter/correction/module definition IDs
-            if (nodeData.definitionId) {
-              node.definitionId = nodeData.definitionId;
+            if (definitionId) {
+              node.definitionId = definitionId;
             }
 
             // Restore description
@@ -1825,8 +1912,10 @@ export default {
             }
 
             // Restore editor component
-            if (nodeData.editorComponent) {
+            if (nodeData.editorComponent && typeof nodeData.editorComponent === 'string') {
               node.editorComponent = nodeData.editorComponent;
+            } else {
+              this.applyWorkflowEditorComponent(node, definitionId);
             }
 
             // Set initial status based on node type
@@ -1841,26 +1930,31 @@ export default {
 
           // Restore edges
           workflowData.edges.forEach(edgeData => {
-            this.edges.push({
-              from: { nodeId: edgeData.from.nodeId, portId: edgeData.from.portId },
-              to: { nodeId: edgeData.to.nodeId, portId: edgeData.to.portId },
-            });
+            const edge = this.normalizeWorkflowEdge(edgeData);
+            if (edge.from.nodeId && edge.to.nodeId) {
+              this.edges.push(edge);
+            }
           });
+          if (!workflowData.counters) {
+            this.recalculateWorkflowCounters();
+          }
 
           // Restore Config Graph data
-          if (workflowData.baseConfigurations) {
+          const baseConfigurations = workflowData.baseConfigurations || workflowData.configurations?.base;
+          const derivedConfigurations = workflowData.derivedConfigurations || workflowData.configurations?.derived;
+          if (baseConfigurations) {
             // Clear existing configurations
             this.$store.state.baseConfigurations = {};
             this.$store.state.derivedConfigurations = {};
 
             // Restore base configurations
-            Object.entries(workflowData.baseConfigurations).forEach(([name, config]) => {
+            Object.entries(baseConfigurations).forEach(([name, config]) => {
               this.$store.commit('addBaseConfiguration', { name, config });
             });
 
             // Restore derived configurations
-            if (workflowData.derivedConfigurations) {
-              Object.entries(workflowData.derivedConfigurations).forEach(([baseName, derivedMap]) => {
+            if (derivedConfigurations) {
+              Object.entries(derivedConfigurations).forEach(([baseName, derivedMap]) => {
                 Object.entries(derivedMap).forEach(([derivedName, config]) => {
                   this.$store.commit('addDerivedConfiguration', { baseName, derivedName, config });
                 });
@@ -1873,7 +1967,7 @@ export default {
             this.updateCanvasSize();
           });
 
-          const configCount = Object.keys(workflowData.baseConfigurations || {}).length;
+          const configCount = Object.keys(baseConfigurations || {}).length;
           const configMsg = configCount > 0 ? ` and ${configCount} base configuration(s)` : '';
           this.$store.commit('setStatus', {
             type: 'success',
@@ -2086,6 +2180,9 @@ export default {
                   <component
                     :is="selectedNode.editorComponent"
                     :key="selectedNode.id"
+                    :node-id="selectedNode.id"
+                    :module-definition="availableModules.find(m => m.id === selectedNode.definitionId) || {}"
+                    :node-config="selectedNode.config || {}"
                     @config-change="onNodeConfigChange"
                   />
                 </keep-alive>
@@ -2223,8 +2320,6 @@ export default {
               </button>
             </template>
 
-            <!--
-            Compression Modules (future integration)
             <div
               class="list-group-item bg-light fw-semibold d-flex justify-content-between align-items-center cursor-pointer"
               @click="paletteState.modules = !paletteState.modules"
@@ -2260,7 +2355,6 @@ export default {
                 <i class="bi bi-arrows-move text-muted" aria-hidden="true" title="Drag to canvas"></i>
               </button>
             </template>
-            -->
 
             <!-- Compressor Configs -->
             <div
@@ -2341,7 +2435,7 @@ export default {
 
       <!-- Right: Data Flow Graph area -->
       <Pane ref="graphPane" :size="70" min-size="40" class="h-100 overflow-auto">
-        <div class="work-area d-flex flex-column h-100">
+        <div class="work-area d-flex flex-column">
           <div
             class="card shadow-sm canvas d-flex flex-column graph-card"
             :style="{ width: canvasSize.width + 'px' }"
@@ -2375,7 +2469,7 @@ export default {
             </div>
             <div
               ref="canvas"
-              class="card-body p-0 position-relative flex-grow-1"
+              class="card-body p-0 position-relative"
               @click="clearSelection"
               :style="{ height: canvasSize.height + 'px' }"
             >
@@ -2605,14 +2699,15 @@ export default {
 }
 
 .work-area {
-  min-height: 0; /* allow children to shrink and scroll inside */
+  min-height: 100%;
   display: flex;
   flex-direction: column;
 }
 
 .graph-card {
-  flex: 1 1 auto;
-  min-height: 0;
+  flex: 0 0 auto;
+  min-height: fit-content;
+  align-self: flex-start;
 }
 
 .df-node {
@@ -2620,7 +2715,7 @@ export default {
   display: inline-block;
   width: auto; /* allow node to expand to fit content */
   min-width: 180px;
-  max-width: 420px; /* cap width to avoid overly wide nodes */
+  max-width: 400px; /* cap width to avoid overly wide nodes */
   cursor: move;
   user-select: none;
 }
@@ -2700,7 +2795,7 @@ export default {
 
 /* Expandable Module Pipeline Styles */
 .compressor-expanded {
-  max-width: 520px !important; /* Allow more width when expanded */
+  max-width: 500px !important; /* Allow more width when expanded */
 }
 
 .module-pipeline {

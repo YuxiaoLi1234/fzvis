@@ -444,9 +444,17 @@ app = Flask(__name__)
 app.config['SECRET_KEY'] = os.getenv('FLASK_SECRET_KEY', 'default_secret_key')
 CORS(app)
 
+
+def is_passcode_auth_enabled():
+    return bool((os.getenv('FLASK_PASSCODE') or '').strip())
+
+
 def token_required(f):
     @wraps(f)
     def decorated(*args, **kwargs):
+        if not is_passcode_auth_enabled():
+            return f(*args, **kwargs)
+
         token = None
         if 'Authorization' in request.headers:
             token = request.headers['Authorization'].split(" ")[1]
@@ -483,11 +491,21 @@ def handle_unexpected_error(error):
     logger.error(traceback.format_exc())
     return jsonify({"error": "An unexpected error occurred", "message": str(error)}), 500
 
+@app.route("/api/auth-status", methods=["GET"])
+def auth_status():
+    return jsonify({"passcodeRequired": is_passcode_auth_enabled()}), 200
+
 @app.route("/api/login", methods=["POST"])
 def login():
-    data = request.get_json()
+    if not is_passcode_auth_enabled():
+        token = jwt.encode({
+            'exp': datetime.utcnow() + timedelta(hours=24)
+        }, app.config['SECRET_KEY'], algorithm="HS256")
+        return jsonify({'token': token})
+
+    data = request.get_json(silent=True) or {}
     passcode = data.get('passcode')
-    if passcode == os.getenv('FLASK_PASSCODE', 'default_passcode'):
+    if passcode == os.getenv('FLASK_PASSCODE'):
         token = jwt.encode({
             'exp': datetime.utcnow() + timedelta(hours=24)
         }, app.config['SECRET_KEY'], algorithm="HS256")

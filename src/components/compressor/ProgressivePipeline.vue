@@ -51,6 +51,24 @@ export default {
     },
   },
   methods: {
+    getOrderedModules() {
+      return this.modules.map((module, idx) => ({
+        ...module,
+        stageId: `s${idx}`,
+      }));
+    },
+    getStageSelections() {
+      return this.getOrderedModules()
+        .map((module) => {
+          const selected = this.moduleSelections[module.path]?.selected;
+          if (Array.isArray(selected) || !selected) return null;
+          return {
+            ...module,
+            selection: selected,
+          };
+        })
+        .filter(Boolean);
+    },
     selectModule(path) {
       this.selectedModulePath = (this.selectedModulePath === path) ? null : path;
     },
