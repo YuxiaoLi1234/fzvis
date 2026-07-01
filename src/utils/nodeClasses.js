@@ -300,6 +300,13 @@ export class CorrectionNode extends BaseNode {
       if (this.correctedKey && this.correctedKey !== this.id) {
         context.store.commit('removeComparisonData', this.correctedKey);
       }
+      if (Array.isArray(this.generatedComparisonIds)) {
+        this.generatedComparisonIds.forEach(resultId => {
+          if (resultId && resultId !== this.id && resultId !== this.correctedKey) {
+            context.store.commit('removeComparisonData', resultId);
+          }
+        });
+      }
     }
   }
 }

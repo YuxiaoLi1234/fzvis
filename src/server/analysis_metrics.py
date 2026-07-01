@@ -276,14 +276,25 @@ def compute_power_spectrum(data_array, parameters):
 def compute_histogram(data_array, parameters):
     """Compute histogram data for frontend visualization"""
     num_bins = parameters.get('bins', 50)
+    hist_range = parameters.get('histogram_range')
+    histogram_range = None
+    if isinstance(hist_range, (list, tuple)) and len(hist_range) == 2:
+        try:
+            hist_min = float(hist_range[0])
+            hist_max = float(hist_range[1])
+            if np.isfinite(hist_min) and np.isfinite(hist_max) and hist_min < hist_max:
+                histogram_range = (hist_min, hist_max)
+        except (TypeError, ValueError):
+            histogram_range = None
     
     flat_data = data_array.flatten()
     
     try:
-        counts, bin_edges = np.histogram(flat_data, bins=num_bins)
+        counts, bin_edges = np.histogram(flat_data, bins=num_bins, range=histogram_range)
     except (ValueError, IndexError) as e:
         logger.error(f"Histogram computation failed: {e}")
         logger.error(f"Data range: [{np.min(flat_data)}, {np.max(flat_data)}]")
+        logger.error(f"Requested histogram range: {histogram_range}")
         logger.error(f"Data contains inf: {np.isinf(flat_data).any()}")
         logger.error(f"Data contains nan: {np.isnan(flat_data).any()}")
         logger.error(f"First 10 values: {flat_data[:10]}")
@@ -1218,6 +1229,7 @@ def apply_ffcz_correction(original, decompressed, parameters):
                 # Add metrics with FFCz: prefix
                 if row.get('freq_bound') is not None:
                     result['metrics']['FFCz:frequency_error_bound'] = row['freq_bound']
+                    result['metrics']['error_bound'] = row['freq_bound']
                 if row.get('mae') is not None:
                     result['metrics']['FFCz:MAE'] = row['mae']
                 if row.get('mse') is not None:
@@ -1248,6 +1260,16 @@ def apply_ffcz_correction(original, decompressed, parameters):
                 # Add corrected data if available
                 if 'corrected_data' in row:
                     result['corrected_data'] = row['corrected_data']
+                if 'corrected_data_requested' in row:
+                    result['corrected_data_requested'] = row['corrected_data_requested']
+                if 'corrected_data_available' in row:
+                    result['corrected_data_available'] = row['corrected_data_available']
+                if 'corrected_data_changed' in row:
+                    result['corrected_data_changed'] = row['corrected_data_changed']
+                if 'corrected_data_max_abs_delta' in row:
+                    result['corrected_data_max_abs_delta'] = row['corrected_data_max_abs_delta']
+                if 'corrected_data_warning' in row:
+                    result['corrected_data_warning'] = row['corrected_data_warning']
 
                 formatted_results.append(result)
 

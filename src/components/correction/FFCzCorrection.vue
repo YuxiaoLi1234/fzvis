@@ -375,6 +375,19 @@ export default {
     getCorrectionStatus(id) {
       return this.variantResults[id] || null;
     },
+    resolveSz3ErrorBoundMode(cfg = {}) {
+      const mode = cfg['sz3:error_bound_mode_str'];
+      if (typeof mode === 'string' && mode.trim()) {
+        const normalized = mode.trim().toUpperCase();
+        if (['ABS', 'REL', 'PSNR'].includes(normalized)) {
+          return normalized;
+        }
+      }
+      if (cfg['sz3:rel_error_bound'] !== undefined) return 'REL';
+      if (cfg['sz3:psnr_error_bound'] !== undefined) return 'PSNR';
+      if (cfg['sz3:abs_error_bound'] !== undefined) return 'ABS';
+      return null;
+    },
     initializeVariantSpatialValue(id) {
       const v = this.allVariants.find(item => item.id === id);
       if (!v || !v.compressor_config) return;
@@ -383,10 +396,14 @@ export default {
       let eb = null;
 
       if (v.compressor_id === 'sz3') {
-        const mode = cfg['sz3:error_bound_mode_str'];
+        const mode = this.resolveSz3ErrorBoundMode(cfg);
+        if (mode) {
+          this.localConfig.spatial_mode = mode;
+        }
         if (mode === 'ABS' && cfg['sz3:abs_error_bound'] !== undefined) eb = Number(cfg['sz3:abs_error_bound']);
         else if (mode === 'REL' && cfg['sz3:rel_error_bound'] !== undefined) eb = Number(cfg['sz3:rel_error_bound']);
-        else eb = cfg['sz3:abs_error_bound'] || cfg['sz3:rel_error_bound'] || null;
+        else if (mode === 'PSNR' && cfg['sz3:psnr_error_bound'] !== undefined) eb = Number(cfg['sz3:psnr_error_bound']);
+        else eb = cfg['sz3:abs_error_bound'] || cfg['sz3:rel_error_bound'] || cfg['sz3:psnr_error_bound'] || null;
       } else if (v.compressor_id === 'zfp') {
         if (cfg['zfp:accuracy'] !== undefined) eb = Number(cfg['zfp:accuracy']);
       }
@@ -446,6 +463,7 @@ export default {
       this.status = 'running';
       this.statusMessage = `Running FFCz sweep for ${ids.length} selected variants...`;
 
+      const createdResultIds = [];
       for (const id of ids) {
         const variant = this.allVariants.find(v => v.id === id);
         if (!variant) {
@@ -466,6 +484,7 @@ export default {
             results.forEach((result) => {
               const resultId = `${id}-ffcz-${result.freq_bound}`;
               comparisonUpdates[resultId] = result;
+              createdResultIds.push(resultId);
             });
             this.$store.commit('setComparisonData', comparisonUpdates);
           } else {
@@ -486,7 +505,8 @@ export default {
       if (this.batchStatus.results.length > 0) {
         this.$emit('success', {
           nodeId: this.nodeId,
-          resultCount: this.batchStatus.results.length
+          resultCount: this.batchStatus.results.length,
+          resultIds: createdResultIds
         });
       }
     },
@@ -525,18 +545,46 @@ export default {
 
         // Transform results to match comparison data format
         const sweepResults = [];
+        const correctedDataWarnings = [];
+        const originalMeta = this.originalDataset?.meta || this.originalDataset?.dataset_meta || {};
+        const sourceMeta = dataset?.meta || dataset?.dataset_meta || {};
+        const resultDimensions = sourceMeta.dimensions || originalMeta.dimensions || this.originalDataset?.dimensions || dataset?.dimensions || null;
+        const resultPrecision = dataset?.precision || originalMeta.precision || sourceMeta.precision || this.originalDataset?.precision || null;
+        const resultEndianness = dataset?.endianness || originalMeta.endianness || sourceMeta.endianness || this.originalDataset?.endianness || 'little';
+        const resultNamePrefix = dataset?.name || variantId || dataset?.compressor_id || 'ffcz';
+
         for (const r of result.results) {
           const sweepResult = {
+            name: `${resultNamePrefix}-ffcz-${r.freq_bound}`,
+            type: 'raw',
             freq_bound: r.freq_bound,
             ffcz_bytes: r.ffcz_bytes,
             compression_ratio: r.compression_ratio,
             total_bytes: r.total_bytes,
+            dimensions: resultDimensions,
+            precision: resultPrecision,
+            endianness: resultEndianness,
+            meta: {
+              ...originalMeta,
+              ...sourceMeta,
+              dimensions: resultDimensions,
+              precision: resultPrecision,
+              endianness: resultEndianness,
+            },
+            dataset_meta: {
+              ...originalMeta,
+              ...sourceMeta,
+              dimensions: resultDimensions,
+              precision: resultPrecision,
+              endianness: resultEndianness,
+            },
             metrics: {
               ...(dataset.metrics || {}),
               ...(r.metrics || {})
             },
             compressor_id: dataset.compressor_id,
             compressor_config: dataset.compressor_config,
+            base_name: dataset.base_name || this.getConfigBaseId(),
             base_variant_id: variantId
           };
 
@@ -549,13 +597,26 @@ export default {
                 responseType: 'arraybuffer'
               }, {});
               sweepResult.decp_data = dataResp.data;
+              sweepResult.content = dataResp.data;
               sweepResult.data_key = r.data_key;
             } catch (err) {
-              console.warn(`Failed to fetch corrected data for freq_bound ${r.freq_bound}:`, err);
+              const warning = `Failed to fetch corrected data for freq_bound ${r.freq_bound}: ${err?.message || err}`;
+              sweepResult.corrected_data_warning = warning;
+              correctedDataWarnings.push(warning);
+              console.warn(warning);
             }
+          } else if (r.corrected_data_requested) {
+            const warning = r.corrected_data_warning || `FFCz did not return corrected data for freq_bound ${r.freq_bound}.`;
+            sweepResult.corrected_data_warning = warning;
+            correctedDataWarnings.push(warning);
           }
 
           sweepResults.push(sweepResult);
+        }
+
+        if (config.return_corrected_data && correctedDataWarnings.length > 0) {
+          this.status = 'error';
+          this.statusMessage = correctedDataWarnings[0];
         }
 
         return sweepResults;

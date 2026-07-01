@@ -62,6 +62,137 @@ def cleanup_ffcz_files(prefix: Path):
                 logger.warning(f"Failed to delete {path}: {e}")
 
 
+def _build_dim_args(dims: tuple):
+    dim_flag = f"-{len(dims)}"
+    return [dim_flag, *[str(v) for v in dims]]
+
+
+
+def _load_corrected_data(corrected_path: Path, dtype: str, dims: tuple, result: dict):
+    if corrected_path.exists():
+        print(f"[FFCz] corrected file exists: {corrected_path}")
+        try:
+            np_dtype = np.float32 if dtype == "float" else np.float64
+            corrected_data = np.fromfile(corrected_path, dtype=np_dtype)
+            expected_size = math.prod(dims)
+            if corrected_data.size == expected_size:
+                corrected_data = corrected_data.reshape(dims)
+                result["corrected_data"] = corrected_data
+                result["corrected_data_available"] = True
+                logger.info(
+                    f"Read corrected data: shape={corrected_data.shape}, dtype={corrected_data.dtype}"
+                )
+                print(f"[FFCz] loaded corrected data from: {corrected_path}")
+            else:
+                warning = (
+                    f"Corrected data size mismatch: got {corrected_data.size}, expected {expected_size}"
+                )
+                result["corrected_data_warning"] = warning
+                logger.warning(warning)
+
+            corrected_path.unlink()
+            print(f"[FFCz] removed corrected file: {corrected_path}")
+        except Exception as e:
+            warning = f"Failed to read corrected data from {corrected_path}: {e}"
+            result["corrected_data_warning"] = warning
+            logger.warning(warning)
+    else:
+        warning = f"Corrected data file not found: {corrected_path}"
+        result["corrected_data_warning"] = warning
+        logger.warning(warning)
+        print(f"[FFCz] missing corrected file: {corrected_path}")
+
+
+
+def _annotate_corrected_data(base_decomp_path: str, dtype: str, dims: tuple, result: dict):
+    corrected_data = result.get("corrected_data")
+    if corrected_data is None:
+        return
+
+    try:
+        np_dtype = np.float32 if dtype == "float" else np.float64
+        base_data = np.fromfile(base_decomp_path, dtype=np_dtype)
+        expected_size = math.prod(dims)
+        if base_data.size != expected_size:
+            warning = (
+                f"Base decompressed data size mismatch during corrected-data verification: "
+                f"got {base_data.size}, expected {expected_size}"
+            )
+            result["corrected_data_warning"] = warning
+            logger.warning(warning)
+            return
+
+        base_data = base_data.reshape(dims)
+        max_abs_delta = float(np.max(np.abs(corrected_data - base_data))) if corrected_data.size else 0.0
+        changed = not np.array_equal(corrected_data, base_data)
+        result["corrected_data_changed"] = changed
+        result["corrected_data_max_abs_delta"] = max_abs_delta
+
+        if not changed:
+            warning = (
+                "FFCz produced no effective edits for this frequency bound; "
+                "corrected data is identical to the base decompressed data."
+            )
+            result["corrected_data_warning"] = warning
+            logger.info(warning)
+            print("[FFCz] corrected data unchanged from base decompressed data")
+        else:
+            logger.info(f"FFCz corrected data differs from base decompressed data (max abs delta={max_abs_delta})")
+            print(f"[FFCz] corrected data differs from base decompressed data (max abs delta={max_abs_delta})")
+    except Exception as e:
+        warning = f"Failed to compare corrected data against base decompressed data: {e}"
+        result["corrected_data_warning"] = warning
+        logger.warning(warning)
+
+
+def _materialize_corrected_output(
+    ffcz_bin: str,
+    dtype: str,
+    base_decomp_path: str,
+    output_prefix: str,
+    dims: tuple,
+    spatial_mode: str,
+    spatial_value: float,
+    freq_mode: str,
+    freq_value: float,
+    corrected_output: str,
+    result: dict,
+):
+    corrected_path = Path(corrected_output)
+    print(f"[FFCz] corrected output path: {corrected_path}")
+    logger.info(f"FFCz will materialize corrected data at: {corrected_path}")
+
+    command = [
+        ffcz_bin,
+        "-f" if dtype == "float" else "-d",
+        "-e", base_decomp_path,
+        "-z", output_prefix,
+        *(_build_dim_args(dims)),
+        "-o", corrected_output,
+        "-M", spatial_mode, str(spatial_value),
+        "-F", freq_mode, str(freq_value),
+    ]
+    logger.info(f"Running FFCz decompression command: {' '.join(command)}")
+    completed = subprocess.run(command, capture_output=True, text=True, check=False)
+    result["corrected_stdout"] = completed.stdout
+    result["corrected_stderr"] = completed.stderr
+    if completed.returncode != 0:
+        warning = (
+            f"ffcz decompression failed with code {completed.returncode}; stderr: {completed.stderr.strip() or '(empty)'}"
+        )
+        result["corrected_data_warning"] = warning
+        logger.warning(warning)
+        return
+
+    logger.info(f"FFCz decompression stdout for corrected output:\n{completed.stdout}")
+    if completed.stderr:
+        logger.warning(f"FFCz decompression stderr: {completed.stderr}")
+
+    _load_corrected_data(corrected_path, dtype, dims, result)
+    _annotate_corrected_data(base_decomp_path, dtype, dims, result)
+
+
+
 def run_ffcz_once(
     ffcz_bin: str,
     dtype: str,
@@ -93,11 +224,7 @@ def run_ffcz_once(
     Returns:
         Dictionary containing metrics and file sizes
     """
-    dim_flag = f"-{len(dims)}"
-    corrected_output = None
-
-    if return_corrected_data:
-        corrected_output = f"{output_prefix}.corrected"
+    corrected_output = f"{output_prefix}.corrected" if return_corrected_data else None
 
     command = [
         ffcz_bin,
@@ -105,15 +232,10 @@ def run_ffcz_once(
         "-i", original_path,
         "-e", base_decomp_path,
         "-z", output_prefix,
-        dim_flag,
-        *[str(v) for v in dims],
+        *(_build_dim_args(dims)),
         "-M", spatial_mode, str(spatial_value),
         "-F", freq_mode, str(freq_value),
     ]
-
-    if corrected_output:
-        command.extend(["-o", corrected_output])
-        logger.info(f"FFCz will generate corrected data at: {corrected_output}")
 
     logger.info(f"Running FFCz command: {' '.join(command)}")
 
@@ -125,7 +247,6 @@ def run_ffcz_once(
             f"stderr:\n{completed.stderr}"
         )
 
-    # Log FFCz output for debugging
     logger.info(f"FFCz stdout for freq_bound={freq_value}:\n{completed.stdout}")
     if completed.stderr:
         logger.warning(f"FFCz stderr: {completed.stderr}")
@@ -147,33 +268,25 @@ def run_ffcz_once(
         "ssnr": parse_metric(completed.stdout, "SSNR"),
         "stdout": completed.stdout,
         "stderr": completed.stderr,
+        "corrected_data_requested": bool(return_corrected_data),
+        "corrected_data_available": False,
+        "corrected_data_changed": None,
     }
 
-    # Read corrected data if requested
     if return_corrected_data and corrected_output:
-        corrected_path = Path(corrected_output)
-        if corrected_path.exists():
-            try:
-                np_dtype = np.float32 if dtype == "float" else np.float64
-                corrected_data = np.fromfile(corrected_path, dtype=np_dtype)
-
-                # Reshape to match original dimensions
-                # dims are in file order (matching numpy shape), so reshape directly
-                expected_size = math.prod(dims)
-                if corrected_data.size == expected_size:
-                    # Reshape to match dims directly (already in correct order)
-                    corrected_data = corrected_data.reshape(dims)
-                    result["corrected_data"] = corrected_data
-                    logger.info(f"Read corrected data: shape={corrected_data.shape}, dtype={corrected_data.dtype}")
-                else:
-                    logger.warning(f"Corrected data size mismatch: got {corrected_data.size}, expected {expected_size}")
-
-                # Clean up the corrected file after reading
-                corrected_path.unlink()
-            except Exception as e:
-                logger.warning(f"Failed to read corrected data from {corrected_path}: {e}")
-        else:
-            logger.warning(f"Corrected data file not found: {corrected_path}")
+        _materialize_corrected_output(
+            ffcz_bin=ffcz_bin,
+            dtype=dtype,
+            base_decomp_path=base_decomp_path,
+            output_prefix=output_prefix,
+            dims=dims,
+            spatial_mode=spatial_mode,
+            spatial_value=spatial_value,
+            freq_mode=freq_mode,
+            freq_value=freq_value,
+            corrected_output=corrected_output,
+            result=result,
+        )
 
     return result
 

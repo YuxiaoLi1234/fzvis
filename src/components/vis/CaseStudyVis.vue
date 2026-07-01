@@ -7,7 +7,7 @@
           Load an SZ3 case-study export and inspect residuals, quantization, spatial slices, and runtime tradeoffs.
         </p>
       </div>
-      <span class="badge text-bg-light border">Safe root: <code>{{ caseStudyBaseDir || '~/.fzvis/case_studies' }}</code></span>
+      <!-- <span class="badge text-bg-light border">Safe root: <code>{{ caseStudyBaseDir || '~/.fzvis/case_studies' }}</code></span> -->
     </div>
 
     <div class="card shadow-sm mb-3">
@@ -17,7 +17,7 @@
             <label class="form-label">Available case studies</label>
             <select v-model="serverStudyPath" class="form-select">
               <option value="">Select from folder...</option>
-              <option v-for="path in availablePaths" :key="path" :value="path">{{ path }}</option>
+              <option v-for="path in availablePaths" :key="path" :value="path">{{ $maskDisplayPath(path) }}</option>
             </select>
           </div>
           <div class="col-xl-3">
@@ -938,9 +938,13 @@ export default {
       return delta >= 0 ? `+${numeric}` : numeric
     },
 
+
     notifyError(prefix, error) {
       const message = error?.response?.data?.error || error?.message || String(error)
-      this.$store.commit('setStatus', { type: 'danger', message: `${prefix}. ${message}` })
+      this.$store.commit('setStatus', {
+        type: 'danger',
+        message: `${prefix}. ${this.$maskDisplayPath(message)}`
+      })
     },
   },
 }

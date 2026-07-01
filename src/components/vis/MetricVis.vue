@@ -2,7 +2,7 @@
 import Plotly from 'plotly.js-dist-min';
 import * as d3 from "d3";
 import { mapState } from 'vuex';
-import { requestWithFallback } from '@/utils/datasetUtils';
+import { getDatasetMinMax, requestWithFallback } from '@/utils/datasetUtils';
 import Multiselect from 'vue-multiselect';
 
 export default {
@@ -107,7 +107,8 @@ export default {
     availableSources() {
       const sources = [{ id: 'original', name: 'Original Data' }];
       if (this.comparisonData) {
-        Object.keys(this.comparisonData).forEach(key => {
+        Object.entries(this.comparisonData).forEach(([key, item]) => {
+          if (!this.isAnalysisSourceUsable(item)) return;
           sources.push({ id: key, name: key });
         });
       }
@@ -150,6 +151,7 @@ export default {
       Object.entries(this.comparisonData).forEach(([sourceId, data]) => {
         if (!data?.metrics) return;
         Object.entries(data.metrics).forEach(([key, value]) => {
+          if (key === 'FFCz:frequency_error_bound' && data.metrics.error_bound !== undefined) return;
           const parts = key.split(':');
           let category = 'other';
           let metricName = key;
@@ -181,12 +183,17 @@ export default {
       return rows;
     },
     compressionMetricCategories() {
-      const cats = new Set(this.compressionMetricRows.map(r => r.category));
+      const cats = new Set(
+        this.compressionMetricRows
+          .map(r => r.category)
+          .filter(category => category !== 'other')
+      );
       return Array.from(cats).sort();
     },
     filteredCompressionRows() {
       const text = this.rawMetricFilterText.trim().toLowerCase();
       return this.compressionMetricRows.filter(row => {
+        if (row.category === 'other') return false;
         if (this.rawMetricCategory !== 'all' && row.category !== this.rawMetricCategory) return false;
         if (!text) return true;
         return (
@@ -319,6 +326,14 @@ export default {
     async computeDataKey() {
       return crypto.randomUUID();
     },
+    isAnalysisSourceUsable(source) {
+      if (!source || source.error) return false;
+      if (source.corrected_data_requested && source.corrected_data_available === false) return false;
+      if (source.data_key) return true;
+      if (source.content instanceof ArrayBuffer) return true;
+      if (source.decp_data instanceof ArrayBuffer) return true;
+      return false;
+    },
     // Analysis methods
     isMetricActive(metricId) {
       return this.activeMetrics.some(m => m.id === metricId);
@@ -369,6 +384,26 @@ export default {
         this.selectedSources = ['original', ...this.selectableSourceIds];
       }
     },
+    refreshAvailableSources() {
+      const availableIds = this.availableSources.map(source => source.id);
+      const nextSelected = this.selectedSources.filter(id => availableIds.includes(id));
+      if (!nextSelected.includes('original')) {
+        nextSelected.unshift('original');
+      }
+      this.selectedSources = nextSelected;
+      this.activeMetrics.forEach(metric => {
+        if (!metric.results) return;
+        Object.keys(metric.results).forEach(sourceId => {
+          if (sourceId !== 'original' && !availableIds.includes(sourceId)) {
+            delete metric.results[sourceId];
+          }
+        });
+      });
+      this.$store.commit('setStatus', {
+        type: 'info',
+        message: `Refreshed data sources (${Math.max(0, availableIds.length - 1)} comparison sources available).`
+      });
+    },
 
     clearAllMetrics() {
       this.activeMetrics = [];
@@ -410,6 +445,26 @@ export default {
           return 0;
         });
 
+        if (metric.id === 'histogram') {
+          const sharedRange = sortedSources
+            .map((sourceId) => {
+              if (sourceId === 'original') {
+                return getDatasetMinMax(this.dataset, this.dataset?.precision, this.dataset?.endianness);
+              }
+              const comp = this.comparisonData ? this.comparisonData[sourceId] : null;
+              if (!comp) return null;
+              return getDatasetMinMax(comp.decp_data || comp.content, comp.precision || this.dataset?.precision, comp.endianness || this.dataset?.endianness);
+            })
+            .filter(range => range && Number.isFinite(range.min) && Number.isFinite(range.max));
+
+          if (sharedRange.length) {
+            params.histogram_range = [
+              Math.min(...sharedRange.map(range => range.min)),
+              Math.max(...sharedRange.map(range => range.max)),
+            ];
+          }
+        }
+
         // Loop through selected sources
         for (const sourceId of sortedSources) {
           if (metric.id === 'dssim' && sourceId === 'original') {
@@ -443,7 +498,11 @@ export default {
             }
           }
 
-          if (!dataKey && currentDataset.content instanceof ArrayBuffer) {
+          const currentBinary = currentDataset?.content instanceof ArrayBuffer
+            ? currentDataset.content
+            : (currentDataset?.decp_data instanceof ArrayBuffer ? currentDataset.decp_data : null);
+
+          if (!dataKey && currentBinary instanceof ArrayBuffer) {
             dataKey = await this.computeDataKey();
             if (sourceId === 'original') {
               originalDataKey = dataKey; // Capture for others in this loop
@@ -451,9 +510,13 @@ export default {
                 dataset: { ...this.dataset, data_key: dataKey } 
               });
             } else {
-              // Update comparison data in store with data_key
+              // Update comparison data in store with data_key and preserve a content alias
               if (this.comparisonData && this.comparisonData[sourceId]) {
-                const newComp = { ...this.comparisonData[sourceId], data_key: dataKey };
+                const newComp = {
+                  ...this.comparisonData[sourceId],
+                  data_key: dataKey,
+                  content: this.comparisonData[sourceId].content || currentBinary,
+                };
                 const newComparisonData = { ...this.comparisonData, [sourceId]: newComp };
                 this.$store.commit('setComparisonData', newComparisonData);
               }
@@ -933,16 +996,36 @@ export default {
       const results = metric.results;
       const sources = Object.entries(results).filter(([, res]) => res && res.type === 'histogram');
       if (sources.length === 0) return;
+      const colorScale = d3.scaleOrdinal(d3.schemeTableau10).domain(sources.map(([id]) => id));
+      const allCenters = sources
+        .flatMap(([, res]) => (res.bins || []).map(bin => Number(bin.x)))
+        .filter(value => Number.isFinite(value))
+        .sort((a, b) => a - b);
+      let minStep = null;
+      for (let i = 1; i < allCenters.length; i += 1) {
+        const step = allCenters[i] - allCenters[i - 1];
+        if (step > 0 && (minStep == null || step < minStep)) {
+          minStep = step;
+        }
+      }
+      const baseBarWidth = (minStep != null ? minStep : 1) * 0.9;
+      const perTraceWidth = Math.max(baseBarWidth / Math.max(sources.length, 1), Number.EPSILON);
 
-      // Prepare data for Plotly (one trace per source)
-      const traces = sources.map(([id, res]) => ({
+      // Prepare data for Plotly (one trace per source) with explicit widths so
+      // multiple datasets stay side-by-side instead of collapsing into thin lines.
+      const traces = sources.map(([id, res], index) => ({
         x: res.bins.map(b => b.x),
         y: res.bins.map(b => b.count),
+        width: res.bins.map(() => perTraceWidth),
+        offsetgroup: `hist-${index}`,
+        alignmentgroup: 'histogram-comparison',
         name: id,
         type: 'bar',
         marker: {
+          color: colorScale(id),
           line: {
-            width: 0.5
+            width: 0.5,
+            color: colorScale(id)
           }
         }
       }));
@@ -1216,30 +1299,49 @@ export default {
       const results = metric.results;
       const sources = Object.entries(results).filter(([, res]) => res && res.type === 'power_spectrum');
 
-      // Need at least original and one compressed source
+      // Need at least original and one comparison source
       const originalResult = results['original'];
       if (!originalResult || sources.length < 2) return;
 
-      // Build original data map for fast lookup
-      const originalMap = new Map();
-      originalResult.data.forEach(d => {
-        if (d.k > 0 && d.p > 0) {
-          originalMap.set(d.k, d.p);
-        }
-      });
+      const buildFallbackRelativeError = (id, res) => {
+        if (!Array.isArray(res?.data) || !Array.isArray(originalResult?.data)) return [];
 
-      // Compute relative errors for each compressed source (in percentage)
+        const originalData = originalResult.data.filter(d => d.k > 0 && d.p > 0);
+        const sourceData = res.data.filter(d => d.k > 0 && d.p > 0);
+        const minLen = Math.min(originalData.length, sourceData.length);
+        const rows = [];
+
+        for (let i = 0; i < minLen; i += 1) {
+          const origPoint = originalData[i];
+          const sourcePoint = sourceData[i];
+          const origP = Number(origPoint?.p);
+          const sourceP = Number(sourcePoint?.p);
+          const k = Number(sourcePoint?.k);
+          if (!Number.isFinite(origP) || !Number.isFinite(sourceP) || !Number.isFinite(k)) continue;
+          const relError = ((sourceP - origP) / Math.max(origP, 1e-10)) * 100;
+          rows.push({ id, k, error: relError });
+        }
+
+        return rows;
+      };
+
+      // Prefer backend-aligned relative_error data, and only fall back to local reconstruction if needed.
       const errorData = [];
       sources.forEach(([id, res]) => {
         if (id === 'original') return;
 
-        res.data.forEach(d => {
-          if (d.k > 0 && d.p > 0 && originalMap.has(d.k)) {
-            const origP = originalMap.get(d.k);
-            const relError = ((d.p - origP) / Math.max(origP, 1e-10)) * 100; // Signed relative error in percentage
-            errorData.push({ id, k: d.k, error: relError });
-          }
-        });
+        if (Array.isArray(res?.relative_error) && res.relative_error.length > 0) {
+          res.relative_error.forEach(point => {
+            const k = Number(point?.k);
+            const error = Number(point?.error) * 100;
+            if (Number.isFinite(k) && k > 0 && Number.isFinite(error)) {
+              errorData.push({ id, k, error });
+            }
+          });
+          return;
+        }
+
+        errorData.push(...buildFallbackRelativeError(id, res));
       });
 
       if (errorData.length === 0) return;
@@ -1585,6 +1687,7 @@ export default {
     },
     formatMetricKey(key) {
       if (!key) return '';
+      if (key === 'error_bound' || key === 'FFCz:frequency_error_bound') return 'Error Bound';
       const [category, metric] = key.split(':');
       const nice = (s) => (s || '')
         .replace(/_/g, ' ')
@@ -1594,6 +1697,7 @@ export default {
     },
     formatAxisLabel(key) {
       if (!key) return '';
+      if (key === 'error_bound' || key === 'FFCz:frequency_error_bound') return 'Error Bound';
       let raw = key;
       if (raw.startsWith('config:')) raw = raw.replace(/^config:/, '');
       const last = raw.includes(':') ? raw.split(':').pop() : raw;
@@ -1681,7 +1785,12 @@ export default {
       if (this.useLocalMetrics && comp?.local_metrics && comp.local_metrics[key] !== undefined) {
         return comp.local_metrics[key];
       }
-      return comp?.metrics?.[key];
+      const metrics = comp?.metrics || {};
+      if (key === 'error_bound' && metrics.error_bound !== undefined) return metrics.error_bound;
+      if (key === 'error_bound' && metrics['FFCz:frequency_error_bound'] !== undefined) return metrics['FFCz:frequency_error_bound'];
+      if (key === 'FFCz:frequency_error_bound' && metrics['FFCz:frequency_error_bound'] !== undefined) return metrics['FFCz:frequency_error_bound'];
+      if (key === 'FFCz:frequency_error_bound' && metrics.error_bound !== undefined) return metrics.error_bound;
+      return metrics[key];
     },
     getLegendLabel(groupKey, groupValue) {
       if (!groupValue) return '';
@@ -1853,6 +1962,11 @@ export default {
       });
       this.comparisonGroupMap = { ...this.comparisonGroupMap, [comp.id]: groupMap };
 
+      const isXErrorBound = ["error_bound", "FFCz:frequency_error_bound"].includes(comp.xKey);
+      const isYErrorBound = ["error_bound", "FFCz:frequency_error_bound"].includes(comp.yKey);
+      const xHoverValue = isXErrorBound ? "%{x:.2e}" : "%{x}";
+      const yHoverValue = isYErrorBound ? "%{y:.2e}" : "%{y}";
+
       // Prepare traces (one per group)
       const traces = [];
 
@@ -1877,8 +1991,8 @@ export default {
               line: { width: 2, color: 'white' }
             },
             hovertemplate: '<b>%{text}</b><br>' +
-                          this.formatMetricKey(comp.xKey) + ': %{x}<br>' +
-                          this.formatMetricKey(comp.yKey) + ': %{y}<br>' +
+                          this.formatMetricKey(comp.xKey) + ': ' + xHoverValue + '<br>' +
+                          this.formatMetricKey(comp.yKey) + ': ' + yHoverValue + '<br>' +
                           '<extra></extra>'
           });
         });
@@ -1901,8 +2015,8 @@ export default {
               line: { width: 2, color: 'white' }
             },
             hovertemplate: '<b>%{text}</b><br>' +
-                          this.formatMetricKey(comp.xKey) + ': %{x}<br>' +
-                          this.formatMetricKey(comp.yKey) + ': %{y}<br>' +
+                          this.formatMetricKey(comp.xKey) + ': ' + xHoverValue + '<br>' +
+                          this.formatMetricKey(comp.yKey) + ': ' + yHoverValue + '<br>' +
                           '<extra></extra>'
           });
         });
@@ -1925,7 +2039,8 @@ export default {
           tickfont: { size: 20, weight: 500 },
           linewidth: 2.5,
           gridcolor: '#e0e0e0',
-          rangemode: xExtent[0] >= 0 ? 'tozero' : 'normal'
+          rangemode: xExtent[0] >= 0 ? 'tozero' : 'normal',
+          ...(isXErrorBound ? { tickformat: '.0e', hoverformat: '.2e', exponentformat: 'e' } : {}),
         },
         yaxis: {
           title: {
@@ -1935,7 +2050,8 @@ export default {
           tickfont: { size: 20, weight: 500 },
           linewidth: 2.5,
           gridcolor: '#e0e0e0',
-          rangemode: yExtent[0] >= 0 ? 'tozero' : 'normal'
+          rangemode: yExtent[0] >= 0 ? 'tozero' : 'normal',
+          ...(isYErrorBound ? { tickformat: '.0e', hoverformat: '.2e', exponentformat: 'e' } : {}),
         },
         height: this.comparisonChartHeight,
         margin: { l: dynamicMarginLeft, r: 40, t: 40, b: 60 },
@@ -2475,7 +2591,7 @@ export default {
         <div v-else class="alert alert-success d-flex align-items-center mb-3" role="alert">
           <i class="bi bi-check-circle-fill me-2"></i>
           <div>
-            <strong>Dataset loaded:</strong> {{ dataset.name || 'Unnamed' }}
+            <strong>Dataset loaded:</strong> {{ $maskDisplayPath(dataset.name || 'Unnamed') }}
             <span class="ms-2 text-muted small">
               ({{ dataset.dimensions.join(' × ') }}, {{ dataset.precision }})
             </span>
@@ -2501,6 +2617,14 @@ export default {
           <div class="card-header bg-light py-2 d-flex justify-content-between align-items-center">
             <h6 class="mb-0 small">Data Sources to Analyze</h6>
             <div class="d-flex align-items-center gap-2">
+              <button
+                type="button"
+                class="btn btn-sm btn-outline-secondary"
+                @click="refreshAvailableSources"
+                title="Refresh data source list"
+              >
+                <i class="bi bi-arrow-clockwise"></i>
+              </button>
               <button
                 type="button"
                 class="btn btn-sm"

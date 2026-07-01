@@ -21,12 +21,12 @@
             <div class="progress flex-shrink-0" style="height: 6px; width: 60%; min-width: 120px;">
               <div class="progress-bar progress-bar-striped progress-bar-animated" role="progressbar" :style="{ width: (progress.percent || 0) + '%' }" aria-valuemin="0" aria-valuemax="100"></div>
             </div>
-            <small class="text-muted text-truncate" style="max-width: 40%" :title="progress.message">{{ progress.message || ('Working… ' + (progress.percent || 0) + '%') }}</small>
+            <small class="text-muted text-truncate" style="max-width: 40%" :title="$maskDisplayPath(progress.message || ('Working… ' + (progress.percent || 0) + '%'))">{{ $maskDisplayPath(progress.message || ('Working… ' + (progress.percent || 0) + '%')) }}</small>
           </div>
         </template>
         <template v-else>
           <i class="bi" :class="statusIconClass"></i>
-          <span :class="statusClass">{{ status.message }}</span>
+          <span :class="statusClass">{{ $maskDisplayPath(status.message) }}</span>
         </template>
       </div>
 
@@ -116,7 +116,7 @@
             <li v-for="(item, idx) in orderedHistory" :key="idx" class="list-group-item d-flex justify-content-between align-items-start">
               <div class="me-3">
                 <span class="badge rounded-pill text-bg-light border me-2 text-capitalize">{{ item.kind }}</span>
-                <span>{{ item.text }}</span>
+                <span>{{ $maskDisplayPath(item.text) }}</span>
               </div>
               <small class="text-muted">{{ formatTime(item.timestamp) }}</small>
             </li>

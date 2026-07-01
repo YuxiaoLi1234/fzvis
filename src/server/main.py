@@ -1009,6 +1009,14 @@ def upload_to_cache():
 @token_required
 def indexlist():
     try:
+        def describe_compression_error(exc, context=None):
+            message = str(exc).strip()
+            if not message:
+                message = "Compression failed with an empty backend exception. See server console for traceback."
+            if context:
+                return f"{context}: {message}"
+            return message
+
         option = int(request.form.get("get_options"))
         # Run all submitted compressors and compare the results
         if(option == 0):
@@ -1100,17 +1108,29 @@ def indexlist():
                         # Fallback to original args if any issue arises
                         patched_args = args
                     
-                    compressor = lp.PressioCompressor.from_config(patched_args)
-                    decompData = dataset.copy()
                     logger.info("Compressor config from frontend: %s", json.dumps({
                         "compressor_id": args.get("compressor_id"),
                         "compressor_config": args.get("compressor_config", {}),
                         "early_config": args.get("early_config", {})
                     }, indent=2, sort_keys=True))
-
-                    compData = compressor.encode(dataset)
-                    decompData = compressor.decode(compData, decompData)
-                    metrics = compressor.get_metrics()
+                    try:
+                        compressor = lp.PressioCompressor.from_config(patched_args)
+                        decompData = dataset.copy()
+                        compData = compressor.encode(dataset)
+                        decompData = compressor.decode(compData, decompData)
+                        metrics = compressor.get_metrics()
+                    except Exception as exc:
+                        compressor_name = args.get("compressor_id") or "unknown compressor"
+                        logger.error(
+                            "Compression failed for %s with config %s",
+                            compressor_name,
+                            json.dumps({
+                                "compressor_config": args.get("compressor_config", {}),
+                                "early_config": args.get("early_config", {})
+                            }, indent=2, sort_keys=True)
+                        )
+                        logger.error(traceback.format_exc())
+                        raise RuntimeError(describe_compression_error(exc, f"{compressor_name} compression failed")) from exc
                     metrics1 = replace_unsupported_values(metrics)
 
                     # Extract error bound and filter out config parameters from metrics
@@ -1212,8 +1232,9 @@ def indexlist():
             return jsonify({"doc": doc, "highlevel" : highlevel, "options" : moduleSlots}), 200 
     
     except Exception as e:
-        print("Error in indexlist():", e)
-        return jsonify({"error": str(e)}), 500
+        logger.error("Error in indexlist()")
+        logger.error(traceback.format_exc())
+        return jsonify({"error": describe_compression_error(e)}), 500
 
 # Route to get progressive configuration options for a compressor
 @app.route("/api/progressiveOptions", methods=["POST"])
@@ -1721,14 +1742,18 @@ def apply_ffcz_correction():
                 freq_bound = freq_result.get('freq_bound', 'unknown')
                 if 'corrected_data' in freq_result:
                     corrected_data = freq_result.pop('corrected_data')
-                    corrected_data = _clean_data_array(corrected_data, "FFCz corrected data")
+                    corrected_changed = freq_result.get('corrected_data_changed')
+                    if corrected_changed is False:
+                        logger.info(f"[{idx+1}/{len(result['results'])}] Skipping cache for unchanged FFCz corrected data at freq_bound {freq_bound}")
+                    else:
+                        corrected_data = _clean_data_array(corrected_data, "FFCz corrected data")
 
-                    # Generate unique key for this frequency bound's corrected data
-                    new_key = hashlib.md5(f"ffcz_{compressed_key}_{freq_bound}_{time.time()}".encode()).hexdigest()
-                    decompressed_data_cache[new_key] = corrected_data
+                        # Generate unique key for this frequency bound's corrected data
+                        new_key = hashlib.md5(f"ffcz_{compressed_key}_{freq_bound}_{time.time()}".encode()).hexdigest()
+                        decompressed_data_cache[new_key] = corrected_data
 
-                    freq_result['data_key'] = new_key
-                    logger.info(f"[{idx+1}/{len(result['results'])}] Cached FFCz corrected data for freq_bound {freq_bound}: shape={corrected_data.shape}, key={new_key}")
+                        freq_result['data_key'] = new_key
+                        logger.info(f"[{idx+1}/{len(result['results'])}] Cached FFCz corrected data for freq_bound {freq_bound}: shape={corrected_data.shape}, key={new_key}")
                 else:
                     logger.info(f"[{idx+1}/{len(result['results'])}] No corrected data for freq_bound {freq_bound}")
 

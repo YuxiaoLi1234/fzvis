@@ -502,6 +502,9 @@ export default {
       if (this.compressionResults[id]) {
         delete this.compressionResults[id];
       }
+      if (this.configStatus[id]) {
+        delete this.configStatus[id];
+      }
     },
     deleteSelected() {
       const ids = this.selectedConfigIds || [];
@@ -895,24 +898,21 @@ export default {
         }
         return;
       }
-      // Set all configs to running
-      Object.keys(this.$props.savedConfigurations).forEach(key => {
-        this.configStatus[key] = "running";
-      });
+
+      const configEntries = Object.entries(this.$props.savedConfigurations || {});
+      const activeKeys = configEntries.map(([key]) => key);
+      this.configStatus = Object.fromEntries(activeKeys.map(key => [key, "running"]));
       this.running = true;
+      this.compressionResults = {};
       this.renderGraph();
-      // Only render large graph if modal is open
       if (this.largeGraphModalOpen) {
         this.renderLargeGraph();
       }
       if (alertBox && alertMessage) {
         alertBox.classList.remove("alert-danger", "alert-success");
         alertBox.classList.add("alert-secondary", "show");
-        alertMessage.textContent = "Processing...";
+        alertMessage.textContent = `Processing ${activeKeys.length} configuration(s)...`;
       }
-      // Submit each config as a separate request in parallel
-      const configEntries = Object.entries(this.$props.savedConfigurations);
-      this.compressionResults = {};
 
       let dataKey = this.$store.state.dataset?.data_key || this.$store.state.dataset?.name || null;
       if (!dataKey && this.$store.state.dataset?.content) {
@@ -928,22 +928,21 @@ export default {
         endianness: this.$store.state.dataset?.endianness || 'little',
       };
 
-      await Promise.all(configEntries.map(async ([key, config]) => {
-        let formData = new FormData();
+      const processConfig = async (key, config) => {
         const configPayload = {
           ...config,
           data_key: config.data_key || dataKey,
           dataset_meta: config.dataset_meta || datasetMeta,
         };
-        formData.append("get_options", 0);
-        formData.append("configurations", JSON.stringify({ [key]: configPayload }));
+
+        const executeCompression = async () => {
+          const body = new FormData();
+          body.append("get_options", 0);
+          body.append("configurations", JSON.stringify({ [key]: configPayload }));
+          return await axios.post(`/api/indexlist`, body);
+        };
+
         try {
-          const executeCompression = async () => {
-            const body = new FormData();
-            body.append("get_options", 0);
-            body.append("configurations", JSON.stringify({ [key]: configPayload }));
-            return await axios.post(`/api/indexlist`, body);
-          };
           let response;
           try {
             response = await executeCompression();
@@ -966,10 +965,9 @@ export default {
               throw err;
             }
           }
+
           const result = response.data[key] || response.data;
-          
-          // Fetch the actual decompressed binary data using the data_key
-          if (result.data_key) {
+          if (result?.data_key) {
             try {
               const dataResp = await axios.get(`/api/decompressed/${result.data_key}`, {
                 responseType: 'arraybuffer'
@@ -983,34 +981,65 @@ export default {
           this.configStatus[key] = "success";
           this.compressionResults[key] = result;
         } catch (error) {
+          console.error("Compression failed for " + key + ":", {
+            message: error?.message,
+            response: error?.response?.data,
+            status: error?.response?.status,
+            error
+          });
           this.configStatus[key] = "error";
-          this.compressionResults[key] = { error: error.response ? error.response.data.error : error.toString() };
+          this.compressionResults[key] = {
+            error: error?.response?.data?.error || error?.message || 'Compression failed. See the backend console for details.'
+          };
+        } finally {
+          if (this.configStatus[key] === "running") {
+            this.configStatus[key] = "error";
+            if (!this.compressionResults[key]) {
+              this.compressionResults[key] = { error: 'Compression did not complete cleanly.' };
+            }
+          }
+          this.renderGraph();
+          if (this.largeGraphModalOpen) {
+            this.renderLargeGraph();
+          }
         }
+      };
+
+      try {
+        for (const [key, config] of configEntries) {
+          await processConfig(key, config);
+        }
+      } finally {
+        activeKeys.forEach(key => {
+          if (this.configStatus[key] === "running") {
+            this.configStatus[key] = "error";
+            if (!this.compressionResults[key]) {
+              this.compressionResults[key] = { error: 'Compression timed out or was interrupted.' };
+            }
+          }
+        });
+
+        console.log("Configuration results:", Object.keys(this.compressionResults));
+        this.$store.commit("setComparisonData", this.compressionResults);
+        if (alertBox && alertMessage) {
+          const activeStatuses = activeKeys.map(key => this.configStatus[key]);
+          if (activeStatuses.length > 0 && activeStatuses.every(s => s === "success")) {
+            alertBox.classList.remove("alert-danger", "alert-secondary");
+            alertBox.classList.add("alert-success", "show");
+            alertMessage.textContent = "Compression executed successfully!";
+            setTimeout(() => { alertBox.classList.remove("show"); }, 6000);
+          } else {
+            alertBox.classList.remove("alert-success", "alert-secondary");
+            alertBox.classList.add("alert-danger", "show");
+            alertMessage.textContent = "Some compressions failed. See node status.";
+            setTimeout(() => { alertBox.classList.remove("show"); }, 8000);
+          }
+        }
+        this.running = false;
         this.renderGraph();
         if (this.largeGraphModalOpen) {
           this.renderLargeGraph();
         }
-      }));
-      // Update store with all results
-      console.log("Configuration results:", Object.keys(this.compressionResults));
-      this.$store.commit("setComparisonData", this.compressionResults);
-      if (alertBox && alertMessage) {
-        if (Object.values(this.configStatus).every(s => s === "success")) {
-          alertBox.classList.remove("alert-danger", "alert-secondary");
-          alertBox.classList.add("alert-success", "show");
-          alertMessage.textContent = "Compression executed successfully!";
-          setTimeout(() => { alertBox.classList.remove("show"); }, 6000);
-        } else {
-          alertBox.classList.remove("alert-success", "alert-secondary");
-          alertBox.classList.add("alert-danger", "show");
-          alertMessage.textContent = "Some compressions failed. See node status.";
-          setTimeout(() => { alertBox.classList.remove("show"); }, 8000);
-        }
-      }
-      this.running = false;
-      this.renderGraph();
-      if (this.largeGraphModalOpen) {
-        this.renderLargeGraph();
       }
     },
 

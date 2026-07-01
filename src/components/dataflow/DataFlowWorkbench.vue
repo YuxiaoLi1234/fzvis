@@ -121,6 +121,7 @@ export default {
         ['threshold_mask', DataThresholdMask],
         ['normalization', DataNormalization],
       ]),
+      showCompressionModules: false,
       paletteState: {
         filters: true,
         modules: true,
@@ -148,6 +149,9 @@ export default {
       showExploreModal: false,
       exploreNodeId: null,
       showPropertiesModal: false,
+      dataSourceFetchInProgress: false,
+      dataSourceAutoCloseCountdown: null,
+      dataSourceAutoCloseTimer: null,
       cachedDataKeys: new Set(),
       cachingDataKeys: new Set(),
       splitResizeRaf: null,
@@ -264,6 +268,12 @@ export default {
   },
 
   watch: {
+    showPropertiesModal(newVal) {
+      if (!newVal) {
+        // Clear auto-close timer when modal is closed
+        this.clearDataSourceAutoClose();
+      }
+    },
     datasetLoaded: {
       immediate: true,
       handler(loaded) {
@@ -524,7 +534,9 @@ export default {
         const def = this.availableCorrections.find(c => c.id === defId);
         if (!def) return;
         this.counters.correction += 1;
-        label = def.label;
+        label = defId === 'morse_smale_correction'
+          ? 'MSS Correction'
+          : def.label;
         icon = def.icon || 'bi-gear';
         description = def.description;
       }
@@ -1008,6 +1020,12 @@ export default {
         correctedKey = baseKey;
       }
 
+      const nextGeneratedIds = Array.isArray(payload?.resultIds) ? [...payload.resultIds] : [];
+      if (node) {
+        this.cleanupNodeGeneratedComparisonData(node);
+        node.generatedComparisonIds = nextGeneratedIds;
+      }
+
       const rawResult = payload?.result || null;
       if (!rawResult) {
         this.handleFilterSuccess(nodeId, payload);
@@ -1032,7 +1050,9 @@ export default {
       }
 
       this.handleFilterSuccess(nodeId, { ...payload, result });
-      if (node) node.correctedKey = correctedKey;
+      if (node) {
+        node.correctedKey = correctedKey;
+      }
       result.corrected_from = sourceNodeId;
       this.$store.commit('setComparisonData', { [correctedKey]: result });
     },
@@ -1060,6 +1080,16 @@ export default {
       if (!node || node.status === 'running') return;
       this.setNodeStatus(nodeId, 'stale', 'Dataset changed. Re-run to refresh results.');
     },
+    cleanupNodeGeneratedComparisonData(node) {
+      if (!node || !this.$store) return;
+      const generatedIds = Array.isArray(node.generatedComparisonIds) ? node.generatedComparisonIds : [];
+      generatedIds.forEach(resultId => {
+        if (resultId) {
+          this.$store.commit('removeComparisonData', resultId);
+        }
+      });
+      node.generatedComparisonIds = [];
+    },
     /**
      * Example method to validate a connection between two nodes.
      * This would be called when a user tries to draw an edge.
@@ -1078,11 +1108,43 @@ export default {
       this.selectedNodeId = nodeId;
     },
     openPropertiesModal(nodeId) {
+      this.clearDataSourceAutoClose();
       this.selectedNodeId = nodeId;
       this.showPropertiesModal = true;
     },
     closePropertiesModal() {
       this.showPropertiesModal = false;
+      this.clearDataSourceAutoClose();
+    },
+    handleDataSourceFetchStart() {
+      this.clearDataSourceAutoClose();
+      this.dataSourceFetchInProgress = true;
+    },
+    handleDataSourceFetchComplete() {
+      this.dataSourceFetchInProgress = false;
+      this.dataSourceAutoCloseCountdown = 3;
+
+      const countdown = () => {
+        if (this.dataSourceAutoCloseCountdown > 0) {
+          this.dataSourceAutoCloseCountdown--;
+          this.dataSourceAutoCloseTimer = setTimeout(countdown, 1000);
+        } else {
+          this.closePropertiesModal();
+        }
+      };
+
+      this.dataSourceAutoCloseTimer = setTimeout(countdown, 1000);
+    },
+    handleDataSourceFetchError() {
+      this.clearDataSourceAutoClose();
+    },
+    clearDataSourceAutoClose() {
+      if (this.dataSourceAutoCloseTimer) {
+        clearTimeout(this.dataSourceAutoCloseTimer);
+        this.dataSourceAutoCloseTimer = null;
+      }
+      this.dataSourceFetchInProgress = false;
+      this.dataSourceAutoCloseCountdown = null;
     },
     resetDownstreamNodes(nodeId) {
       // Find all nodes that depend on this node (directly or indirectly)
@@ -1096,6 +1158,7 @@ export default {
           childNode.status = 'pending';
           childNode.lastResult = null;
           childNode.lastError = null;
+          this.cleanupNodeGeneratedComparisonData(childNode);
           if (this.$store) {
             this.$store.commit('removeComparisonData', childId);
           }
@@ -1429,8 +1492,13 @@ export default {
           }
         }
       } catch (error) {
-        console.error('Error running compressor:', error);
-        const msg = error.response?.data?.error || error.message;
+        console.error('Error running compressor:', {
+          message: error?.message,
+          response: error?.response?.data,
+          status: error?.response?.status,
+          error
+        });
+        const msg = error?.response?.data?.error || error?.message || 'Compression failed. See the backend console for details.';
         this.setNodeStatus(nodeId, 'error', msg);
       }
     },
@@ -1459,6 +1527,15 @@ export default {
         // Ensure node is selected too
         this.selectedNodeId = nodeId;
       }
+    },
+    openModuleProperties(nodeId, moduleIdx) {
+      const node = this.nodes.find(n => n.id === nodeId);
+      if (!node || node.type !== 'compressor') return;
+
+      // Set the selected module and open the properties modal
+      node.selectedModuleIdx = moduleIdx;
+      this.selectedNodeId = nodeId;
+      this.showPropertiesModal = true;
     },
     onModuleDragOver(nodeId, moduleIdx, moduleId, event) {
       // Check if the dragged option matches this module
@@ -1695,6 +1772,131 @@ export default {
       if (!value || typeof value !== 'object') return value !== undefined && value !== null;
       return Object.keys(value).length > 0;
     },
+    exportWorkflowPrecision(precision) {
+      const prec = String(precision || '').toLowerCase();
+      const mapping = {
+        f: 'float32',
+        d: 'float64',
+        i8: 'int8',
+        u8: 'uint8',
+        i16: 'int16',
+        u16: 'uint16',
+        i32: 'int32',
+        u32: 'uint32',
+      };
+      return mapping[prec] || precision || null;
+    },
+    normalizeWorkflowPrecision(precision) {
+      const prec = String(precision || '').toLowerCase();
+      const mapping = {
+        float32: 'f',
+        f32: 'f',
+        f: 'f',
+        float64: 'd',
+        f64: 'd',
+        double: 'd',
+        d: 'd',
+        int8: 'i8',
+        i8: 'i8',
+        uint8: 'u8',
+        u8: 'u8',
+        int16: 'i16',
+        i16: 'i16',
+        uint16: 'u16',
+        u16: 'u16',
+        int32: 'i32',
+        i32: 'i32',
+        uint32: 'u32',
+        u32: 'u32',
+      };
+      return mapping[prec] || precision || null;
+    },
+    buildWorkflowDatasetSnapshot() {
+      const dataset = this.$store?.state?.originalDataset || this.$store?.state?.dataset || null;
+      if (!dataset?.name) {
+        return this.nodes.find(node => node.type === 'source')?.config?.dataset || null;
+      }
+
+      const dimensions = (Array.isArray(dataset.dimensions)
+        ? dataset.dimensions
+        : [dataset.width, dataset.height, dataset.depth]
+      )
+        .map(value => Number(value))
+        .filter(value => Number.isFinite(value) && value > 0);
+
+      const snapshot = {
+        name: dataset.name,
+        type: dataset.type || 'raw',
+      };
+
+      if (dimensions.length) {
+        snapshot.dimensions = dimensions;
+        snapshot.width = dimensions[0] || null;
+        snapshot.height = dimensions[1] || null;
+        snapshot.depth = dimensions[2] || 1;
+      }
+      if (dataset.precision) snapshot.precision = this.exportWorkflowPrecision(dataset.precision);
+      if (dataset.endianness) snapshot.endianness = dataset.endianness;
+      if (dataset.size) snapshot.size = dataset.size;
+      if (dataset.vars) snapshot.vars = dataset.vars;
+      if (dataset.data_key) snapshot.data_key = dataset.data_key;
+
+      return snapshot;
+    },
+    async restoreWorkflowDataset(snapshot) {
+      if (!snapshot?.name) {
+        this.$store.commit('clearFileData');
+        return { restored: false, reason: 'missing_metadata' };
+      }
+
+      const dimensions = (Array.isArray(snapshot.dimensions)
+        ? snapshot.dimensions
+        : [snapshot.width, snapshot.height, snapshot.depth]
+      )
+        .map(value => Number(value))
+        .filter(value => Number.isFinite(value) && value > 0);
+
+      const datasetBase = {
+        name: snapshot.name,
+        type: snapshot.type || 'raw',
+        dimensions,
+        width: dimensions[0] || null,
+        height: dimensions[1] || null,
+        depth: dimensions[2] || 1,
+        precision: this.normalizeWorkflowPrecision(snapshot.precision),
+        endianness: snapshot.endianness || 'little',
+        size: snapshot.size,
+        vars: snapshot.vars,
+        data_key: snapshot.data_key,
+      };
+
+      if (datasetBase.type === 'netcdf') {
+        this.$store.commit('setFileData', {
+          dataset: {
+            ...datasetBase,
+            content: null,
+          }
+        });
+        return { restored: true, mode: 'metadata' };
+      }
+
+      try {
+        const response = await axios.get('/api/download', {
+          params: { filename: snapshot.name, filetype: datasetBase.type },
+          responseType: 'arraybuffer',
+        });
+        this.$store.commit('setFileData', {
+          dataset: {
+            ...datasetBase,
+            content: response.data,
+          }
+        });
+        return { restored: true, mode: 'downloaded' };
+      } catch (error) {
+        this.$store.commit('clearFileData');
+        return { restored: false, reason: 'download_failed', error };
+      }
+    },
     serializeWorkflowNode(node) {
       const definition = node.definitionId || node.compressorId || null;
       const defaults = this.getWorkflowNodeDefaults(node.type, definition);
@@ -1711,8 +1913,15 @@ export default {
           y: Number.isFinite(node.y) ? Math.round(node.y) : 0,
         };
       }
-      if (this.hasWorkflowValue(node.config)) {
-        data.config = this.stripWorkflowMetadata(node.config);
+      const config = this.hasWorkflowValue(node.config)
+        ? this.stripWorkflowMetadata(node.config)
+        : {};
+      if (node.type === 'source') {
+        const datasetSnapshot = this.buildWorkflowDatasetSnapshot();
+        if (datasetSnapshot) config.dataset = datasetSnapshot;
+      }
+      if (this.hasWorkflowValue(config)) {
+        data.config = config;
       }
       if (node.type === 'compressor') {
         const architecture = node.architecture || defaults.architecture;
@@ -1801,7 +2010,7 @@ export default {
         const hasConfigurations = this.hasWorkflowValue(baseConfigurations) || this.hasWorkflowValue(derivedConfigurations);
 
         const workflowData = {
-          version: '1.1',
+          version: '1.2',
           nodes: serializedNodes,
           edges: serializedEdges,
           ...(hasConfigurations && {
@@ -1865,6 +2074,14 @@ export default {
           // Restore counters
           if (workflowData.counters) {
             this.counters = { ...workflowData.counters };
+          }
+
+          const sourceDatasetSnapshot = workflowData.sourceDataset
+            || workflowData.nodes.find(node => node.type === 'source')?.config?.dataset
+            || null;
+          if (sourceDatasetSnapshot) {
+            this.$store.commit('clearFileData');
+            this.$store.commit('setComparisonData', null);
           }
 
           // Recreate nodes using NodeFactory
@@ -1962,6 +2179,11 @@ export default {
             }
           }
 
+          let restoreResult = null;
+          if (sourceDatasetSnapshot) {
+            restoreResult = await this.restoreWorkflowDataset(sourceDatasetSnapshot);
+          }
+
           // Update canvas size based on imported nodes
           this.$nextTick(() => {
             this.updateCanvasSize();
@@ -1969,9 +2191,17 @@ export default {
 
           const configCount = Object.keys(baseConfigurations || {}).length;
           const configMsg = configCount > 0 ? ` and ${configCount} base configuration(s)` : '';
+          const datasetName = sourceDatasetSnapshot?.name || null;
+          const datasetMsg = restoreResult?.restored
+            ? datasetName
+              ? ` Restored dataset ${datasetName}.`
+              : ''
+            : restoreResult?.reason === 'download_failed'
+              ? ` Workflow loaded, but dataset ${datasetName} could not be restored from the server.`
+              : '';
           this.$store.commit('setStatus', {
-            type: 'success',
-            message: `Workflow imported successfully! Loaded ${this.nodes.length} nodes, ${this.edges.length} connections${configMsg}.`
+            type: restoreResult && !restoreResult.restored ? 'warning' : 'success',
+            message: `Workflow imported successfully! Loaded ${this.nodes.length} nodes, ${this.edges.length} connections${configMsg}.${datasetMsg}`
           });
         } catch (error) {
           console.error('Failed to import workflow:', error);
@@ -2139,8 +2369,20 @@ export default {
           <div class="modal-body" v-if="selectedNode">
             <template v-if="selectedNode.type === 'source'">
               <keep-alive>
-                <InputDataset />
+                <InputDataset
+                  @dataset-fetch-start="handleDataSourceFetchStart"
+                  @dataset-fetch-complete="handleDataSourceFetchComplete"
+                  @dataset-fetch-error="handleDataSourceFetchError"
+                />
               </keep-alive>
+              <div v-if="dataSourceFetchInProgress || dataSourceAutoCloseCountdown !== null" class="alert alert-info mt-3">
+                <div v-if="dataSourceFetchInProgress">
+                  <i class="bi bi-hourglass-split me-2"></i>Fetching the dataset from the backend...
+                </div>
+                <div v-else>
+                  <i class="bi bi-check-circle me-2"></i>Dataset ready. Closing this window in {{ dataSourceAutoCloseCountdown }}s.
+                </div>
+              </div>
             </template>
 
             <template v-else-if="selectedNode.type === 'filter'">
@@ -2166,7 +2408,7 @@ export default {
               <p v-else class="text-muted small mb-0">No filter UI available.</p>
             </template>
 
-            <template v-else-if="selectedNode.type === 'module'">
+            <template v-else-if="selectedNode.type === 'module' && showCompressionModules">
               <p v-if="selectedNode.description" class="text-muted small mb-3">
                 {{ selectedNode.description }}
               </p>
@@ -2188,6 +2430,12 @@ export default {
                 </keep-alive>
               </template>
               <p v-else class="text-muted small mb-0">No module UI available.</p>
+            </template>
+
+            <template v-else-if="selectedNode.type === 'module'">
+              <div class="alert alert-secondary small mb-0">
+                Compression modules are temporarily hidden from the front end.
+              </div>
             </template>
 
             <template v-else-if="selectedNode.type === 'compressor'">
@@ -2249,7 +2497,9 @@ export default {
             </template>
           </div>
           <div class="modal-footer">
-            <button type="button" class="btn btn-secondary" @click="closePropertiesModal">Close</button>
+            <button type="button" class="btn btn-secondary" @click="closePropertiesModal">
+              Close
+            </button>
           </div>
         </div>
       </div>
@@ -2321,6 +2571,7 @@ export default {
             </template>
 
             <div
+              v-if="showCompressionModules"
               class="list-group-item bg-light fw-semibold d-flex justify-content-between align-items-center cursor-pointer"
               @click="paletteState.modules = !paletteState.modules"
             >
@@ -2331,7 +2582,7 @@ export default {
               <span class="badge bg-secondary">{{ availableModules.length }}</span>
             </div>
 
-            <template v-if="paletteState.modules">
+            <template v-if="showCompressionModules && paletteState.modules">
               <button
                 v-for="mod in availableModules"
                 :key="`pm-${mod.id}`"
@@ -2433,7 +2684,7 @@ export default {
         </div>
       </Pane>
 
-      <!-- Right: Data Flow Graph area -->
+      <!-- Right: Workflow Graph area -->
       <Pane ref="graphPane" :size="70" min-size="40" class="h-100 overflow-auto">
         <div class="work-area d-flex flex-column">
           <div
@@ -2444,7 +2695,7 @@ export default {
           >
             <div class="card-header d-flex align-items-center justify-content-between py-2">
               <div class="d-flex align-items-center">
-                <span class="fw-semibold">Data Flow Graph</span>
+                <span class="fw-semibold">Workflow Graph</span>
                 <small class="text-muted px-3">Drag components from the left panel</small>
               </div>
               <div class="d-flex align-items-center gap-2">
@@ -2596,6 +2847,7 @@ export default {
                         class="module-box"
                         :class="{'selected': node.selectedModuleIdx === idx}"
                         @click.stop="selectCompressorModule(node.id, idx)"
+                        @dblclick.stop="openModuleProperties(node.id, idx)"
                         @dragover.prevent="onModuleDragOver(node.id, idx, module.id, $event)"
                         @dragleave="onModuleDragLeave($event)"
                         @drop.stop="onModuleDrop(node.id, idx, module.id, $event)"
