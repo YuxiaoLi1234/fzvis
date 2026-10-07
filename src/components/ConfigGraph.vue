@@ -61,6 +61,8 @@ export default {
       filterOptionKey: '',
       filterOptionValue: '',
       propagateTargets: [],
+      largeGraphModalInstance: null,
+      propagateModalInstance: null,
     };
   },
   computed: {
@@ -173,6 +175,20 @@ export default {
     }
     // Clean up any existing tooltips
     this.hideTooltip();
+    if (this.$refs.largeGraphModalRef) {
+      if (this._onLargeModalHidden) this.$refs.largeGraphModalRef.removeEventListener('hidden.bs.modal', this._onLargeModalHidden);
+      if (this._onLargeModalShown) this.$refs.largeGraphModalRef.removeEventListener('shown.bs.modal', this._onLargeModalShown);
+    }
+    if (this.largeGraphModalInstance) {
+      this.largeGraphModalInstance.hide();
+      this.largeGraphModalInstance.dispose();
+      this.largeGraphModalInstance = null;
+    }
+    if (this.propagateModalInstance) {
+      this.propagateModalInstance.hide();
+      this.propagateModalInstance.dispose();
+      this.propagateModalInstance = null;
+    }
   },
 
   watch: {
@@ -680,26 +696,27 @@ export default {
 
     openLargeGraphModal() {
       this.hideTooltip();
-      const modal = document.getElementById('largeGraphModal');
-      if (modal) {
-        const modalInstance = Modal.getOrCreateInstance(modal);
-        // Add event listeners for modal events
-        modal.addEventListener('hidden.bs.modal', () => {
-          this.hideTooltip();
-          this.largeGraphModalOpen = false;
-        });
-        modal.addEventListener('shown.bs.modal', () => {
-          this.largeGraphModalOpen = true;
-          this.renderLargeGraph();
-        }, { once: true });
-        modalInstance.show();
+      if (this.$refs.largeGraphModalRef) {
+        if (!this.largeGraphModalInstance) {
+          this.largeGraphModalInstance = Modal.getOrCreateInstance(this.$refs.largeGraphModalRef);
+          this._onLargeModalHidden = () => {
+            this.hideTooltip();
+            this.largeGraphModalOpen = false;
+          };
+          this._onLargeModalShown = () => {
+            this.largeGraphModalOpen = true;
+            this.renderLargeGraph();
+          };
+          this.$refs.largeGraphModalRef.addEventListener('hidden.bs.modal', this._onLargeModalHidden);
+          this.$refs.largeGraphModalRef.addEventListener('shown.bs.modal', this._onLargeModalShown);
+        }
+        this.largeGraphModalInstance.show();
       }
     },
 
     openPropagateModal() {
       this.hideTooltip();
-      const modal = document.getElementById('propagateModal');
-      if (modal) {
+      if (this.$refs.propagateModalRef) {
         this.availableParameters = {};
         this.propagateOptions = {};
         this.parameterValuesText = '';
@@ -757,19 +774,13 @@ export default {
               this.availableParameters[label] = { key: 'zfp:precision', type: 'number', options: makeOptions(values, 'zfp:precision') };
             }
           }
-          Modal.getOrCreateInstance(modal).show();
+          this.propagateModalInstance = this.propagateModalInstance || Modal.getOrCreateInstance(this.$refs.propagateModalRef);
+          this.propagateModalInstance.show();
         } else {
-          // Show alert for no available parameters
-          const alertElement = document.getElementById('compressorAlert');
-          const alertMessage = document.getElementById('compressorAlertMessage');
-          if (alertElement && alertMessage) {
-            alertMessage.textContent = 'No parameters available for propagation on this configuration.';
-            alertElement.className = 'alert alert-warning alert-dismissible fade show mt-2';
-            alertElement.style.display = 'block';
-            setTimeout(() => {
-              alertElement.classList.remove('show');
-            }, 3000);
-          }
+          this.$store.commit('setStatus', {
+            type: 'warning',
+            message: 'No parameters available for propagation on this configuration.'
+          });
         }
       }
     },
@@ -887,15 +898,12 @@ export default {
     },
 
     async submitConfigurations() {
-      const alertBox = document.getElementById("compressorAlert");
-      const alertMessage = document.getElementById("compressorAlertMessage");
       const fileData = this.$store.state.dataset?.content;
       if (!fileData) {
-        if (alertBox && alertMessage) {
-          alertBox.classList.remove("alert-success", "alert-secondary");
-          alertBox.classList.add("alert-danger", "show");
-          alertMessage.textContent = "No dataset selected!";
-        }
+        this.$store.commit("setStatus", {
+          type: "danger",
+          message: "No dataset selected!"
+        });
         return;
       }
 
@@ -908,11 +916,10 @@ export default {
       if (this.largeGraphModalOpen) {
         this.renderLargeGraph();
       }
-      if (alertBox && alertMessage) {
-        alertBox.classList.remove("alert-danger", "alert-success");
-        alertBox.classList.add("alert-secondary", "show");
-        alertMessage.textContent = `Processing ${activeKeys.length} configuration(s)...`;
-      }
+      this.$store.commit("setStatus", {
+        type: "secondary",
+        message: `Processing ${activeKeys.length} configuration(s)...`
+      });
 
       let dataKey = this.$store.state.dataset?.data_key || this.$store.state.dataset?.name || null;
       if (!dataKey && this.$store.state.dataset?.content) {
@@ -1021,19 +1028,17 @@ export default {
 
         console.log("Configuration results:", Object.keys(this.compressionResults));
         this.$store.commit("setComparisonData", this.compressionResults);
-        if (alertBox && alertMessage) {
-          const activeStatuses = activeKeys.map(key => this.configStatus[key]);
-          if (activeStatuses.length > 0 && activeStatuses.every(s => s === "success")) {
-            alertBox.classList.remove("alert-danger", "alert-secondary");
-            alertBox.classList.add("alert-success", "show");
-            alertMessage.textContent = "Compression executed successfully!";
-            setTimeout(() => { alertBox.classList.remove("show"); }, 6000);
-          } else {
-            alertBox.classList.remove("alert-success", "alert-secondary");
-            alertBox.classList.add("alert-danger", "show");
-            alertMessage.textContent = "Some compressions failed. See node status.";
-            setTimeout(() => { alertBox.classList.remove("show"); }, 8000);
-          }
+        const activeStatuses = activeKeys.map(key => this.configStatus[key]);
+        if (activeStatuses.length > 0 && activeStatuses.every(s => s === "success")) {
+          this.$store.commit("setStatus", {
+            type: "success",
+            message: "Compression executed successfully!"
+          });
+        } else {
+          this.$store.commit("setStatus", {
+            type: "danger",
+            message: "Some compressions failed. See node status."
+          });
         }
         this.running = false;
         this.renderGraph();
@@ -1438,16 +1443,10 @@ export default {
       const compressorId = baseTargets[0]?.config?.compressor_id;
       const mixed = baseTargets.some(n => n?.config?.compressor_id !== compressorId);
       if (mixed) {
-        const alertElement = document.getElementById('compressorAlert');
-        const alertMessage = document.getElementById('compressorAlertMessage');
-        if (alertElement && alertMessage) {
-          alertMessage.textContent = 'Select base configurations with the same compressor to propagate.';
-          alertElement.className = 'alert alert-warning alert-dismissible fade show mt-2';
-          alertElement.style.display = 'block';
-          setTimeout(() => {
-            alertElement.classList.remove('show');
-          }, 3000);
-        }
+        this.$store.commit("setStatus", {
+          type: "warning",
+          message: "Select base configurations with the same compressor to propagate."
+        });
         return;
       }
       this.propagateTargets = baseTargets.map(n => n.id);
@@ -1577,13 +1576,8 @@ export default {
 
   </div>
 
-  <!-- Alert message box -->
-  <div id="compressorAlert" class="alert alert-dismissible fade mt-2" role="alert" tabindex="-1">
-    <span id="compressorAlertMessage">Placeholder</span>
-  </div>
-
   <teleport to="body">
-    <div id="largeGraphModal" class="modal fade" tabindex="-1" aria-labelledby="largeGraphModalLabel" aria-hidden="true" style="z-index: 2000;">
+    <div ref="largeGraphModalRef" id="largeGraphModal" class="modal fade" tabindex="-1" aria-labelledby="largeGraphModalLabel" aria-hidden="true" style="z-index: 2000;">
       <div class="modal-dialog modal-fullscreen">
         <div class="modal-content">
           <div class="modal-header">
@@ -1649,7 +1643,7 @@ export default {
       </div>
     </div>
 
-    <div id="propagateModal" class="modal fade" tabindex="-1" aria-labelledby="propagateModalLabel" aria-hidden="true" style="z-index: 2100;">
+    <div ref="propagateModalRef" id="propagateModal" class="modal fade" tabindex="-1" aria-labelledby="propagateModalLabel" aria-hidden="true" style="z-index: 2100;">
       <div class="modal-dialog modal-dialog-centered">
         <div class="modal-content">
           <div class="modal-header">

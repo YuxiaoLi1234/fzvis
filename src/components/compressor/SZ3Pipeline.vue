@@ -89,6 +89,8 @@ export default {
       showUnsupportedModal: false,
       unsupportedModalMessage: '',
       unsupportedModalType: '',
+      exploreContainerWidth: 0,
+      exploreResizeObserver: null,
     };
   },
   created() {
@@ -105,6 +107,11 @@ export default {
     this.$emit('pipeline-modules-updated', this.compressor.modules);
     this.applyConfig(this.config);
     this.seedExploreDefaults();
+    this.$nextTick(() => this.initExploreResizeObserver());
+  },
+  beforeUnmount() {
+    this.exploreResizeObserver?.disconnect();
+    this.exploreResizeObserver = null;
   },
   watch: {
     modules: {
@@ -126,6 +133,7 @@ export default {
     nthreads() { this.emitConfigChange(); },
     exploreEnabled(enabled) {
       if (enabled) this.seedExploreDefaults();
+      this.$nextTick(() => this.initExploreResizeObserver());
       this.emitExploreState();
     },
     exploreSelections: {
@@ -185,7 +193,9 @@ export default {
     },
     exploreSvgWidth() {
       const axisCount = this.exploreAxes.length || 1;
-      return Math.max(560, 140 + (axisCount - 1) * 150);
+      const contentWidth = Math.max(0, Number(this.exploreContainerWidth || 0) - 16);
+      const minimumWidth = Math.max(560, 140 + (axisCount - 1) * 150);
+      return Math.max(minimumWidth, contentWidth);
     },
     exploreSvgHeight() {
       const maxOptions = Math.max(1, ...this.exploreAxes.map(axis => axis.options.length || 1));
@@ -193,13 +203,38 @@ export default {
       return Math.max(260, padded);
     },
     exploreSvgPadding() {
-      return 50;
+      return { left: 50, right: 96, top: 50, bottom: 50 };
     },
     isPromoted() {
       return Boolean(this.$store?.state?.baseConfigurations?.[this.nodeId]);
     },
   },
   methods: {
+    normalizeExplorePadding(padding) {
+      if (typeof padding === 'number') {
+        return { left: padding, right: padding, top: padding, bottom: padding };
+      }
+      return {
+        left: Number(padding?.left ?? 50),
+        right: Number(padding?.right ?? 50),
+        top: Number(padding?.top ?? 50),
+        bottom: Number(padding?.bottom ?? 50),
+      };
+    },
+    initExploreResizeObserver() {
+      const container = this.$refs.exploreParcoords;
+      if (!container) return;
+      this.updateExploreContainerWidth();
+      if (typeof ResizeObserver === 'undefined') return;
+      this.exploreResizeObserver?.disconnect();
+      this.exploreResizeObserver = new ResizeObserver(() => this.updateExploreContainerWidth());
+      this.exploreResizeObserver.observe(container);
+    },
+    updateExploreContainerWidth() {
+      const container = this.$refs.exploreParcoords;
+      if (!container) return;
+      this.exploreContainerWidth = container.clientWidth || 0;
+    },
     applyExploreState(state) {
       this.applyingExploreState = true;
       if (typeof state.enabled === 'boolean') this.exploreEnabled = state.enabled;
@@ -330,17 +365,19 @@ export default {
       this.setStatus('success', `Generated ${configs.length} configurations for exploration.`);
     },
     exploreAxisX(index, width, padding) {
+      const pad = this.normalizeExplorePadding(padding);
       const count = this.exploreAxes.length || 1;
-      if (count <= 1) return padding;
-      const span = width - padding * 2;
-      return padding + (span * index) / (count - 1);
+      if (count <= 1) return pad.left;
+      const span = width - pad.left - pad.right;
+      return pad.left + (span * index) / (count - 1);
     },
     exploreOptionY(axis, index, height, padding) {
-      const span = height - padding * 2;
+      const pad = this.normalizeExplorePadding(padding);
+      const span = height - pad.top - pad.bottom;
       const count = axis?.options?.length || 0;
-      if (count <= 1) return padding + span / 2;
+      if (count <= 1) return pad.top + span / 2;
       const t = index / (count - 1);
-      return height - padding - t * span;
+      return height - pad.bottom - t * span;
     },
     toggleExploreOption(axis, option) {
       const selected = this.exploreSelections[axis.id] || [];
@@ -771,7 +808,7 @@ export default {
           Pick multiple values per module and generate combinations automatically.
         </p>
         <div v-if="exploreEnabled">
-          <div class="explore-parcoords mb-3">
+          <div ref="exploreParcoords" class="explore-parcoords mb-3">
             <svg :width="exploreSvgWidth" :height="exploreSvgHeight">
               <g>
                 <line

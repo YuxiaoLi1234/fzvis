@@ -1,4 +1,5 @@
 <script>
+import { mapState, mapActions } from 'vuex'
 import AppHeader from './components/AppHeader.vue'
 import MetricVis from './components/vis/MetricVis.vue'
 import HelloThree from './components/vis/HelloThree.vue'
@@ -23,9 +24,6 @@ export default {
 
   data() {
     return {
-      isAuthenticated: false,
-      passcodeRequired: true,
-      authStatusLoaded: false,
       passcode: '',
       authError: '',
       isAuthenticating: false,
@@ -34,9 +32,31 @@ export default {
     };
   },
 
+  computed: {
+    ...mapState(['isAuthenticated', 'passcodeRequired', 'authStatusLoaded']),
+  },
+
   created() {
     axios.interceptors.response.use(
-      (response) => response,
+      async (response) => {
+        if (response.status === 202 && response.data && response.data.task_id) {
+          const taskId = response.data.task_id;
+          let taskStatus = 'pending';
+          while (taskStatus === 'pending') {
+            await new Promise(r => setTimeout(r, 1000));
+            // Use fetch or another axios instance to avoid infinite interceptor loops, or just standard axios if it doesn't return 202
+            const statusResp = await axios.get(`/api/tasks/${taskId}`);
+            taskStatus = statusResp.data.status;
+            if (taskStatus === 'completed') {
+              // Pass back the final result exactly as if the original request completed synchronously
+              return { ...response, status: 200, data: statusResp.data.result };
+            } else if (taskStatus === 'error') {
+              return Promise.reject(new Error(statusResp.data.error || 'Task failed'));
+            }
+          }
+        }
+        return response;
+      },
       (error) => {
         if (error.response && error.response.status === 401 && this.passcodeRequired) {
           this.logout();
@@ -45,68 +65,20 @@ export default {
       }
     );
 
-    this.initializeAuth();
+    this.checkAuthStatus();
   },
 
   methods: {
-    async initializeAuth() {
-      try {
-        const { data } = await axios.get('/api/auth-status');
-        this.passcodeRequired = Boolean(data.passcodeRequired);
-
-        if (!this.passcodeRequired) {
-          this.isAuthenticated = true;
-          localStorage.removeItem('fzvis_token');
-          delete axios.defaults.headers.common['Authorization'];
-          return;
-        }
-
-        const token = localStorage.getItem("fzvis_token");
-        if (!token) {
-          return;
-        }
-
-        axios.defaults.headers.common['Authorization'] = `Bearer ${token}`;
-        await axios.get('/api/verify');
-        this.isAuthenticated = true;
-      } catch (_err) {
-        this.isAuthenticated = false;
-      } finally {
-        this.authStatusLoaded = true;
-      }
-    },
-
-    logout() {
-      this.isAuthenticated = false;
-      this.passcode = '';
-      localStorage.removeItem('fzvis_token');
-      delete axios.defaults.headers.common['Authorization'];
-      this.$store.commit('setStatus', { type: 'warning', message: 'Session expired. Please login again.' });
-    },
+    ...mapActions(['checkAuthStatus', 'logout', 'login']),
 
     async handleLogin() {
       this.isAuthenticating = true;
       this.authError = '';
       try {
-        const response = await fetch('/api/login', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({ passcode: this.passcode }),
-        });
-        if (!response.ok) {
-          const errorData = await response.json();
-          throw new Error(errorData.error || 'Login failed');
-        }
-        const data = await response.json();
-        localStorage.setItem('fzvis_token', data.token);
-        axios.defaults.headers.common['Authorization'] = `Bearer ${data.token}`;
-        this.isAuthenticated = true;
-        this.$store.commit('setStatus', { type: 'success', message: 'Authenticated successfully!' });
-        this.$store.commit('addHistory', { kind: 'auth', text: 'Logged in', timestamp: Date.now() });
+        await this.login(this.passcode);
+        this.passcode = '';
       } catch (err) {
-        this.authError = err.message;
+        this.authError = err.response?.data?.error || err.message || 'Login failed';
       } finally {
         this.isAuthenticating = false;
       }
@@ -255,7 +227,7 @@ export default {
                       <div class="fw-semibold">Text tutorial</div>
                       <div class="text-muted small">Step-by-step walkthrough</div>
                     </div>
-                    <a class="btn btn-sm btn-outline-info disabled" data-bs-toggle="tooltip" data-bs-placement="top" title="To be updated">
+                    <a class="btn btn-sm btn-outline-info disabled" v-tooltip:top="'To be updated'">
                       <i class="bi bi-file-text me-1"></i>View
                     </a>
                   </li>
@@ -264,7 +236,7 @@ export default {
                       <div class="fw-semibold">Video tutorial</div>
                       <div class="text-muted small">Quick start overview</div>
                     </div>
-                    <a class="btn btn-sm btn-outline-info disabled" data-bs-toggle="tooltip" data-bs-placement="right" title="To be updated">
+                    <a class="btn btn-sm btn-outline-info disabled" v-tooltip:right="'To be updated'">
                       <i class="bi bi-film me-1"></i>Watch
                     </a>
                   </li>

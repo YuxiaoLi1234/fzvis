@@ -314,12 +314,34 @@ export default {
     // Listen for Bootstrap tab show event
     const metricsTab = document.getElementById('metrics-tab');
     if (metricsTab) {
-      metricsTab.addEventListener('shown.bs.tab', () => {
+      this._metricsTabHandler = () => {
         if (this.activeSubTab === 'compression') {
           this.drawBarCharts();
         }
-      });
+      };
+      metricsTab.addEventListener('shown.bs.tab', this._metricsTabHandler);
     }
+  },
+
+  beforeUnmount() {
+    const metricsTab = document.getElementById('metrics-tab');
+    if (metricsTab && this._metricsTabHandler) {
+      metricsTab.removeEventListener('shown.bs.tab', this._metricsTabHandler);
+      this._metricsTabHandler = null;
+    }
+    
+    // Purge all Plotly instances to prevent memory leaks
+    this.activeMetrics.forEach(metric => {
+      Plotly.purge(`metric-plot-${metric.id}`);
+      Plotly.purge(`ps-chart-${metric.id}`);
+      Plotly.purge(`ps-err-chart-${metric.id}`);
+    });
+    this.compressionComparisons.forEach(comp => {
+      Plotly.purge(`compression-chart-${comp.id}`);
+    });
+    this.compressionCategoriesList.forEach(category => {
+      Plotly.purge(`bar-chart-${category}`);
+    });
   },
 
   methods: {
@@ -1084,6 +1106,7 @@ export default {
         }
       };
 
+      Plotly.purge(containerId);
       Plotly.newPlot(containerId, traces, layout, config);
     },
 
@@ -1205,6 +1228,7 @@ export default {
         }
       };
 
+      Plotly.purge(containerId);
       Plotly.newPlot(containerId, traces, layout, config);
 
       // Handle zoom events to update state
@@ -1458,6 +1482,7 @@ export default {
         }
       };
 
+      Plotly.purge(containerId);
       Plotly.newPlot(containerId, traces, layout, config);
     },
 
@@ -2084,6 +2109,7 @@ export default {
         }
       };
 
+      Plotly.purge(container);
       Plotly.newPlot(container, traces, layout, config);
 
       // Handle hover events for updating comparisonHoverPoint
@@ -2258,6 +2284,7 @@ export default {
           }
         };
 
+        Plotly.purge(containerId);
         Plotly.newPlot(containerId, traces, layout, config);
       });
     },

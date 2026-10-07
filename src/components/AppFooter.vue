@@ -283,13 +283,24 @@ export default {
         };
         this.messages.push(botMessage);
         
+        const historyToSend = this.messages
+          .filter(msg => msg.id !== botMessage.id && msg.text.trim()) // exclude current bot message and empty msgs
+          .slice(-10) // Limit to the last 10 messages for token context window safety
+          .map(msg => ({
+            role: msg.type === "user" ? "user" : "assistant",
+            content: msg.text
+          }));
+
         const response = await fetch(`${this.baseURL}/chat`, {
           method: "POST",
           headers: {
             "Content-Type": "application/x-www-form-urlencoded",
             "Authorization": `Bearer ${localStorage.getItem("fzvis_token")}`
           },
-          body: new URLSearchParams({ message: messageToSend }),
+          body: new URLSearchParams({ 
+            message: messageToSend,
+            history: JSON.stringify(historyToSend)
+          }),
         });
 
         if (!response.ok) {

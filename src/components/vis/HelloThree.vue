@@ -1202,11 +1202,30 @@ export default {
       return { data: roiData, dims: [roiW, roiH, roiD] };
     }
 
+    function disposeMesh(mesh) {
+      if (!mesh) return;
+      if (mesh.geometry) mesh.geometry.dispose();
+      if (mesh.material) {
+        if (mesh.material.uniforms) {
+          for (const u of Object.values(mesh.material.uniforms)) {
+            if (u.value && typeof u.value.dispose === 'function') u.value.dispose();
+          }
+        }
+        mesh.material.dispose();
+      }
+    }
+
     function updateVisualization(ctx, content, dims, precision, isOriginal, options = {}) {
       if (!ctx || !content || !dims || dims[0] <= 0 || dims[1] <= 0) return;
       const { scene } = ctx;
-      if (ctx.volumeMesh) scene.remove(ctx.volumeMesh);
-      if (ctx.sliceMesh) scene.remove(ctx.sliceMesh);
+      if (ctx.volumeMesh) {
+        scene.remove(ctx.volumeMesh);
+        disposeMesh(ctx.volumeMesh);
+      }
+      if (ctx.sliceMesh) {
+        scene.remove(ctx.sliceMesh);
+        disposeMesh(ctx.sliceMesh);
+      }
 
       let data = toFloat32Data(content, precision, options.endianness);
       if (!data) return;

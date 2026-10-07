@@ -1,4 +1,5 @@
 import numpy as np
+import scipy.ndimage
 import threading
 import signal
 import logging
@@ -102,19 +103,16 @@ def _derive_edits_with_data_size_check(orig_f64, decp_f64, config, connectivity_
 
 def compute_power_spectrum(data_array, parameters):
     """Compute power spectrum and relative error if original data is available"""
-    import base64
-    from io import BytesIO
-    import matplotlib
-    matplotlib.use('Agg')
-    import matplotlib.pyplot as plt
-
     dim = parameters.get('dim', len(data_array.shape))
 
     def compute_binned_spectrum(data, dim):
         """Helper function to compute binned power spectrum"""
         # Step 1: Compute density contrast (fluctuations around mean)
         mean_density = np.mean(data)
-        delta = (data - mean_density) / mean_density
+        if abs(mean_density) > 1e-12:
+            delta = (data - mean_density) / mean_density
+        else:
+            delta = data - mean_density
 
         # Step 2: Compute FFT and shift zero frequency to center
         delta_k = np.fft.fftn(delta)
@@ -198,63 +196,6 @@ def compute_power_spectrum(data_array, parameters):
                 relative_error.append(rel_err)
             else:
                 relative_error.append(0.0)
-
-    from matplotlib.ticker import LogLocator
-
-    # Create plots: one or two depending on whether we have original data
-    num_plots = 2 if has_original else 1
-    fig, axes = plt.subplots(num_plots, 1, figsize=(8, 6 * num_plots))
-    if num_plots == 1:
-        axes = [axes]  # Make it iterable
-
-    # Plot 1: Power Spectrum
-    ax = axes[0]
-    if has_original:
-        ax.loglog(binned_k_orig, binned_power_orig, 'o-', linewidth=2.5, markersize=5,
-                 label='Original', color='blue', alpha=0.7)
-        ax.loglog(binned_k, binned_power, 's--', linewidth=2.5, markersize=5,
-                 label='Decompressed', color='red', alpha=0.7)
-        ax.legend(fontsize=14, loc='best', framealpha=0.9)
-    else:
-        ax.loglog(binned_k, binned_power, 'o-', linewidth=2.5, markersize=5)
-
-    ax.set_xlabel('Wavenumber k', fontsize=16, fontweight='bold')
-    ax.set_ylabel('Power Spectrum P(k)', fontsize=16, fontweight='bold')
-    ax.set_title('Power Spectrum', fontsize=18, fontweight='bold', pad=15)
-    ax.tick_params(axis='both', which='major', labelsize=14, width=1.5, length=6)
-    ax.tick_params(axis='both', which='minor', labelsize=12, width=1, length=4)
-    ax.xaxis.set_major_locator(LogLocator(base=10.0, numticks=6))
-    ax.yaxis.set_major_locator(LogLocator(base=10.0, numticks=6))
-    plt.setp(ax.xaxis.get_majorticklabels(), rotation=45, ha='right')
-    ax.grid(True, alpha=0.3, linewidth=1.2)
-    ax.grid(True, which='minor', alpha=0.15, linewidth=0.8)
-
-    # Plot 2: Relative Error (if original data available)
-    if has_original:
-        ax2 = axes[1]
-        ax2.semilogx(binned_k, relative_error, 'o-', linewidth=2.5, markersize=5, color='green')
-        ax2.axhline(y=0, color='black', linestyle='--', linewidth=1.5, alpha=0.5, label='Original (zero error)')
-
-        ax2.set_xlabel('Wavenumber k', fontsize=16, fontweight='bold')
-        ax2.set_ylabel('Relative Error (P\'(k) - P(k)) / P(k)', fontsize=16, fontweight='bold')
-        ax2.set_title('Power Spectrum Relative Error', fontsize=18, fontweight='bold', pad=15)
-        ax2.tick_params(axis='both', which='major', labelsize=14, width=1.5, length=6)
-        ax2.tick_params(axis='both', which='minor', labelsize=12, width=1, length=4)
-        ax2.xaxis.set_major_locator(LogLocator(base=10.0, numticks=6))
-        plt.setp(ax2.xaxis.get_majorticklabels(), rotation=45, ha='right')
-        ax2.grid(True, alpha=0.3, linewidth=1.2)
-        ax2.grid(True, which='minor', alpha=0.15, linewidth=0.8)
-        ax2.legend(fontsize=12, loc='best', framealpha=0.9)
-
-    # Tighter layout with extra padding for rotated labels
-    plt.tight_layout(pad=1.5)
-
-    # Save to base64 with higher DPI for publication quality
-    buf = BytesIO()
-    plt.savefig(buf, format='png', dpi=150, bbox_inches='tight', facecolor='white', edgecolor='none')
-    plt.close()
-    buf.seek(0)
-    img_base64 = base64.b64encode(buf.read()).decode('utf-8')
 
     result = {
         'type': 'power_spectrum',
@@ -439,25 +380,14 @@ def compute_wavelet(data_array, parameters):
         }
 
 
-def _gaussian_kernel_1d(size, sigma):
-    radius = size // 2
-    x = np.arange(-radius, radius + 1, dtype=np.float64)
-    kernel = np.exp(-(x ** 2) / (2 * sigma ** 2))
-    kernel /= np.sum(kernel)
-    return kernel
 
 
 def _gaussian_filter_2d(arr, size=11, sigma=1.5):
     if size < 1:
         return arr
-    if size % 2 == 0:
-        size += 1
-    kernel = _gaussian_kernel_1d(size, sigma)
     radius = size // 2
-    padded = np.pad(arr, ((radius, radius), (radius, radius)), mode='reflect')
-    temp = np.apply_along_axis(lambda m: np.convolve(m, kernel, mode='valid'), axis=1, arr=padded)
-    filtered = np.apply_along_axis(lambda m: np.convolve(m, kernel, mode='valid'), axis=0, arr=temp)
-    return filtered
+    truncate = radius / sigma if sigma > 0 else 4.0
+    return scipy.ndimage.gaussian_filter(arr, sigma=sigma, truncate=truncate, mode='reflect')
 
 
 def _normalize_to_unit(arr, min_val=None, max_val=None):
@@ -511,8 +441,8 @@ def compute_dssim(data_array, parameters):
     c1 = float(parameters.get('c1', 1e-8))
     c2 = float(parameters.get('c2', 1e-8))
 
-    x = np.array(original, dtype=np.float64)
-    y = np.array(data_array, dtype=np.float64)
+    x = np.array(original, copy=False)
+    y = np.array(data_array, copy=False)
     if x.shape != y.shape:
         return {
             'type': 'text',

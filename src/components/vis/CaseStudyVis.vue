@@ -2,9 +2,9 @@
   <div class="case-study-vis h-100 overflow-auto p-3">
     <div class="d-flex justify-content-between align-items-start flex-wrap gap-3 mb-3">
       <div>
-        <h4 class="mb-1">SZ3 Case Study</h4>
+        <h4 class="mb-1">SZ3 Debugging Study</h4>
         <p class="text-muted mb-0">
-          Load an SZ3 case-study export and inspect residuals, quantization, spatial slices, and runtime tradeoffs.
+          Load an SZ3 debugging export and inspect residuals, quantization, spatial slices, and runtime tradeoffs.
         </p>
       </div>
       <!-- <span class="badge text-bg-light border">Safe root: <code>{{ caseStudyBaseDir || '~/.fzvis/case_studies' }}</code></span> -->
@@ -14,7 +14,7 @@
       <div class="card-body">
         <div class="row g-3 align-items-end">
           <div class="col-xl-4">
-            <label class="form-label">Available case studies</label>
+            <label class="form-label">Available cases</label>
             <select v-model="serverStudyPath" class="form-select">
               <option value="">Select from folder...</option>
               <option v-for="path in availablePaths" :key="path" :value="path">{{ $maskDisplayPath(path) }}</option>

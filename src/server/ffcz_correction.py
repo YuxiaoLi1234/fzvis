@@ -40,10 +40,9 @@ def collect_ffcz_bytes(prefix: Path) -> int:
         Total size in bytes of all correction files
     """
     total = 0
-    for suffix in [".fedits", ".fflags", ".sedits", ".sflags", ".extreme"]:
-        path = Path(f"{prefix}{suffix}")
-        if path.exists():
-            total += path.stat().st_size
+    for p in prefix.parent.glob(f"{prefix.name}.*"):
+        if not p.name.endswith(".corrected"):
+            total += p.stat().st_size
     return total
 
 
@@ -53,13 +52,12 @@ def cleanup_ffcz_files(prefix: Path):
     Args:
         prefix: Path prefix for FFCz output files
     """
-    for suffix in [".fedits", ".fflags", ".sedits", ".sflags", ".extreme"]:
-        path = Path(f"{prefix}{suffix}")
-        if path.exists():
+    for p in prefix.parent.glob(f"{prefix.name}.*"):
+        if not p.name.endswith(".corrected"):
             try:
-                path.unlink()
+                p.unlink()
             except Exception as e:
-                logger.warning(f"Failed to delete {path}: {e}")
+                logger.warning(f"Failed to delete {p}: {e}")
 
 
 def _build_dim_args(dims: tuple):
@@ -266,8 +264,7 @@ def run_ffcz_once(
         "nrmse": parse_metric(completed.stdout, "NRMSE"),
         "psnr": parse_metric(completed.stdout, "PSNR") or parse_metric(completed.stdout, "PNSR"),
         "ssnr": parse_metric(completed.stdout, "SSNR"),
-        "stdout": completed.stdout,
-        "stderr": completed.stderr,
+
         "corrected_data_requested": bool(return_corrected_data),
         "corrected_data_available": False,
         "corrected_data_changed": None,

@@ -2,6 +2,7 @@
 
 from argparse import ArgumentParser
 from flask import Flask, request, jsonify, send_file, send_from_directory, Response, stream_with_context
+from werkzeug.utils import secure_filename
 from flask_cors import CORS
 import json
 import jwt
@@ -24,6 +25,13 @@ from analysis_metrics import METRIC_HANDLERS
 import logging
 import traceback
 import sys
+import uuid
+from concurrent.futures import ThreadPoolExecutor
+import cachetools
+
+# Background Task Management
+analysis_executor = ThreadPoolExecutor(max_workers=4)
+analysis_tasks = {}
 
 load_dotenv()
 
@@ -56,8 +64,97 @@ metadata_file = upload_dir / "metadata.json"
 case_study_metadata_file = case_study_dir / "metadata.json"
 saved_datasets = {}
 saved_case_studies = {}
-decompressed_data_cache = {}  # Cache for decompressed data
-input_data_cache = {}     # Cache for analysis datasets indexed by client-provided keys
+datasets_lock = threading.RLock()
+case_studies_lock = threading.RLock()
+
+# Helper size formatting and parsing utilities
+def _format_bytes(num_bytes):
+    if not num_bytes:
+        return "0 B"
+    size = float(num_bytes)
+    for unit in ['B', 'KB', 'MB', 'GB', 'TB', 'PB']:
+        if size < 1024.0:
+            return f"{size:.2f} {unit}"
+        size /= 1024.0
+    return f"{size:.2f} PB"
+
+
+def _parse_size_in_bytes(val, default_mb=100):
+    if not val:
+        return default_mb * 1024 * 1024
+    val_str = str(val).strip().upper()
+    try:
+        if val_str.endswith("GB") or val_str.endswith("G"):
+            return int(float(val_str.rstrip("GB").rstrip("G").strip()) * 1024 * 1024 * 1024)
+        elif val_str.endswith("MB") or val_str.endswith("M"):
+            return int(float(val_str.rstrip("MB").rstrip("M").strip()) * 1024 * 1024)
+        elif val_str.endswith("KB") or val_str.endswith("K"):
+            return int(float(val_str.rstrip("KB").rstrip("K").strip()) * 1024)
+        else:
+            num = float(val_str)
+            if num <= 10000:
+                return int(num * 1024 * 1024)
+            return int(num)
+    except Exception:
+        return default_mb * 1024 * 1024
+
+
+class ThreadSafeLRUCache:
+    """Thread-safe LRU cache wrapper around cachetools.LRUCache."""
+    def __init__(self, name="cache", maxsize=50):
+        self.name = name
+        self.lock = threading.RLock()
+        self.maxsize = max(1, int(maxsize))
+        self.cache = cachetools.LRUCache(maxsize=self.maxsize)
+
+    def get(self, key, default=None):
+        with self.lock:
+            return self.cache.get(key, default)
+
+    def __getitem__(self, key):
+        with self.lock:
+            return self.cache[key]
+
+    def __setitem__(self, key, value):
+        with self.lock:
+            if len(self.cache) >= self.maxsize and key not in self.cache:
+                logger.info(f"[{self.name}] Reached maxsize={self.maxsize}. Evicting LRU item to store key='{key}'.")
+            self.cache[key] = value
+
+    def __contains__(self, key):
+        with self.lock:
+            return key in self.cache
+
+    def pop(self, key, default=None):
+        with self.lock:
+            return self.cache.pop(key, default)
+
+    def __len__(self):
+        with self.lock:
+            return len(self.cache)
+
+    def clear(self):
+        with self.lock:
+            self.cache.clear()
+
+    def keys(self):
+        with self.lock:
+            return list(self.cache.keys())
+
+
+# Cache Size Configuration (item count)
+DEFAULT_CACHE_SIZE = int(os.getenv("FZVIS_CACHE_SIZE", "50"))
+INPUT_CACHE_SIZE = int(os.getenv("FZVIS_INPUT_CACHE_SIZE", str(DEFAULT_CACHE_SIZE)))
+DECOMPRESSED_CACHE_SIZE = int(os.getenv("FZVIS_DECOMPRESSED_CACHE_SIZE", str(DEFAULT_CACHE_SIZE)))
+
+# Separate In-Memory Caches for Datasets and Decompressed Results
+input_data_cache = ThreadSafeLRUCache(name="input_data_cache", maxsize=INPUT_CACHE_SIZE)
+decompressed_data_cache = ThreadSafeLRUCache(name="decompressed_data_cache", maxsize=DECOMPRESSED_CACHE_SIZE)
+
+# Compressor Instance Limits
+MAX_COMPRESSOR_INSTANCES = int(os.getenv("FZVIS_MAX_COMPRESSOR_INSTANCES", "10"))
+active_compressor_lock = threading.Lock()
+active_compressor_count = 0
 
 
 def _slugify_name(name):
@@ -80,18 +177,64 @@ def _sanitize_relative_path(relative_path):
     return Path(*parts)
 
 
+def _resolve_upload_path(filename, must_exist=False):
+    """
+    Safely resolves a filename within upload_dir, preventing path traversal attacks.
+    Returns the resolved Path object.
+    Raises ValueError on invalid/unsafe paths or FileNotFoundError if must_exist is True and file missing.
+    """
+    if not filename or not isinstance(filename, str):
+        raise ValueError("Filename is required")
+
+    filename = filename.strip()
+    if not filename:
+        raise ValueError("Filename cannot be empty")
+
+    if ".." in filename or "/" in filename or "\\" in filename:
+        raise ValueError("Invalid filename: directory traversal is not allowed")
+
+    safe_name = secure_filename(filename)
+    if not safe_name:
+        raise ValueError("Invalid filename")
+
+    base_dir = upload_dir.resolve()
+    target_path = (base_dir / safe_name).resolve()
+
+    if not target_path.is_relative_to(base_dir) or target_path == base_dir:
+        raise ValueError("Path traversal detected")
+
+    if must_exist and not target_path.is_file():
+        raise FileNotFoundError(f"File '{safe_name}' not found")
+
+    return target_path
+
+
 def _read_json_file(file_path):
     with open(file_path, 'r') as handle:
         return json.load(handle)
 
 
+def _persist_datasets():
+    """Safely persist saved_datasets to disk using atomic replacement under lock."""
+    with datasets_lock:
+        temp_file = metadata_file.parent / f".metadata.tmp.{os.getpid()}.{threading.get_ident()}"
+        with open(temp_file, 'w') as f:
+            json.dump(saved_datasets, f, indent=4)
+        temp_file.replace(metadata_file)
+
+
 def _persist_case_studies():
-    with open(case_study_metadata_file, 'w') as handle:
-        json.dump(saved_case_studies, handle, indent=4)
+    """Safely persist saved_case_studies to disk using atomic replacement under lock."""
+    with case_studies_lock:
+        temp_file = case_study_metadata_file.parent / f".case_study_metadata.tmp.{os.getpid()}.{threading.get_ident()}"
+        with open(temp_file, 'w') as handle:
+            json.dump(saved_case_studies, handle, indent=4)
+        temp_file.replace(case_study_metadata_file)
 
 
 def _get_case_study_entry(study_id):
-    study = saved_case_studies.get(study_id)
+    with case_studies_lock:
+        study = saved_case_studies.get(study_id)
     if not study:
         raise FileNotFoundError(f"Case study '{study_id}' not found")
     return study
@@ -171,9 +314,10 @@ def _register_case_study_path(local_path, display_name=None, persist=True):
     summary["manifest"] = "manifest.json"
     summary["source"] = "server_path"
 
-    saved_case_studies[study_id] = summary
-    if persist:
-        _persist_case_studies()
+    with case_studies_lock:
+        saved_case_studies[study_id] = summary
+        if persist:
+            _persist_case_studies()
     return summary, manifest
 
 def _parse_run_ids_param():
@@ -387,7 +531,7 @@ def _get_human_readable_size(filepath):
 
 # Read NetCDF file
 def _read_netcdf_file(filename, variable, sliceParams=None):
-    filePath = upload_dir / filename
+    filePath = _resolve_upload_path(filename, must_exist=True)
     with nc.Dataset(filePath) as dataSet:
         if variable == "metadata":
             return {
@@ -438,10 +582,17 @@ client = OpenAI(
     base_url = "https://integrate.api.nvidia.com/v1",
     api_key = os.environ.get("NVIDIA_API_KEY", ""),
 )
-conversation_history = [{"role": "system", "content": DEFAULT_SYSTEM_CONFIG_PROMPT}]
+# Removed global conversation_history to avoid cross-session leakage
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = os.getenv('FLASK_SECRET_KEY', 'default_secret_key')
+
+# Maximum file upload size limit
+MAX_UPLOAD_SIZE_BYTES = _parse_size_in_bytes(
+    os.getenv('FZVIS_MAX_UPLOAD_SIZE') or os.getenv('FZVIS_MAX_UPLOAD_SIZE_MB'),
+    default_mb=100
+)
+app.config['MAX_CONTENT_LENGTH'] = MAX_UPLOAD_SIZE_BYTES
 CORS(app)
 
 
@@ -457,7 +608,12 @@ def token_required(f):
 
         token = None
         if 'Authorization' in request.headers:
-            token = request.headers['Authorization'].split(" ")[1]
+            auth_header = request.headers.get('Authorization', '')
+            parts = auth_header.split()
+            if len(parts) == 2 and parts[0].lower() == 'bearer':
+                token = parts[1]
+            else:
+                return jsonify({'error': 'Invalid or malformed token header format!'}), 401
         
         if not token:
             print(f"Auth failed: Token missing for {request.path}")
@@ -479,6 +635,14 @@ def not_found_error(error):
     logger.warning(f"404 error: {request.url}")
     return jsonify({"error": "Resource not found"}), 404
 
+@app.errorhandler(413)
+def request_entity_too_large(error):
+    limit_str = _format_bytes(app.config.get('MAX_CONTENT_LENGTH', MAX_UPLOAD_SIZE_BYTES))
+    logger.warning(f"413 Payload Too Large: request exceeded file upload limit of {limit_str}")
+    return jsonify({
+        "error": f"Uploaded file exceeds the maximum allowed size limit of {limit_str}."
+    }), 413
+
 @app.errorhandler(500)
 def internal_error(error):
     logger.error(f"500 error: {error}")
@@ -493,7 +657,12 @@ def handle_unexpected_error(error):
 
 @app.route("/api/auth-status", methods=["GET"])
 def auth_status():
-    return jsonify({"passcodeRequired": is_passcode_auth_enabled()}), 200
+    return jsonify({
+        "passcodeRequired": is_passcode_auth_enabled(),
+        "maxCompressorInstances": MAX_COMPRESSOR_INSTANCES,
+        "maxUploadSizeBytes": MAX_UPLOAD_SIZE_BYTES,
+        "maxUploadSizeFormatted": _format_bytes(MAX_UPLOAD_SIZE_BYTES)
+    }), 200
 
 @app.route("/api/login", methods=["POST"])
 def login():
@@ -523,7 +692,9 @@ def verify_token():
 @app.route("/api/listDatasets", methods=["GET", "POST"])
 @token_required
 def get_uploaded_datasets():
-    return jsonify({"datasets" : saved_datasets}), 200
+    with datasets_lock:
+        datasets_copy = dict(saved_datasets)
+    return jsonify({"datasets" : datasets_copy}), 200
 
 
 # Route to send the file back to the front end
@@ -533,21 +704,31 @@ def send_data_file():
     fileName = request.args.get("filename")
     fileType = request.args.get("filetype")
 
-    # Check if the file exists first
-    filePath = upload_dir / fileName
-    if not filePath.exists():
+    if not fileName:
+        return jsonify({"error": "filename parameter is required"}), 400
+
+    try:
+        filePath = _resolve_upload_path(fileName, must_exist=True)
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    except FileNotFoundError:
         return jsonify({"error": "File not found"}), 404
-    
+
     # Handle different file types
     if fileType == "raw":
         return send_file(filePath, as_attachment=False)
     elif fileType == "netcdf":
         variable = request.args.get("variable")
         slices = request.args.get("slices")
-        sliceParams = json.loads(slices) if slices else None
-        varData = _read_netcdf_file(fileName, variable, sliceParams)
-        # Send the array as bytes
-        return Response(varData.tobytes(), mimetype="application/octet-stream")
+        try:
+            sliceParams = json.loads(slices) if slices else None
+            varData = _read_netcdf_file(filePath.name, variable, sliceParams)
+            return Response(memoryview(varData), mimetype="application/octet-stream")
+        except Exception as e:
+            logger.error(f"Error reading netcdf file '{fileName}': {e}")
+            return jsonify({"error": f"Failed to read NetCDF data: {str(e)}"}), 500
+    else:
+        return jsonify({"error": f"Invalid or missing filetype: '{fileType}'"}), 400
 
 
 # Route to handle file upload
@@ -561,52 +742,80 @@ def upload_file():
         filePath = ""
         # Uploading a new dataset 
         if "file" in request.files: 
+            datasetMetadata = {}
             uploadedFile = request.files["file"]
-            if uploadedFile.filename == "":
-                return jsonify({"error" : "No file selected"}), 400
+            if not uploadedFile or not uploadedFile.filename:
+                return jsonify({"error": "No file selected"}), 400
 
-            # Save file
-            fileName = uploadedFile.filename
-            filePath = upload_dir / fileName
+            raw_name = uploadedFile.filename.strip()
+            try:
+                base_name = os.path.basename(raw_name)
+                filePath = _resolve_upload_path(base_name, must_exist=False)
+            except ValueError as e:
+                return jsonify({"error": f"Invalid upload filename: {str(e)}"}), 400
+
+            fileName = filePath.name
             uploadedFile.save(filePath)
 
             # Use the filename as the key for now as we don't allow two duplicate files
             datasetMetadata["name"] = fileName
             datasetMetadata["size"] = _get_human_readable_size(filePath)
-            readDataFile = True
             
-        # Updating an existing dataset
-        elif request.form.get("filename"):
-            fileName = request.form.get("filename")
-            datasetMetadata = saved_datasets[fileName]
+            # Handle different file types
+            fileType = request.form.get("type")
+            datasetMetadata["type"] = fileType
 
-        # Handle different file types
-        fileType = request.form.get("type")
-        datasetMetadata["type"] = fileType
-
-        if fileType == "netcdf":
-            if readDataFile:
+            if fileType == "netcdf":
                 dataSet = nc.Dataset(filePath)
                 variableKeys = dataSet.variables.keys()
                 datasetMetadata["vars"] = _read_netcdf_file(datasetMetadata["name"], "metadata")
-        
-        elif fileType == "raw":
-            datasetMetadata["width"] = request.form.get("width")
-            datasetMetadata["height"] = request.form.get("height")
-            datasetMetadata["depth"] = request.form.get("depth")
-            datasetMetadata["precision"] = request.form.get("precision")
-            datasetMetadata["endianness"] = request.form.get("endianness", "little")
+            elif fileType == "raw":
+                datasetMetadata["width"] = request.form.get("width")
+                datasetMetadata["height"] = request.form.get("height")
+                datasetMetadata["depth"] = request.form.get("depth")
+                datasetMetadata["precision"] = request.form.get("precision")
+                datasetMetadata["endianness"] = request.form.get("endianness", "little")
 
-        # Save metadata to a json file
-        saved_datasets[fileName] = datasetMetadata
-        result["dataset"] = datasetMetadata
-        with open(metadata_file, 'w') as f:
-            json.dump(saved_datasets, f, indent=4)
-        return jsonify(result), 200
+            # Save metadata to a json file under lock
+            with datasets_lock:
+                saved_datasets[fileName] = datasetMetadata
+                result["dataset"] = datasetMetadata
+                _persist_datasets()
+            return jsonify(result), 200
+
+        # Updating an existing dataset (Option B: Atomic Field-Level Patching)
+        elif request.form.get("filename"):
+            fileName = request.form.get("filename")
+            try:
+                _resolve_upload_path(fileName, must_exist=False)
+            except ValueError as e:
+                return jsonify({"error": f"Invalid filename: {str(e)}"}), 400
+
+            with datasets_lock:
+                if fileName not in saved_datasets:
+                    return jsonify({"error": f"Dataset '{fileName}' not found"}), 404
+
+                target = saved_datasets[fileName]
+
+                # Patch only fields explicitly provided in the request
+                if request.form.get("type"):
+                    target["type"] = request.form.get("type")
+
+                for field in ("width", "height", "depth", "precision", "endianness"):
+                    val = request.form.get(field)
+                    if val is not None:
+                        target[field] = val
+
+                result["dataset"] = dict(target)
+                _persist_datasets()
+            return jsonify(result), 200
+
+        else:
+            return jsonify({"error": "No file or filename provided"}), 400
         
     except Exception as e:
         print("Error in upload_file():", e)
-        return jsonify({"error" : str(e)}), 500
+        return jsonify({"error": str(e)}), 500
 
 
 # Route to handle datasets update
@@ -623,25 +832,37 @@ def update_datasets():
         if request.form.get("deletedDatasets"):
             deletedDatasets = json.loads(request.form["deletedDatasets"])
             print("deletedDatasets: ", deletedDatasets)
-            for d in deletedDatasets:
-                filePath = upload_dir / saved_datasets[d].get("name")
-                if os.path.isfile(filePath):
-                    os.remove(filePath)
-                saved_datasets.pop(d)
-            # Update the metadata file
-            with open(metadata_file, 'w') as f:
-                json.dump(saved_datasets, f, indent=4)
-        return jsonify({"datasets" : saved_datasets}), 200
+            with datasets_lock:
+                for d in deletedDatasets:
+                    if d in saved_datasets:
+                        target_name = saved_datasets[d].get("name", "")
+                        try:
+                            filePath = _resolve_upload_path(target_name, must_exist=True)
+                            if os.path.isfile(filePath):
+                                os.remove(filePath)
+                        except (ValueError, FileNotFoundError) as err:
+                            logger.warning(f"Skipping deletion for invalid or nonexistent file '{target_name}': {err}")
+                        except OSError as err:
+                            logger.warning(f"Could not remove file {target_name}: {err}")
+                        saved_datasets.pop(d, None)
+                # Update the metadata file
+                _persist_datasets()
+
+        with datasets_lock:
+            datasets_copy = dict(saved_datasets)
+        return jsonify({"datasets": datasets_copy}), 200
 
     except Exception as e:
         print(e)
-        return jsonify({"error" : str(e)}), 500
+        return jsonify({"error": str(e)}), 500
 
 
 @app.route("/api/caseStudies", methods=["GET"])
 @token_required
 def list_case_studies():
-    return jsonify({"case_studies": saved_case_studies, "base_dir": str(case_study_dir)}), 200
+    with case_studies_lock:
+        case_studies_copy = dict(saved_case_studies)
+    return jsonify({"case_studies": case_studies_copy, "base_dir": str(case_study_dir)}), 200
 
 
 @app.route("/api/caseStudy/availablePaths", methods=["GET"])
@@ -719,8 +940,9 @@ def upload_case_study():
         summary["manifest"] = saved_manifest_rel
         summary["file_count"] = file_count
         summary["source"] = "upload"
-        saved_case_studies[study_id] = summary
-        _persist_case_studies()
+        with case_studies_lock:
+            saved_case_studies[study_id] = summary
+            _persist_case_studies()
         return jsonify({"case_study": summary, "manifest": manifest}), 200
     except Exception as e:
         logger.error(f"Error in upload_case_study(): {e}")
@@ -957,8 +1179,7 @@ def get_decompressed_data(data_key):
         if data is None:
             return jsonify({"error": "DATA_KEY_NOT_FOUND", "missing_keys": [data_key]}), 404
         
-        data_bytes = data.tobytes()
-        return Response(data_bytes, mimetype="application/octet-stream")
+        return Response(memoryview(data), mimetype="application/octet-stream")
     except Exception as e:
         print(f"Error in get_decompressed_data(): {e}")
         return jsonify({"error": str(e)}), 500
@@ -1020,6 +1241,25 @@ def indexlist():
         option = int(request.form.get("get_options"))
         # Run all submitted compressors and compare the results
         if(option == 0):
+            configurations = json.loads(request.form.get("configurations") or "{}")
+            active_configs = {
+                name: config for name, config in configurations.items()
+                if isinstance(config, dict) and config.get("compressor_id") != ''
+            }
+
+            if len(active_configs) > MAX_COMPRESSOR_INSTANCES:
+                return jsonify({
+                    "error": f"Requested {len(active_configs)} compressor instances, which exceeds the maximum limit of {MAX_COMPRESSOR_INSTANCES}."
+                }), 400
+
+            global active_compressor_count
+            with active_compressor_lock:
+                if active_compressor_count + len(active_configs) > MAX_COMPRESSOR_INSTANCES:
+                    return jsonify({
+                        "error": f"Server busy: currently running {active_compressor_count} compressor instance(s). Running {len(active_configs)} more would exceed the system limit of {MAX_COMPRESSOR_INSTANCES}."
+                    }), 429
+                active_compressor_count += len(active_configs)
+
             def replace_unsupported_values(obj):
                 if isinstance(obj, dict):
                     return {k: replace_unsupported_values(v) for k, v in obj.items()}
@@ -1052,7 +1292,11 @@ def indexlist():
                 precision = meta.get("precision", 'f')
                 endianness = meta.get("endianness", 'little')
                 if input_array is None and meta.get("name"):
-                    filePath = upload_dir / meta["name"]
+                    try:
+                        filePath = _resolve_upload_path(meta["name"], must_exist=True)
+                    except (ValueError, FileNotFoundError) as err:
+                        logger.error(f"Cannot load dataset file: {err}")
+                        return {"error": f"Dataset file not found: {meta.get('name')}"}
                     dtype = _precision_to_dtype(precision, endianness)
                     logger.info(f"indexlist: Loading file with precision={precision}, dtype={dtype}, meta={meta}")
                     buffer = np.fromfile(filePath, dtype=dtype)
@@ -1199,21 +1443,20 @@ def indexlist():
                 result["data_key"] = key
                 decompressed_data_cache[key] = decompData
                 return result
-            
-            configurations = json.loads(request.form.get("configurations"))
-            # pprint(configurations)
-            result = {}
-            for name, config in configurations.items():
-                if(config["compressor_id"] != ''):
+
+            try:
+                result = {}
+                for name, config in active_configs.items():
                     output = comparing_compressor(config)
                     if "error" in output:
                         # If it's a cache miss, return 404 so frontend can retry
                         status_code = 404 if output["error"] == "DATA_KEY_NOT_FOUND" else 500
                         return jsonify(output), status_code
                     result[name] = output
-                    # print("original data non-zero values:", np.count_nonzero(input_array))
-                    # print("decompressed data non-zero values:", np.count_nonzero(output["decp_data"]))
-            return jsonify(result), 200
+                return jsonify(result), 200
+            finally:
+                with active_compressor_lock:
+                    active_compressor_count -= len(active_configs)
         
         elif option == 1:
             # pprint(lp.PressioCompressor("roibin", {"roibin:roi": "sz3"}).get_configuration())
@@ -1446,14 +1689,31 @@ def get_progressive_config():
 def get_ai_response(): 
     try:
         message = request.form.get("message")
+        history_json = request.form.get("history")
+        
         if not message:
             return jsonify({"error": "No input provided"}), 400
+
+        # Construct ephemeral context safely from request
+        messages = [{"role": "system", "content": DEFAULT_SYSTEM_CONFIG_PROMPT}]
         
-        # Create and return streaming completion using conversation history
-        conversation_history.append({"role": "user", "content": message})
+        # Append frontend history (enforcing safety token limit)
+        if history_json:
+            try:
+                frontend_history = json.loads(history_json)
+                for msg in frontend_history[-10:]:  # Only keep last 10 messages
+                    if "role" in msg and "content" in msg and msg["content"].strip():
+                        messages.append({"role": msg["role"], "content": msg["content"]})
+            except json.JSONDecodeError:
+                pass # ignore malformed history
+        
+        # Append current user prompt
+        messages.append({"role": "user", "content": message})
+        
+        # Create and return streaming completion
         response = client.chat.completions.create(
             model=LLM_MODEL_NAME,
-            messages=conversation_history,
+            messages=messages,
             temperature=0.6,
             top_p=0.7,
             max_tokens=4096,
@@ -1462,22 +1722,17 @@ def get_ai_response():
 
         # Stream the response back to the client
         def generate():
-            fullResponse = ""
             for chunk in response:
                 if chunk.choices:
                     delta = chunk.choices[0].delta
                     reasoning = delta.reasoning_content or ""
                     content = delta.content or ""
-
-                    if content:
-                        fullResponse += content
                     
                     payload = {
                         "reasoning_content": reasoning,
                         "content": content
                     }
                     yield f"data: {json.dumps(payload)}\n\n"
-            conversation_history.append({"role": "assistant", "content": fullResponse})
             yield "data: [DONE]\n\n"
         
         return Response(
@@ -1563,8 +1818,20 @@ def compute_analysis_metric():
         if not handler:
             return jsonify({"error": f"Unknown metric type: {metric_type}"}), 400
 
-        result = handler(data_array, parameters)
-        return jsonify({"result": result}), 200
+        task_id = str(uuid.uuid4())
+        analysis_tasks[task_id] = {"status": "pending"}
+
+        def run_task(tid, h, arr, params):
+            try:
+                res = h(arr, params)
+                analysis_tasks[tid] = {"status": "completed", "result": {"result": res}}
+            except Exception as ex:
+                analysis_tasks[tid] = {"status": "error", "error": str(ex)}
+                logger.error(f"Task {tid} failed: {ex}")
+                traceback.print_exc()
+
+        analysis_executor.submit(run_task, task_id, handler, data_array, parameters)
+        return jsonify({"task_id": task_id, "status": "pending"}), 202
     
     except Exception as e:
         print(f"Error in compute_analysis_metric(): {e}")
@@ -1627,14 +1894,34 @@ def upload_and_compute_metric():
         if not handler:
             return jsonify({"error": f"Unknown metric type: {metric_type}"}), 400
 
-        result = handler(data_array, parameters)
-        return jsonify({"result": result, "data_key": data_key, "stored": True}), 200
+        task_id = str(uuid.uuid4())
+        analysis_tasks[task_id] = {"status": "pending"}
+
+        def run_upload_task(tid, h, arr, params, d_key):
+            try:
+                res = h(arr, params)
+                analysis_tasks[tid] = {"status": "completed", "result": {"result": res, "data_key": d_key, "stored": True}}
+            except Exception as ex:
+                analysis_tasks[tid] = {"status": "error", "error": str(ex)}
+                logger.error(f"Upload task {tid} failed: {ex}")
+                traceback.print_exc()
+
+        analysis_executor.submit(run_upload_task, task_id, handler, data_array, parameters, data_key)
+        return jsonify({"task_id": task_id, "status": "pending"}), 202
 
     except Exception as e:
         print(f"Error in upload_and_compute_metric(): {e}")
         import traceback
         traceback.print_exc()
         return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/tasks/<task_id>", methods=["GET"])
+def get_task_status(task_id):
+    task = analysis_tasks.get(task_id)
+    if not task:
+        return jsonify({"error": "Task not found"}), 404
+    return jsonify(task)
 
 
 @app.route("/api/correction/critical_points", methods=["POST"])
@@ -1793,11 +2080,13 @@ if __name__ == '__main__':
     
     # Read uploaded datasets from the metadata file
     if metadata_file.exists():
-        with open(metadata_file, 'r') as f:
-            saved_datasets = json.load(f)
+        with datasets_lock:
+            with open(metadata_file, 'r') as f:
+                saved_datasets = json.load(f)
     if case_study_metadata_file.exists():
-        with open(case_study_metadata_file, 'r') as f:
-            saved_case_studies = json.load(f)
+        with case_studies_lock:
+            with open(case_study_metadata_file, 'r') as f:
+                saved_case_studies = json.load(f)
 
     # Run the server with error handling
     try:

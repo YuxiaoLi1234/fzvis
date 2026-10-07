@@ -1,5 +1,6 @@
 import { createStore } from 'vuex';
 import { markRaw } from 'vue';
+import axios from 'axios';
 
 // Helper to format bytes into a human-readable string
 function formatBytes(bytes) {
@@ -38,6 +39,12 @@ export default createStore({
       decompressed: {}
     },
     bulkGenerationRequests: [],
+    maxCompressorInstances: 10,
+    // Authentication state
+    token: localStorage.getItem('fzvis_token') || '',
+    isAuthenticated: false,
+    passcodeRequired: true,
+    authStatusLoaded: false,
   },
 
   mutations: {
@@ -414,6 +421,32 @@ export default createStore({
     clearBulkGenerationRequest(state, requestId) {
       state.bulkGenerationRequests = state.bulkGenerationRequests.filter(r => r.id !== requestId);
     },
+    setMaxCompressorInstances(state, limit) {
+      const val = Math.max(1, parseInt(limit, 10) || 10);
+      state.maxCompressorInstances = val;
+    },
+    // Authentication mutations
+    setAuthToken(state, token) {
+      state.token = token || '';
+      if (token) {
+        localStorage.setItem('fzvis_token', token);
+        axios.defaults.headers.common['Authorization'] = `Bearer ${token}`;
+      } else {
+        localStorage.removeItem('fzvis_token');
+        delete axios.defaults.headers.common['Authorization'];
+      }
+    },
+    setAuthState(state, { isAuthenticated, passcodeRequired, authStatusLoaded } = {}) {
+      if (isAuthenticated !== undefined) state.isAuthenticated = isAuthenticated;
+      if (passcodeRequired !== undefined) state.passcodeRequired = passcodeRequired;
+      if (authStatusLoaded !== undefined) state.authStatusLoaded = authStatusLoaded;
+    },
+    clearAuth(state) {
+      state.token = '';
+      state.isAuthenticated = false;
+      localStorage.removeItem('fzvis_token');
+      delete axios.defaults.headers.common['Authorization'];
+    },
   },
 
   actions: {
@@ -468,6 +501,89 @@ export default createStore({
           // Continue with remaining filters despite error
         }
       }
+    },
+
+    // Authentication actions
+    async checkAuthStatus({ commit }) {
+      try {
+        const { data } = await axios.get('/api/auth-status');
+        if (data && data.maxCompressorInstances) {
+          commit('setMaxCompressorInstances', data.maxCompressorInstances);
+        }
+        const passcodeRequired = Boolean(data.passcodeRequired);
+
+        if (!passcodeRequired) {
+          commit('clearAuth');
+          commit('setAuthState', {
+            isAuthenticated: true,
+            passcodeRequired: false,
+            authStatusLoaded: true,
+          });
+          return;
+        }
+
+        const token = localStorage.getItem('fzvis_token');
+        if (!token) {
+          commit('setAuthState', {
+            isAuthenticated: false,
+            passcodeRequired: true,
+            authStatusLoaded: true,
+          });
+          return;
+        }
+
+        axios.defaults.headers.common['Authorization'] = `Bearer ${token}`;
+        await axios.get('/api/verify');
+        commit('setAuthToken', token);
+        commit('setAuthState', {
+          isAuthenticated: true,
+          passcodeRequired: true,
+          authStatusLoaded: true,
+        });
+      } catch (_err) {
+        commit('clearAuth');
+        commit('setAuthState', {
+          isAuthenticated: false,
+          passcodeRequired: true,
+          authStatusLoaded: true,
+        });
+      }
+    },
+
+    async login({ commit }, passcode) {
+      const { data } = await axios.post('/api/login', { passcode });
+      commit('setAuthToken', data.token);
+      commit('setAuthState', {
+        isAuthenticated: true,
+        passcodeRequired: true,
+        authStatusLoaded: true,
+      });
+      commit('setStatus', { type: 'success', message: 'Authenticated successfully!' });
+      commit('addHistory', { kind: 'auth', text: 'Logged in', timestamp: Date.now() });
+      return data;
+    },
+
+    logout({ commit }) {
+      commit('clearAuth');
+      commit('setStatus', { type: 'warning', message: 'Session expired. Please login again.' });
+    },
+  },
+  getters: {
+    isAuthenticated: (state) => state.isAuthenticated,
+    passcodeRequired: (state) => state.passcodeRequired,
+    authStatusLoaded: (state) => state.authStatusLoaded,
+    maxCompressorInstances: (state) => state.maxCompressorInstances,
+    totalCompressorInstances(state) {
+      let total = 0;
+      const baseNames = Object.keys(state.baseConfigurations || {});
+      baseNames.forEach(baseName => {
+        const derivedCount = Object.keys(state.derivedConfigurations?.[baseName] || {}).length;
+        total += (derivedCount > 0 ? derivedCount : 1);
+      });
+      return total;
+    },
+    canAddCompressorInstance: (state, getters) => (additional = 1) => {
+      return (getters.totalCompressorInstances + additional) <= state.maxCompressorInstances;
     },
   },
   modules: {}

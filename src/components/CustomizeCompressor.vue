@@ -72,13 +72,31 @@ export default {
 
   mounted: function () {
     this.getAvailableCompressors();
-    // Add event listener for modal shown to focus input
-    const saveConfigModal = document.getElementById('saveConfigModal');
-    if (saveConfigModal) {
-      saveConfigModal.addEventListener('shown.bs.modal', () => {
-        const input = document.getElementById('floatingConfigName');
-        if (input) input.focus();
-      });
+    if (this.$refs.saveConfigModalRef) {
+      this.saveModalInstance = Modal.getOrCreateInstance(this.$refs.saveConfigModalRef);
+      this._onSaveModalShown = () => {
+        if (this.$refs.floatingConfigNameRef) this.$refs.floatingConfigNameRef.focus();
+      };
+      this.$refs.saveConfigModalRef.addEventListener('shown.bs.modal', this._onSaveModalShown);
+    }
+    if (this.$refs.replaceConfigModalRef) {
+      this.replaceModalInstance = Modal.getOrCreateInstance(this.$refs.replaceConfigModalRef);
+    }
+  },
+
+  beforeUnmount: function () {
+    if (this.$refs.saveConfigModalRef && this._onSaveModalShown) {
+      this.$refs.saveConfigModalRef.removeEventListener('shown.bs.modal', this._onSaveModalShown);
+    }
+    if (this.saveModalInstance) {
+      this.saveModalInstance.hide();
+      this.saveModalInstance.dispose();
+      this.saveModalInstance = null;
+    }
+    if (this.replaceModalInstance) {
+      this.replaceModalInstance.hide();
+      this.replaceModalInstance.dispose();
+      this.replaceModalInstance = null;
     }
   },
 
@@ -94,21 +112,14 @@ export default {
     },
 
     getAvailableCompressors() {
-      const alertBox = document.getElementById("compressorAlert");
-      const alertMessage = document.getElementById("compressorAlertMessage");
       axios.get(`${this.baseURL}/allCompressors`).then(response => {
         this.initialOptions["Compressor"] = response.data.compressors;
       })
       .catch(error => {
-        if (alertBox && alertMessage) {
-          alertBox.classList.remove("alert-success");
-          alertBox.classList.add("alert-danger", "show");
-          alertMessage.textContent = `Fetch available compressors failed. ${error}`;
-          // Auto dismiss
-          setTimeout(() => {
-            alertBox.classList.remove("show");
-          }, 6000);
-        }
+        this.$store.commit("setStatus", {
+          type: "danger",
+          message: `Fetch available compressors failed. ${error?.message || error}`
+        });
       });
       this.availableOptions = this.initialOptions;
     },
@@ -225,8 +236,10 @@ export default {
 
     handleConfigurationCheck() {
       if (this.baseConfigurations[this.currentConfigName]) {
-        const replaceModal = new Modal(document.getElementById("replaceConfigModal"));
-        replaceModal.show();
+        if (this.$refs.replaceConfigModalRef) {
+          this.replaceModalInstance = this.replaceModalInstance || Modal.getOrCreateInstance(this.$refs.replaceConfigModalRef);
+          this.replaceModalInstance.show();
+        }
       } else {
         this.handleConfigurationSave();
       }
@@ -422,11 +435,7 @@ export default {
     onEnterConfigName() {
       this.handleConfigurationCheck();
       setTimeout(() => {
-        const modal = document.getElementById('saveConfigModal');
-        if (modal) {
-          Modal.getOrCreateInstance(modal).hide();
-          document.querySelectorAll('.modal-backdrop').forEach(el => el.remove());
-        }
+        this.saveModalInstance?.hide();
       }, 100);
     },
 
@@ -436,13 +445,9 @@ export default {
       } else {
         this.currentConfigName = this.selectedCompressor + '_' + this.getFormattedTimestamp();
       }
-      const modal = document.getElementById('saveConfigModal');
-      if (modal) {
-        Modal.getOrCreateInstance(modal).show();
-        setTimeout(() => {
-          const input = document.getElementById('floatingConfigName');
-          if (input) input.focus();
-        }, 100);
+      if (this.$refs.saveConfigModalRef) {
+        this.saveModalInstance = this.saveModalInstance || Modal.getOrCreateInstance(this.$refs.saveConfigModalRef);
+        this.saveModalInstance.show();
       }
     },
 
@@ -716,7 +721,7 @@ export default {
       </div>
 
       <!-- Save configuration/pipeline modal -->
-      <div id="saveConfigModal" class="modal fade" tabindex="-1" aria-labelledby="saveConfigModalLabel" data-bs-keyboard="false" aria-hidden="true">
+      <div ref="saveConfigModalRef" id="saveConfigModal" class="modal fade" tabindex="-1" aria-labelledby="saveConfigModalLabel" data-bs-keyboard="false" aria-hidden="true">
         <div class="modal-dialog modal-dialog-centered">
           <div class="modal-content">
             <div class="modal-header">
@@ -725,7 +730,7 @@ export default {
             </div>
             <div class="modal-body">
               <div class="form-floating">
-                <input type="text" class="form-control" id="floatingConfigName" placeholder="Configuration name" v-model="currentConfigName" @keyup.enter="onEnterConfigName">
+                <input ref="floatingConfigNameRef" type="text" class="form-control" id="floatingConfigName" placeholder="Configuration name" v-model="currentConfigName" @keyup.enter="onEnterConfigName">
                 <label for="floatingConfigName">Configuration name</label>
               </div>
             </div>
@@ -738,7 +743,7 @@ export default {
       </div>
 
       <!-- Confirmation modal for replacing existing configuration -->
-      <div id="replaceConfigModal" class="modal fade" tabindex="-1" aria-labelledby="replaceConfigModalLabel" data-bs-backdrop="static" data-bs-keyboard="false" aria-hidden="true">
+      <div ref="replaceConfigModalRef" id="replaceConfigModal" class="modal fade" tabindex="-1" aria-labelledby="replaceConfigModalLabel" data-bs-backdrop="static" data-bs-keyboard="false" aria-hidden="true">
         <div class="modal-dialog modal-dialog-centered modal-sm">
           <div class="modal-content">
             <div class="modal-header">

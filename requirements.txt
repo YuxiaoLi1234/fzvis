@@ -6,3 +6,6 @@ openai==1.95.1
 matplotlib==3.9.0
 PyWavelets==1.7.0
 PyJWT==2.10.1
+python-dotenv==1.0.1
+cachetools>=5.5.0
+scipy>=1.11.0

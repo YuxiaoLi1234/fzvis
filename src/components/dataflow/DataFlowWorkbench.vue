@@ -191,6 +191,30 @@ export default {
     compressorOptions() {
       return this.$store?.state?.compressorOptions || {};
     },
+    maxCompressorInstances() {
+      return this.$store?.state?.maxCompressorInstances || 10;
+    },
+    totalCompressorInstances() {
+      let count = 0;
+      const compressorNodes = (this.nodes || []).filter(n => n.type === 'compressor');
+      const accountedBases = new Set();
+      compressorNodes.forEach(node => {
+        accountedBases.add(node.id);
+        const derivedMap = this.derivedConfigurations?.[node.id] || {};
+        const derivedCount = Object.keys(derivedMap).length;
+        count += (derivedCount > 0 ? derivedCount : 1);
+      });
+      Object.keys(this.baseConfigurations || {}).forEach(baseName => {
+        if (!accountedBases.has(baseName)) {
+          const derivedCount = Object.keys(this.derivedConfigurations?.[baseName] || {}).length;
+          count += (derivedCount > 0 ? derivedCount : 1);
+        }
+      });
+      return count;
+    },
+    canAddMoreCompressors() {
+      return this.totalCompressorInstances < this.maxCompressorInstances;
+    },
     comparisonData() {
       return this.$store?.state?.comparisonData || {};
     },
@@ -461,7 +485,8 @@ export default {
     },
     canAddNodeType(type) {
       const nodeClass = NodeFactory.getClassByType(type);
-      return nodeClass.canAdd(this.nodes);
+      const context = type === 'compressor' ? { canAddCompressor: this.canAddMoreCompressors } : null;
+      return nodeClass.canAdd(this.nodes, context);
     },
     clearSelection() {
       this.selectedNodeId = null;
@@ -477,9 +502,18 @@ export default {
       const typeRaw = event.dataTransfer.getData('operation/type');
       if (!typeRaw) return;
 
+      if (typeRaw === 'compressor' && !this.canAddMoreCompressors) {
+        this.$store.commit('setStatus', {
+          type: 'warning',
+          message: `Maximum limit of ${this.maxCompressorInstances} compressor instance(s) reached. Delete existing compressors to add more.`
+        });
+        return;
+      }
+
       // Validation check using OOP
       const nodeClass = NodeFactory.getClassByType(typeRaw);
-      if (!nodeClass.canAdd(this.nodes)) {
+      const context = typeRaw === 'compressor' ? { canAddCompressor: this.canAddMoreCompressors } : null;
+      if (!nodeClass.canAdd(this.nodes, context)) {
         // You could also show a toast or a more subtle UI notification
         console.warn(`Cannot add ${typeRaw} node at this stage.`);
         return;
@@ -668,6 +702,18 @@ export default {
       const baseSlug = String(baseConfigName).replace(/[^a-zA-Z0-9_-]/g, '_');
       const existing = Object.keys(this.derivedConfigurations?.[baseConfigName] || {});
 
+      const currentContrib = existing.length > 0 ? existing.length : 1;
+      const newContrib = existing.length + values.length;
+      const netIncrease = newContrib - currentContrib;
+
+      if (this.totalCompressorInstances + netIncrease > this.maxCompressorInstances) {
+        this.$store.commit('setStatus', {
+          type: 'warning',
+          message: `Cannot generate ${values.length} variants: maximum limit of ${this.maxCompressorInstances} compressor instances would be exceeded (${this.totalCompressorInstances} currently active).`
+        });
+        return;
+      }
+
       values.forEach((val, index) => {
         // Store this derived config in the store as well for the ConfigGraph to see
         const derivedConfig = JSON.parse(JSON.stringify(baseConfig));
@@ -851,6 +897,18 @@ export default {
       const baseSlug = String(baseNodeId).replace(/[^a-zA-Z0-9_-]/g, '_');
       const existing = Object.keys(this.derivedConfigurations?.[baseNodeId] || {});
 
+      const currentContrib = existing.length > 0 ? existing.length : 1;
+      const newContrib = existing.length + values.length;
+      const netIncrease = newContrib - currentContrib;
+
+      if (this.totalCompressorInstances + netIncrease > this.maxCompressorInstances) {
+        this.$store.commit('setStatus', {
+          type: 'warning',
+          message: `Cannot generate ${values.length} variants: maximum limit of ${this.maxCompressorInstances} compressor instances would be exceeded (${this.totalCompressorInstances} currently active).`
+        });
+        return;
+      }
+
       // Check if this is an error bound or accuracy parameter
       const isErrorBound = parameter.includes('error_bound') || parameter === 'zfp:accuracy';
 
@@ -1022,7 +1080,7 @@ export default {
 
       const nextGeneratedIds = Array.isArray(payload?.resultIds) ? [...payload.resultIds] : [];
       if (node) {
-        this.cleanupNodeGeneratedComparisonData(node);
+        this.cleanupNodeGeneratedComparisonData(node, nextGeneratedIds);
         node.generatedComparisonIds = nextGeneratedIds;
       }
 
@@ -1080,11 +1138,12 @@ export default {
       if (!node || node.status === 'running') return;
       this.setNodeStatus(nodeId, 'stale', 'Dataset changed. Re-run to refresh results.');
     },
-    cleanupNodeGeneratedComparisonData(node) {
+    cleanupNodeGeneratedComparisonData(node, preserveIds = []) {
       if (!node || !this.$store) return;
       const generatedIds = Array.isArray(node.generatedComparisonIds) ? node.generatedComparisonIds : [];
+      const preserve = new Set(preserveIds || []);
       generatedIds.forEach(resultId => {
-        if (resultId) {
+        if (resultId && !preserve.has(resultId)) {
           this.$store.commit('removeComparisonData', resultId);
         }
       });
@@ -2512,6 +2571,11 @@ export default {
         <div class="card shadow-sm">
           <div class="card-header d-flex align-items-center justify-content-between py-2">
             <span class="fw-semibold">Pipeline Components</span>
+            <div class="d-flex align-items-center gap-1" title="Server limit for concurrent compressor instances">
+              <span class="badge bg-light text-secondary border" style="font-size: 11px;">
+                Limit: {{ maxCompressorInstances }}
+              </span>
+            </div>
           </div>
           <div class="list-group list-group-flush">
             <!-- Data Source -->
@@ -2615,6 +2679,14 @@ export default {
               <div class="d-flex align-items-center gap-2">
                 <i :class="['bi', paletteState.compressors ? 'bi-chevron-down' : 'bi-chevron-right']"></i>
                 <span>Compressor Configs</span>
+                <span
+                  class="badge ms-1"
+                  :class="totalCompressorInstances >= maxCompressorInstances ? 'bg-danger' : 'bg-primary'"
+                  :title="`Active compressor instances: ${totalCompressorInstances} / ${maxCompressorInstances}`"
+                  style="font-size: 10px;"
+                >
+                  {{ totalCompressorInstances }} / {{ maxCompressorInstances }}
+                </span>
               </div>
               <span class="badge bg-secondary">{{ availableCompressors.length }}</span>
             </div>

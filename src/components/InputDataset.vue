@@ -1,7 +1,11 @@
 <template>
   <div class="container align-items-center">
     <h1 class="h4 px-2 mt-3">Dataset Settings
-      <i type="button" class="bi bi-info-circle ms-2 fs-5" data-bs-container="body" data-bs-toggle="popover" data-bs-placement="right" data-bs-html="true" data-bs-content="Currently support <b>raw</b> and <b>NetCDF</b> file formats."></i>
+      <i
+        type="button"
+        class="bi bi-info-circle ms-2 fs-5"
+        v-popover:right="{ html: true, content: 'Currently support <b>raw</b> and <b>NetCDF</b> file formats.' }"
+      ></i>
     </h1>
     
     <input type="file" class="form-control mt-3 mb-2" id="fileloader" @change="handleFileChange">
@@ -83,7 +87,7 @@
       {{ currentDataset == null ? 'Upload' : 'Update' }}
     </button>
     <!-- Button trigger modal -->
-    <button id="viewDatasetsBtn" type="button" class="btn btn-info ms-2 my-1" @click="viewDatasets" title="View all uploaded datasets">View datasets</button>
+    <button id="viewDatasetsBtn" type="button" class="btn btn-info ms-2 my-1" @click="viewDatasets" :disabled="isApplyingDatasetSelection || isLoadingDatasets" title="View all uploaded datasets">View datasets</button>
     <div v-if="currentDataset == null" class="alert alert-danger mt-1">
       No dataset selected for processing.
     </div>
@@ -94,79 +98,14 @@
 
     <!-- NetCDF file explorer -->
     <div v-show="isNetCDF">
-      <table class="table mt-2" v-if="currentDataset">
-        <thead>
-          <tr>
-            <th></th>
-            <th>name</th>
-            <th>type</th>
-            <th>dimensions</th>
-          </tr>
-        </thead>
-        <tbody v-for="(props, name) in currentDataset.vars" :key="name">
-          <tr :class="ncSelectedVar === name ? 'table-primary' : ''">
-            <td style="vertical-align: middle; text-align: center;"><input class="form-check-input" type="radio" name="netcdf-var-select" :value="name" v-model="ncSelectedVar"></td>
-            <td style="vertical-align: middle;">{{ name }}</td>
-            <td style="vertical-align: middle;">{{ props.dtype }}</td>
-            <td><a class="text-decoration-underline text-dark" data-bs-toggle="tooltip" data-bs-placement="right" :title="'[' + props.dimensions + ']'">{{ props.shape }}</a></td>
-          </tr>
-        </tbody>
-      </table>
-
-      <!-- Slicing filter -->
-      <div v-show="ncSelectedVar" class="slice-controls-container mt-3">
-        <!-- checkbox -->
-        <div class="d-flex align-items-center gap-3">
-          <div class="form-check ms-1">
-            <input class="form-check-input" type="checkbox" id="showSliceControls" v-model="showSliceControls" @change="initSliceParams">
-            <label class="form-check-label mb-2" for="showSliceControls">
-              Enable slicing
-            </label>
-          </div>
-          <button class="btn btn-primary" @click="selectNetCDFVariable">Apply</button>
-        </div>
-
-        <!-- parameter settings -->
-        <div v-if="showSliceControls" class="card mt-2">
-          <div class="card-header">
-            <h5>Slice variable: {{ ncSelectedVar }}</h5>
-          </div>
-          <div class="card-body">
-            <template v-for="(dimSize, dimIndex) in currentDataset.vars[ncSelectedVar].shape">
-              <div v-if="dimSize > 1"  :key="dimIndex" class="mb-3">
-                <label class="form-label">Dimension {{ dimIndex }} (size: {{ dimSize }})</label>
-                <div class="row g-2">
-                  <div class="col">
-                    <div class="form-floating">
-                      <input type="number" class="form-control" :id="'start-'+dimIndex" :min="0" :max="dimSize-1" v-model.number="sliceParams[dimIndex].start">
-                      <label :for="'start-'+dimIndex">Start</label>
-                    </div>
-                  </div>
-                  <div class="col">
-                    <div class="form-floating">
-                      <input type="number" class="form-control" :id="'end-'+dimIndex" min="1" :max="dimSize" v-model.number="sliceParams[dimIndex].end">
-                      <label :for="'end-'+dimIndex">End</label>
-                    </div>
-                  </div>
-                  <div class="col">
-                    <div class="form-floating">
-                      <input type="number" class="form-control" :id="'step-'+dimIndex" min="1" v-model.number="sliceParams[dimIndex].step">
-                      <label :for="'step-'+dimIndex">Step</label>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            </template>
-            <div v-if="!hasSlicableDimensions" class="alert alert-info">
-              This variable has no dimensions with size > 1 available for slicing.
-            </div>
-          </div>
-        </div>
-      </div>
-
+      <NetCDFControls
+        v-if="currentDataset && isNetCDF"
+        :dataset="currentDataset"
+        @variable-loaded="handleNetCDFVariableLoaded"
+      />
     </div>
     <!-- Dataset modal -->
-    <div id="datasetModal" class="modal fade" data-bs-backdrop="static" tabindex="-1" aria-labelledby="datasetModalLabel" aria-hidden="true">
+    <div ref="datasetModalRef" id="datasetModal" class="modal fade" data-bs-backdrop="static" tabindex="-1" aria-labelledby="datasetModalLabel" aria-hidden="true">
       <div class="modal-dialog modal-dialog-scrollable">
         <div class="modal-content">
           <div class="modal-header">
@@ -240,16 +179,24 @@
 </template>
 
 <script>
-import axios from 'axios';
-import { Modal, Tooltip, Popover } from 'bootstrap';
+import { Modal } from 'bootstrap';
+import NetCDFControls from './NetCDFControls.vue';
+import {
+  listDatasets,
+  uploadDataset,
+  updateDatasets,
+  downloadDataset,
+} from '@/api/datasets';
 
 export default {
   name: 'InputDataset',
+  components: {
+    NetCDFControls,
+  },
   emits: ['dataset-fetch-start', 'dataset-fetch-complete', 'dataset-fetch-error'],
 
   data() {
     return {
-      baseURL: "/api",
       depth: null,
       width: null,
       height: null,
@@ -264,9 +211,7 @@ export default {
       isApplyingDatasetSelection: false,
       lastDatasetHistoryName: null,
       isNetCDF: false,
-      ncSelectedVar: "",
-      showSliceControls: false,
-      sliceParams: [],
+      datasetModalInstance: null,
     }
   },
 
@@ -291,23 +236,9 @@ export default {
       // Upload a new dataset
       return this.file && this.width && this.height && this.depth && this.precision && this.endianness;
     },
-
-    // Check if there is a slicable dimension for a variable in NetCDF file
-    hasSlicableDimensions() {
-      if (!this.ncSelectedVar) return false;
-      return this.currentDataset.vars[this.ncSelectedVar].shape.some(size => size > 1);
-    }
   },
   
   watch: {
-    ncSelectedVar(newVal) {
-      this.showSliceControls = false;
-      this.sliceParams = [];
-
-      if (newVal) {
-        this.initSliceParams();
-      }
-    },
     currentDataset(newVal, oldVal) {
       this.fillFieldsFromDataset();
       if (newVal && newVal !== oldVal) {
@@ -326,14 +257,18 @@ export default {
   },
 
   mounted() {
-    this.initializeTooltips();
-    this.initializePopovers();
     this.fillFieldsFromDataset();
+    if (this.$refs.datasetModalRef) {
+      this.datasetModalInstance = Modal.getOrCreateInstance(this.$refs.datasetModalRef);
+    }
   },
 
-  updated() {
-    this.initializeTooltips();
-    this.initializePopovers();
+  beforeUnmount() {
+    if (this.datasetModalInstance) {
+      this.datasetModalInstance.hide();
+      this.datasetModalInstance.dispose();
+      this.datasetModalInstance = null;
+    }
   },
 
   methods:{
@@ -360,49 +295,29 @@ export default {
       if (ds.endianness) this.endianness = ds.endianness;
       }
     },
-    // Initialize tooltips in the DOM
-    initializeTooltips() {
-      document.querySelectorAll('[data-bs-toggle="tooltip"]')
-        .forEach(tooltip => {
-          new Tooltip(tooltip);
-        });
-    },
 
-    // Initialize popovers in the DOM
-    initializePopovers() {
-      document.querySelectorAll('[data-bs-toggle="popover"]').
-        forEach(el => {
-          // Avoid duplicating instances if re-initialized
-          const instance = Popover.getInstance(el);
-          if (!instance) {
-            Popover.getOrCreateInstance(el);
-          }
-        });
-    },
-
-    viewDatasets() {
+    async viewDatasets() {
       this.datasetToChange = this.currentDataset;
       this.datasetsToDelete = [];
       this.resetDatasetModalFeedback();
-      var modalElement = document.getElementById("datasetModal");
-      if (modalElement) {
-        var modal = new Modal(modalElement);
-        modal.show();
+      if (this.$refs.datasetModalRef) {
+        this.datasetModalInstance = this.datasetModalInstance || Modal.getOrCreateInstance(this.$refs.datasetModalRef);
+        this.datasetModalInstance.show();
       }
 
       this.isLoadingDatasets = true;
       if (!this.hasDatasets) {
         this.$store.commit("setProgress", { active: true, percent: 0, message: "Loading datasets..." });
         this.$store.commit("setStatus", { type: "info", message: "Loading datasets from server..." });
-  axios.get(`${this.baseURL}/listDatasets`).then(response => {
-          this.uploadedDatasets = response.data.datasets;
+        try {
+          const data = await listDatasets();
+          this.uploadedDatasets = data.datasets || {};
           this.$store.commit("setProgress", { active: false, percent: 100, message: "Datasets loaded" });
           this.$store.commit("setStatus", { type: "success", message: "Datasets loaded successfully!" });
-        })
-        .catch(error => {
+        } catch (error) {
           this.$store.commit("setProgress", { active: false, percent: 0, message: "Failed to load datasets" });
           this.$store.commit("setStatus", { type: "danger", message: `Fetch saved datasets failed. ${error}` });
-        });
+        }
       }
       this.isLoadingDatasets = false;
     },
@@ -424,7 +339,6 @@ export default {
         // Handle NetCDF file format
         const validExtensions = [".nc", ".cdf", ".nc4"];
         const filename = newFile.name.toLowerCase();
-        this.ncSelectedVar = "";
         this.isNetCDF = validExtensions.some(ext => filename.endsWith(ext));
         this.$store.commit("setTimeVarying", false);
         if (!this.isNetCDF) {
@@ -456,7 +370,7 @@ export default {
       }
     },
 
-    uploadFile() {
+    async uploadFile() {
       // Generate form data
       const formData = new FormData();
       if (this.file) {
@@ -481,15 +395,15 @@ export default {
         formData.append("endianness", this.endianness);
       }
 
-  axios.post(`${this.baseURL}/upload`, formData, {
-        onUploadProgress: (eventData) => {
+      try {
+        const data = await uploadDataset(formData, (eventData) => {
           if (eventData.lengthComputable) {
             const percent = Math.round((eventData.loaded / eventData.total) * 100);
             this.$store.commit("setProgress", { active: true, percent, message: `Uploading... ${percent}%` });
           }
-        }
-      }).then(response => {
-        const serverDataset = response.data["dataset"] || {};
+        });
+
+        const serverDataset = data.dataset || {};
         this.$store.commit("setProgress", { active: false, percent: 100, message: "Upload complete" });
         this.$store.commit("setStatus", { type: "success", message: "Uploaded file successfully!" });
         // update the cached dataset list
@@ -528,16 +442,13 @@ export default {
             this.logDataRange(this.fileContent, this.precision, serverDataset?.name || 'Uploaded dataset');
           }
         }
-      })
-      .catch(error => {
+      } catch (error) {
         this.$store.commit("setProgress", { active: false, percent: 0, message: "Upload failed" });
         this.$store.commit("setStatus", { type: "danger", message: `Upload file failed. ${error}` });
-      });
+      }
     },
 
     async processChanges() {
-      var btn = document.getElementById("viewDatasetsBtn");
-      btn.disabled = true;
       const formData = new FormData();
       if (this.currentDataset != this.datasetToChange) {
         this.isApplyingDatasetSelection = true;
@@ -555,20 +466,16 @@ export default {
           // Show progress in status bar
           this.$store.commit("setProgress", { active: true, percent: 0, message: "Downloading dataset..." });
           this.$store.commit("setStatus", { type: "info", message: "Downloading dataset..." });
-          // Get the new file from the server asynchronously
-          await axios.get(`${this.baseURL}/download`, {
-            params: { filename: this.datasetToChange.name, filetype: this.datasetToChange.type },
-            responseType: "arraybuffer",
-            onDownloadProgress: (eventData) => {
+          try {
+            const data = await downloadDataset(this.datasetToChange.name, this.datasetToChange.type, (eventData) => {
               if (eventData.lengthComputable) {
                 const percentComplete = Math.round((eventData.loaded / eventData.total) * 100);
                 this.$store.commit("setProgress", { active: true, percent: percentComplete, message: `Downloading... ${percentComplete}%` });
               }
-            }
-          }).then(response => {
+            });
+
             this.isNetCDF = false;
-            this.ncSelectedVar = "";
-            this.fileContent = response.data;
+            this.fileContent = data;
             // Persist downloaded dataset in store
             this.$store.commit("setFileData", {
               dataset: {
@@ -589,17 +496,16 @@ export default {
             this.$store.commit("setStatus", { type: "success", message: "Downloaded file successfully!" });
             this.isApplyingDatasetSelection = false;
             this.$emit('dataset-fetch-complete');
-          }).catch(error => {
+          } catch (error) {
             this.resetDatasetModalFeedback();
             this.$emit('dataset-fetch-error');
             this.$store.commit("setProgress", { active: false, percent: 0, message: "Download failed" });
             this.$store.commit("setStatus", { type: "danger", message: `Download file failed. ${error}` });
             console.error("Download file failed.", error);
-          });
+          }
         }
-        else if(this.datasetToChange.type === "netcdf") {
+        else if (this.datasetToChange.type === "netcdf") {
           this.$emit('dataset-fetch-start');
-          this.ncSelectedVar = "";
           this.isNetCDF = true;
           this.$store.commit("setFileData", {
               dataset: {
@@ -628,141 +534,32 @@ export default {
       if (!formData.entries().next().done) {
         this.$store.commit("setProgress", { active: true, percent: 0, message: "Saving dataset changes..." });
         this.$store.commit("setStatus", { type: "info", message: "Saving dataset changes..." });
-  await axios.post(`${this.baseURL}/updateDatasets`, formData).then(response => {
-          if (!(JSON.stringify(this.uploadedDatasets) === JSON.stringify(response.data.datasets))) {
+        try {
+          const data = await updateDatasets(formData);
+          if (!(JSON.stringify(this.uploadedDatasets) === JSON.stringify(data.datasets))) {
             console.error("uploadedDatasets are not equal!");
           }
           this.$store.commit("setProgress", { active: false, percent: 100, message: "Changes saved" });
           this.$store.commit("setStatus", { type: "success", message: "Dataset changes saved!" });
-        })
-        .catch(error => {
+        } catch (error) {
           this.resetDatasetModalFeedback();
           this.$store.commit("setProgress", { active: false, percent: 0, message: "Save failed" });
           this.$store.commit("setStatus", { type: "danger", message: `Update datasets failed. ${error}` });
           console.error("Update datasets failed.", error);
-        });
+        }
       }
       if (!this.isApplyingDatasetSelection) {
         this.resetDatasetModalFeedback();
       }
-      btn.disabled = false;
     },
 
-    initSliceParams() {
-      const shape = this.currentDataset.vars[this.ncSelectedVar].shape;
-      this.sliceParams = shape.map(size => ({
-        start: 0, 
-        end: size, 
-        step: 1
-      }));
-    },
-
-    selectNetCDFVariable() {
-      const timeDimensionIndex = this.currentDataset.vars[this.ncSelectedVar].dimensions.findIndex(
-        dim => dim.toLowerCase() === "time"
-      );
-      // console.log("Time dimension index:", timeDimensionIndex);
-      if (timeDimensionIndex >= 0) 
-        this.$store.commit("setTimeVarying", true);
-      
-      // Set precision
-      let dtype = this.currentDataset.vars[this.ncSelectedVar].dtype;
-      if (dtype === "float32") {
-        this.precision = "f";
-      }
-      else if (dtype === "float64") {
-        this.precision = "d";
-      }
-      else if (dtype === "int8") {
-        this.precision = "i8";
-      }
-      else if (dtype === "uint8") {
-        this.precision = "u8";
-      }
-      else if (dtype === "int16") {
-        this.precision = "i16";
-      }
-      else if (dtype === "uint16") {
-        this.precision = "u16";
-      }
-      else if (dtype === "int32") {
-        this.precision = "i32";
-      }
-      else if (dtype === "uint32") {
-        this.precision = "u32";
-      }
-
-      // Set dimensions
-      let dims = this.currentDataset.vars[this.ncSelectedVar].shape;
-      const slicedDims = dims.map((size, dimIndex) => {
-        if (size == 1) return 1;
-        const slice = this.sliceParams[dimIndex];
-        if (!slice) return size;
-
-        const start = slice.start || 0;
-        const end = slice.end !== undefined ? slice.end : size;
-        const step = slice.step || 1;
-
-        return Math.ceil((end - start) / step);
-      });
-
-      if (slicedDims.length === 2) {
-        this.height = slicedDims[0];
-        this.width = slicedDims[1];
-        this.depth = 1;
-      } else if (slicedDims.length === 3) {
-        if (timeDimensionIndex >= 0) {
-          const spatialIdx = [0, 1, 2].filter(i => i !== timeDimensionIndex);
-          this.depth = slicedDims[timeDimensionIndex];
-          this.height = slicedDims[spatialIdx[0]];
-          this.width = slicedDims[spatialIdx[1]];
-        } else {
-          // No time dimension: preserve axis order as [depth, height, width]
-          this.depth = slicedDims[0];
-          this.height = slicedDims[1];
-          this.width = slicedDims[2];
-        }
-      }
-
-      const slices = this.sliceParams
-        .filter(param => param != null)
-        .map(param => ({
-          start: param.start,
-          end: param.end,
-          step: param.step,
-        }));
-      console.log("slices values:", slices);
-
-      this.$store.commit("setProgress", { active: true, percent: 0, message: "Downloading variable data..." });
-      this.$store.commit("setStatus", { type: "info", message: "Downloading variable data..." });
-    
-      // Get the variable data from the backend server
-  axios.get(`${this.baseURL}/download`, {
-        params: { 
-          filename: this.currentDataset.name, 
-          filetype: "netcdf", 
-          variable: this.ncSelectedVar,
-          slices: JSON.stringify(slices),
-        },
-        responseType: "arraybuffer",
-        onDownloadProgress: (eventData) => {
-          if (eventData.lengthComputable) {
-            const percent = Math.round((eventData.loaded / eventData.total) * 100);
-            this.$store.commit("setProgress", { active: true, percent, message: `Downloading... ${percent}%` });
-          }
-
-        }
-      }).then(response => {
-        this.fileContent = response.data;
-        // console.log("file content:", this.fileContent);
-        this.emitFileData();
-
-        this.$store.commit("setProgress", { active: false, percent: 100, message: "Download complete" });
-        this.$store.commit("setStatus", { type: "success", message: "Downloaded variable data successfully!" });
-      }).catch(error => {
-        this.$store.commit("setProgress", { active: false, percent: 0, message: "Download failed" });
-        this.$store.commit("setStatus", { type: "danger", message: `Download file failed. ${error}` });
-      });
+    handleNetCDFVariableLoaded({ fileContent, precision, width, height, depth }) {
+      this.fileContent = fileContent;
+      this.precision = precision;
+      this.width = width;
+      this.height = height;
+      this.depth = depth;
+      this.emitFileData();
     },
 
     getTypedArrayConstructor(precision) {

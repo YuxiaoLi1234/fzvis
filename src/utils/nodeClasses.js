@@ -233,9 +233,13 @@ export class CompressorNode extends BaseNode {
     this.selectedModuleIdx = null; // Track which module is selected for detail view
   }
 
-  static canAdd(existingNodes) {
+  static canAdd(existingNodes, context = null) {
     const sourceNode = existingNodes.find(n => n instanceof DataSourceNode);
-    return !!sourceNode && sourceNode.status === 'ready';
+    if (!sourceNode || sourceNode.status !== 'ready') return false;
+    if (context?.canAddCompressor !== undefined) {
+      return Boolean(context.canAddCompressor);
+    }
+    return true;
   }
 
   canAcceptInput(sourceNode) {

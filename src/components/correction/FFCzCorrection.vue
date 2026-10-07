@@ -290,36 +290,71 @@ export default {
     selectedVariant() {
       return this.allVariants.find(v => v.id === this.selectedVariantId) || null;
     },
+    estimatedCorrectedDatasetBytes() {
+      const datasets = [
+        this.selectedVariant,
+        this.compressedDataset,
+        this.originalDataset
+      ];
+
+      for (const dataset of datasets) {
+        const binary = dataset?.decp_data || dataset?.content;
+        const byteLength = binary?.byteLength ?? binary?.size ?? null;
+        if (Number.isFinite(Number(byteLength)) && Number(byteLength) > 0) {
+          return Number(byteLength);
+        }
+      }
+
+      const source = this.selectedVariant || this.compressedDataset || this.originalDataset;
+      const dims = this.getDatasetDimensions(source);
+      const precision = source?.precision ||
+        source?.meta?.precision ||
+        source?.dataset_meta?.precision ||
+        this.originalDataset?.precision ||
+        this.originalDataset?.meta?.precision ||
+        this.originalDataset?.dataset_meta?.precision;
+      const bytesPerElement = this.getPrecisionBytes(precision);
+      if (!dims?.length || !bytesPerElement) return null;
+
+      const numElements = dims.reduce((total, value) => total * Math.max(1, Number(value || 1)), 1);
+      return numElements * bytesPerElement;
+    },
     estimatedStorageSize() {
-      // Estimate storage size based on original dataset dimensions
-      const orig = this.originalDataset;
-      if (!orig || !orig.meta?.dimensions) return null;
-
-      const dims = orig.meta.dimensions;
-      const numElements = dims.reduce((a, b) => a * b, 1);
-      const bytesPerElement = 4; // float32
-      const sizeBytes = numElements * bytesPerElement;
-
-      // Format size in human-readable format
-      if (sizeBytes < 1024) return `${sizeBytes}B`;
-      if (sizeBytes < 1024 * 1024) return `${(sizeBytes / 1024).toFixed(1)}KB`;
-      if (sizeBytes < 1024 * 1024 * 1024) return `${(sizeBytes / (1024 * 1024)).toFixed(1)}MB`;
-      return `${(sizeBytes / (1024 * 1024 * 1024)).toFixed(2)}GB`;
+      if (!this.estimatedCorrectedDatasetBytes) return null;
+      return this.formatBytes(this.estimatedCorrectedDatasetBytes);
     },
     totalEstimatedStorage() {
-      if (!this.estimatedStorageSize) return null;
+      if (!this.estimatedCorrectedDatasetBytes) return null;
       const numBounds = this.parseFreqBounds().length;
-
-      // Extract numeric value and unit from estimatedStorageSize
-      const match = this.estimatedStorageSize.match(/^([\d.]+)(\w+)$/);
-      if (!match) return `× ${numBounds} bounds`;
-
-      const [, value, unit] = match;
-      const total = parseFloat(value) * numBounds;
-      return `~${total.toFixed(1)}${unit} total`;
+      return `~${this.formatBytes(this.estimatedCorrectedDatasetBytes * numBounds)} total`;
     }
   },
   methods: {
+    getDatasetDimensions(dataset) {
+      const dims = dataset?.dimensions || dataset?.meta?.dimensions || dataset?.dataset_meta?.dimensions;
+      if (!Array.isArray(dims)) return null;
+      const numericDims = dims.map(Number).filter(value => Number.isFinite(value) && value > 0);
+      return numericDims.length ? numericDims : null;
+    },
+    getPrecisionBytes(precision) {
+      const normalized = String(precision || "").toLowerCase();
+      if (["d", "double", "float64", "f8"].includes(normalized)) return 8;
+      if (["f", "float", "single", "float32", "f4"].includes(normalized)) return 4;
+      if (["h", "half", "float16", "f2"].includes(normalized)) return 2;
+      if (["i64", "int64", "uint64", "u64"].includes(normalized)) return 8;
+      if (["i", "int", "int32", "uint32", "u32", "i32"].includes(normalized)) return 4;
+      if (["int16", "uint16", "i16", "u16"].includes(normalized)) return 2;
+      if (["byte", "int8", "uint8", "i8", "u8"].includes(normalized)) return 1;
+      return null;
+    },
+    formatBytes(bytes) {
+      const value = Number(bytes);
+      if (!Number.isFinite(value) || value <= 0) return null;
+      if (value < 1024) return value + "B";
+      if (value < 1024 * 1024) return (value / 1024).toFixed(1) + "KB";
+      if (value < 1024 * 1024 * 1024) return (value / (1024 * 1024)).toFixed(1) + "MB";
+      return (value / (1024 * 1024 * 1024)).toFixed(2) + "GB";
+    },
     getConfigBaseId() {
       const compressed = this.compressedDataset;
       const comparisonData = this.$store.state.comparisonData || {};
@@ -474,19 +509,15 @@ export default {
         this.variantResults = { ...this.variantResults, [id]: 'running' };
 
         try {
-          const results = await this.runFFCzSweep(variant, this.nodeId, id);
+          const results = await this.runFFCzSweepIncrementally(variant, id, (result, resultId) => {
+            this.$store.commit('setComparisonData', { [resultId]: result });
+            if (!createdResultIds.includes(resultId)) {
+              createdResultIds.push(resultId);
+            }
+          });
           if (results && results.length > 0) {
             this.variantResults = { ...this.variantResults, [id]: 'done' };
             this.batchStatus.results.push(id);
-
-            // Store each frequency bound result as a separate comparison entry
-            const comparisonUpdates = {};
-            results.forEach((result) => {
-              const resultId = `${id}-ffcz-${result.freq_bound}`;
-              comparisonUpdates[resultId] = result;
-              createdResultIds.push(resultId);
-            });
-            this.$store.commit('setComparisonData', comparisonUpdates);
           } else {
             this.variantResults = { ...this.variantResults, [id]: 'error' };
           }
@@ -510,12 +541,33 @@ export default {
         });
       }
     },
-    async runFFCzSweep(dataset, nodeId, variantId = null) {
+    async runFFCzSweepIncrementally(dataset, variantId = null, onResult = null) {
+      const bounds = this.parseFreqBounds();
+      const allResults = [];
+
+      for (const bound of bounds) {
+        this.statusMessage = 'Running FFCz frequency bound ' + bound + '...';
+        const results = await this.runFFCzSweep(dataset, this.nodeId, variantId, [bound]);
+        if (results && results.length > 0) {
+          results.forEach((result) => {
+            const sourceId = variantId || dataset?.id || dataset?.name || 'ffcz';
+            const resultId = sourceId + '-ffcz-' + result.freq_bound;
+            if (typeof onResult === 'function') {
+              onResult(result, resultId);
+            }
+            allResults.push(result);
+          });
+        }
+      }
+
+      return allResults;
+    },
+    async runFFCzSweep(dataset, nodeId, variantId = null, freqBoundsOverride = null) {
       if (!dataset || !this.originalDataset) return null;
 
       this.status = 'running';
       try {
-        const freq_bounds = this.parseFreqBounds();
+        const freq_bounds = Array.isArray(freqBoundsOverride) ? freqBoundsOverride : this.parseFreqBounds();
         if (freq_bounds.length === 0) {
           throw new Error('No valid frequency bounds specified');
         }
@@ -599,6 +651,10 @@ export default {
               sweepResult.decp_data = dataResp.data;
               sweepResult.content = dataResp.data;
               sweepResult.data_key = r.data_key;
+              sweepResult.corrected_data_requested = Boolean(r.corrected_data_requested);
+              sweepResult.corrected_data_available = true;
+              if (r.corrected_data_changed !== undefined) sweepResult.corrected_data_changed = r.corrected_data_changed;
+              if (r.corrected_data_max_abs_delta !== undefined) sweepResult.corrected_data_max_abs_delta = r.corrected_data_max_abs_delta;
             } catch (err) {
               const warning = `Failed to fetch corrected data for freq_bound ${r.freq_bound}: ${err?.message || err}`;
               sweepResult.corrected_data_warning = warning;
@@ -630,19 +686,18 @@ export default {
     async applyBatchCorrection() {
       const vars = this.allVariants;
       this.batchStatus = { running: true, total: vars.length, processed: 0, results: [] };
+      const createdResultIds = [];
 
       for (const v of vars) {
         this.selectedVariantId = v.id;
-        const results = await this.runFFCzSweep(v, this.nodeId, v.id);
+        const results = await this.runFFCzSweepIncrementally(v, v.id, (result, resultId) => {
+          this.$store.commit('setComparisonData', { [resultId]: result });
+          if (!createdResultIds.includes(resultId)) {
+            createdResultIds.push(resultId);
+          }
+        });
         if (results && results.length > 0) {
           this.variantResults = { ...this.variantResults, [v.id]: 'done' };
-
-          const comparisonUpdates = {};
-          results.forEach((result) => {
-            const resultId = `${v.id}-ffcz-${result.freq_bound}`;
-            comparisonUpdates[resultId] = result;
-          });
-          this.$store.commit('setComparisonData', comparisonUpdates);
           this.batchStatus.results.push(v.id);
         } else {
           this.variantResults = { ...this.variantResults, [v.id]: 'error' };
@@ -652,7 +707,15 @@ export default {
 
       this.batchStatus.running = false;
       this.status = 'success';
-      this.statusMessage = `Batch complete: ${this.batchStatus.results.length}/${vars.length} succeeded.`;
+      this.statusMessage = 'Batch complete: ' + this.batchStatus.results.length + '/' + vars.length + ' succeeded.';
+
+      if (this.batchStatus.results.length > 0) {
+        this.$emit('success', {
+          nodeId: this.nodeId,
+          resultCount: this.batchStatus.results.length,
+          resultIds: createdResultIds
+        });
+      }
     }
   },
   watch: {
