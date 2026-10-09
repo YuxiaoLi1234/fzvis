@@ -115,7 +115,7 @@
           <!-- Modal body -->
           <div class="modal-body overflow-auto" v-if="hasDatasets">
             <ul class="list-group">
-              <li v-for="(dataset, key) in uploadedDatasets" :key="dataset.id" 
+              <li v-for="(dataset, key) in uploadedDatasets" :key="dataset.name || key" 
                 :class="['list-group-item', 'd-flex', 'justify-content-between', 'align-items-start', { 'active': dataset.name == datasetToChange?.name, 'list-group-item-danger': datasetsToDelete.includes(key) }]">
                 <div class="ms-2 me-auto">
                   <div :class="['fw-bold', 'text-break', { 'text-decoration-line-through': datasetsToDelete.includes(key) }]">
@@ -135,7 +135,7 @@
                   </div>
                   <div v-else-if="dataset.type === 'netcdf'">
                     variables: [
-                      <span v-for="(name, idx) in Object.keys(dataset.vars)" :key=name>
+                      <span v-for="(name, idx) in Object.keys(dataset.vars || {})" :key="name">
                         <span v-if="idx !== 0">, </span>{{ name }}
                       </span>]
                   </div>
@@ -144,9 +144,9 @@
                 <div class="d-flex align-items-center">
                   <button class="btn btn-sm ms-2"
                     :class="dataset.name == datasetToChange?.name ? 'btn-primary' : 'btn-outline-primary'"
-                    :aria-label="dataset.name == datasetToChange?.name ? 'Deselect' : 'Select'"
-                    :title="dataset.name == datasetToChange?.name ? 'Deselect the dataset' : 'Select the dataset'"
-                    :disabled="dataset.name == datasetToChange?.name || datasetsToDelete.includes(key)"
+                    :aria-label="dataset.name == datasetToChange?.name ? 'Selected dataset' : 'Select'"
+                    :title="dataset.name == datasetToChange?.name ? 'Selected dataset' : 'Select the dataset'"
+                    :disabled="datasetsToDelete.includes(key) || isApplyingDatasetSelection"
                     @click="selectDataset(dataset)">
                     <i :class="dataset.name == datasetToChange?.name ? 'bi bi-check-circle' : 'bi bi-circle'"></i>
                   </button>
@@ -170,7 +170,7 @@
           </div>
           <div class="modal-footer">
             <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
-            <button type="button" class="btn btn-primary" data-bs-dismiss="modal" @click="processChanges">Save changes</button>
+            <button type="button" class="btn btn-primary" data-bs-dismiss="modal" @click="processChanges" :disabled="isApplyingDatasetSelection || (!datasetToChange && datasetsToDelete.length === 0)">Save changes</button>
           </div>
         </div>
       </div>
@@ -297,7 +297,7 @@ export default {
     },
 
     async viewDatasets() {
-      this.datasetToChange = this.currentDataset;
+      this.datasetToChange = this.currentDataset ? { ...this.currentDataset } : null;
       this.datasetsToDelete = [];
       this.resetDatasetModalFeedback();
       if (this.$refs.datasetModalRef) {
@@ -306,20 +306,19 @@ export default {
       }
 
       this.isLoadingDatasets = true;
-      if (!this.hasDatasets) {
-        this.$store.commit("setProgress", { active: true, percent: 0, message: "Loading datasets..." });
-        this.$store.commit("setStatus", { type: "info", message: "Loading datasets from server..." });
-        try {
-          const data = await listDatasets();
-          this.uploadedDatasets = data.datasets || {};
-          this.$store.commit("setProgress", { active: false, percent: 100, message: "Datasets loaded" });
-          this.$store.commit("setStatus", { type: "success", message: "Datasets loaded successfully!" });
-        } catch (error) {
-          this.$store.commit("setProgress", { active: false, percent: 0, message: "Failed to load datasets" });
-          this.$store.commit("setStatus", { type: "danger", message: `Fetch saved datasets failed. ${error}` });
-        }
+      this.$store.commit("setProgress", { active: true, percent: 0, message: "Loading datasets..." });
+      this.$store.commit("setStatus", { type: "info", message: "Loading datasets from server..." });
+      try {
+        const data = await listDatasets();
+        this.uploadedDatasets = data.datasets || {};
+        this.$store.commit("setProgress", { active: false, percent: 100, message: "Datasets loaded" });
+        this.$store.commit("setStatus", { type: "success", message: "Datasets loaded successfully!" });
+      } catch (error) {
+        this.$store.commit("setProgress", { active: false, percent: 0, message: "Failed to load datasets" });
+        this.$store.commit("setStatus", { type: "danger", message: `Fetch saved datasets failed. ${error?.message || error}` });
+      } finally {
+        this.isLoadingDatasets = false;
       }
-      this.isLoadingDatasets = false;
     },
 
     resetDatasetModalFeedback() {
@@ -450,7 +449,15 @@ export default {
 
     async processChanges() {
       const formData = new FormData();
-      if (this.currentDataset != this.datasetToChange) {
+      const isNewDatasetSelected = Boolean(
+        this.datasetToChange && (
+          !this.currentDataset ||
+          this.currentDataset.name !== this.datasetToChange.name ||
+          !this.currentDataset.content
+        )
+      );
+
+      if (isNewDatasetSelected) {
         this.isApplyingDatasetSelection = true;
         this.$store.commit("setTimeVarying", false);
         formData.append("currentDataset", JSON.stringify(this.datasetToChange));
@@ -486,7 +493,7 @@ export default {
                 precision: this.precision,
                 endianness: this.endianness,
                 vars: undefined,
-                size: undefined,
+                size: this.datasetToChange.size || undefined,
               }
             });
             if (this.fileContent) {
@@ -494,33 +501,35 @@ export default {
             }
             this.$store.commit("setProgress", { active: false, percent: 100, message: "Download complete" });
             this.$store.commit("setStatus", { type: "success", message: "Downloaded file successfully!" });
-            this.isApplyingDatasetSelection = false;
             this.$emit('dataset-fetch-complete');
           } catch (error) {
-            this.resetDatasetModalFeedback();
             this.$emit('dataset-fetch-error');
             this.$store.commit("setProgress", { active: false, percent: 0, message: "Download failed" });
-            this.$store.commit("setStatus", { type: "danger", message: `Download file failed. ${error}` });
+            this.$store.commit("setStatus", { type: "danger", message: `Download file failed. ${error?.message || error}` });
             console.error("Download file failed.", error);
+          } finally {
+            this.isApplyingDatasetSelection = false;
           }
         }
         else if (this.datasetToChange.type === "netcdf") {
           this.$emit('dataset-fetch-start');
           this.isNetCDF = true;
           this.$store.commit("setFileData", {
-              dataset: {
-                name: this.datasetToChange.name,
-                type: "netcdf",
-                content: null,
-                dimensions: this.datasetToChange.dimensions || null,
-                precision: this.datasetToChange.precision || "",
-                endianness: this.datasetToChange.endianness || "little",
-                vars: this.datasetToChange.vars || undefined,
-                size: this.datasetToChange.size || undefined,
-              }
-            });
+            dataset: {
+              name: this.datasetToChange.name,
+              type: "netcdf",
+              content: null,
+              dimensions: this.datasetToChange.dimensions || null,
+              precision: this.datasetToChange.precision || "",
+              endianness: this.datasetToChange.endianness || "little",
+              vars: this.datasetToChange.vars || undefined,
+              size: this.datasetToChange.size || undefined,
+            }
+          });
           this.isApplyingDatasetSelection = false;
           this.$emit('dataset-fetch-complete');
+        } else {
+          this.isApplyingDatasetSelection = false;
         }
       }
         
@@ -537,20 +546,17 @@ export default {
         try {
           const data = await updateDatasets(formData);
           if (!(JSON.stringify(this.uploadedDatasets) === JSON.stringify(data.datasets))) {
-            console.error("uploadedDatasets are not equal!");
+            console.warn("uploadedDatasets updated on server");
           }
           this.$store.commit("setProgress", { active: false, percent: 100, message: "Changes saved" });
           this.$store.commit("setStatus", { type: "success", message: "Dataset changes saved!" });
         } catch (error) {
-          this.resetDatasetModalFeedback();
           this.$store.commit("setProgress", { active: false, percent: 0, message: "Save failed" });
-          this.$store.commit("setStatus", { type: "danger", message: `Update datasets failed. ${error}` });
+          this.$store.commit("setStatus", { type: "danger", message: `Update datasets failed. ${error?.message || error}` });
           console.error("Update datasets failed.", error);
         }
       }
-      if (!this.isApplyingDatasetSelection) {
-        this.resetDatasetModalFeedback();
-      }
+      this.resetDatasetModalFeedback();
     },
 
     handleNetCDFVariableLoaded({ fileContent, precision, width, height, depth }) {

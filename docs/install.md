@@ -1,54 +1,101 @@
-# :computer: Installation
+# Installation
 
-## :one: Prerequisites
+FZ-VIS can be installed from source with the helper script below. The script installs Spack locally, uses Spack to install the native compressor stack, creates a Python virtual environment, installs frontend dependencies, builds the Vue app, and writes a small launcher script.
 
-Please make sure the following software, library, tools, and packages are installed for the FZ-VIS project. **We strongly recommend using a Node version manager like [nvm](https://github.com/nvm-sh/nvm) to install Node.js and npm.**
+## Prerequisites
 
-### Dependencies
+Install these system tools first:
 
-1. [libpressio](https://github.com/robertu94/libpressio)
-2. [Node.js (version >= 18.12.0)](https://nodejs.org/)
-3. [npm (version >= 8.19.0)](https://www.npmjs.com/)
-4. [Python 3 (version >= 3.9.0)](https://www.python.org/downloads/)
-5. [Anaconda/Miniconda (optional)](https://www.anaconda.com/download/)
+- `git`
+- `python3` with `venv`
+- a working compiler toolchain for Spack builds
+- `npm`, unless you let Spack install Node.js for you
 
-:warning: For `libpressio`, please make sure Python bindings are also installed.
+The native compression dependencies are installed through Spack:
 
-### (Optional) Setting up a Python virtual environment
+- `libpressio` with Python bindings
+- SZ3, ZFP, FPZIP, MGARD support through libpressio
 
-We suggest using a virtual environment for setting up and running the web services. 
+## Quick Install
 
-- If `conda` is installed, you can create a virtual environment named 'fzenv' using the following command:
-    ```sh
-    conda create -n fzenv
-    ```
-    - You can always view all created virtual environments in the system using `conda info -e`.  
-    - **Activation**: use command `conda activate fzenv`.  
-    - **Deactivation**: use `conda deactivate`. 
+From the repository root:
 
-- Otherwise, you can use the `venv` package from Python to create a virtual environment, and this will create a `fzenv` folder under the directory. 
-    ```sh
-    python -m venv fzenv
-    ```
-    - **Activation**: Use `fzenv\Scripts\activate.bat` for Command Prompt and `fzenv\Scripts\Activate.ps` for PowerShell on a Windows system, and use `source fzenv/bin/activate` on a Linux/macOS system.  
-    - **Deactivation**: Just enter `deactivate` in the terminal. It works the same on all operating systems.
-
-- :warning: Make sure the virtual environment is active by checking for `(fzenv)` at the beginning of the terminal prompt.
-
-
-## :two: Install Modules/Packages
-
-To install required Node.js modules, use `npm ci` command for a clean installation. 
-
-To install required Python packages, use `pip install -r requirements.txt` command.
-
-## :three: Test and Run
-
-Enter your desired IP address and port in `config.json`.
-
-To run the front-end service, use the command `npm run serve`.
-
-To run the back-end service, use the following command. 
 ```sh
-python3 ./src/components/main.py
+./scripts/install_fzvis.sh
 ```
+
+Then start FZ-VIS with:
+
+```sh
+./scripts/run_fzvis.sh
+```
+
+Open the app at:
+
+```text
+http://localhost:10080
+```
+
+## Useful Options
+
+The installer can be customized with environment variables:
+
+```sh
+SPACK_ROOT=$HOME/spack ./scripts/install_fzvis.sh
+FZVIS_ENV_DIR=$PWD/.venv ./scripts/install_fzvis.sh
+FZVIS_PORT=5001 ./scripts/install_fzvis.sh
+FZVIS_SKIP_SPACK=1 ./scripts/install_fzvis.sh
+FZVIS_SKIP_NODE=1 ./scripts/install_fzvis.sh
+FZVIS_SKIP_FRONTEND_BUILD=1 ./scripts/install_fzvis.sh
+```
+
+`FZVIS_SKIP_SPACK=1` assumes Spack/libpressio are already installed or available in your environment.
+
+## Manual Developer Install
+
+If you prefer to install each layer yourself:
+
+```sh
+git clone https://github.com/YuxiaoLi1234/fzvis.git
+cd fzvis
+
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+
+npm ci
+npm run build
+```
+
+Load a libpressio installation with Python bindings before starting the server. For example, if you installed it with Spack:
+
+```sh
+source $SPACK_ROOT/share/spack/setup-env.sh
+spack load libpressio
+```
+
+Then run:
+
+```sh
+python src/server/main.py --HOST 0.0.0.0 --PORT 10080
+```
+
+## Environment Variables
+
+Copy `.env.example` to `.env` and edit as needed:
+
+```sh
+cp .env.example .env
+```
+
+Important values:
+
+- `FLASK_SECRET_KEY`: secret used to sign tokens and protect sessions
+- `FLASK_PASSCODE`: optional passcode; leave blank to skip passcode auth
+- `LLM_API_KEY` / `NVIDIA_API_KEY`: optional API key for LLM features from https://build.nvidia.com/models
+- `FZVIS_CACHE_SIZE`: default item limit for in-memory LRU caches (default: 50)
+- `FZVIS_INPUT_CACHE_SIZE`: item limit for uploaded input datasets cache (default: 50)
+- `FZVIS_DECOMPRESSED_CACHE_SIZE`: item limit for decompressed data cache (default: 50)
+- `FZVIS_MAX_COMPRESSOR_INSTANCES`: maximum concurrent compressor instances per session (default: 10)
+- `FZVIS_MAX_UPLOAD_SIZE`: maximum file upload size (e.g. `100MB`, `500MB`, `2GB`; default: `100MB`)
+- `FZVIS_CASE_STUDY_ROOT`: directory path for saved case studies (default: `./case_studies`)

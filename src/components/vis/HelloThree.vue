@@ -544,15 +544,15 @@ export default {
       uniform vec2 dataRange;
       uniform bool showBoundaries;
       
+      in vec3 vOrigin;
+      in vec3 vDirection;
+      out vec4 outColor;
+      
       // Random function for jittering
       float rand(vec2 co) {
         return fract(sin(dot(co, vec2(12.9898, 78.233))) * 43758.5453);
       }
       
-      in vec3 vOrigin;
-      in vec3 vDirection;
-      out vec4 outColor;
-
       vec2 intersectBox(vec3 orig, vec3 dir) {
         vec3 boxMin = vec3(-0.5);
         vec3 boxMax = vec3(0.5);
@@ -564,6 +564,15 @@ export default {
         float t_start = max(tmin.x, max(tmin.y, tmin.z));
         float t_end = min(tmax.x, min(tmax.y, tmax.z));
         return vec2(t_start, t_end);
+      }
+
+      // Compute gradient for normal calculation (central difference)
+      vec3 computeGradient(vec3 p) {
+        vec3 epsilon = 1.0 / dimensions;
+        float nx = texture(volume, p + vec3(epsilon.x, 0.0, 0.0)).r - texture(volume, p - vec3(epsilon.x, 0.0, 0.0)).r;
+        float ny = texture(volume, p + vec3(0.0, epsilon.y, 0.0)).r - texture(volume, p - vec3(0.0, epsilon.y, 0.0)).r;
+        float nz = texture(volume, p + vec3(0.0, 0.0, epsilon.z)).r - texture(volume, p - vec3(0.0, 0.0, epsilon.z)).r;
+        return normalize(vec3(nx, ny, nz));
       }
 
       void main() {
@@ -584,6 +593,10 @@ export default {
         vec4 color = vec4(0.0);
         float actualStep = stepSize;
         
+        // Basic lighting setup
+        vec3 lightDir = normalize(vec3(1.0, 1.0, 1.0)); // Simple directional light
+        vec3 viewDir = -modelDir.xyz;
+        
         for (float dist = t_start; dist < t_exit; dist += actualStep) {
           vec3 p = modelOrig.xyz + modelDir.xyz * dist + 0.5;
           float rawVal = texture(volume, p).r;
@@ -592,8 +605,28 @@ export default {
           normalizedVal = clamp(normalizedVal, 0.0, 1.0);
           
           vec4 sampledColor = texture(transferFunction, vec2(normalizedVal, 0.5));
-          
           sampledColor.a *= opacityMultiplier;
+          
+          if (sampledColor.a > 0.01) {
+            // Compute shading based on gradient (normals)
+            vec3 normal = computeGradient(p);
+            
+            // If normal is valid, apply Blinn-Phong lighting
+            if (length(normal) > 0.0) {
+              // Ambient
+              float ambient = 0.3;
+              
+              // Diffuse
+              float diffuse = max(dot(normal, lightDir), 0.0) * 0.6;
+              
+              // Specular
+              vec3 halfVector = normalize(lightDir + viewDir);
+              float specular = pow(max(dot(normal, halfVector), 0.0), 32.0) * 0.3;
+              
+              // Apply lighting to RGB
+              sampledColor.rgb = sampledColor.rgb * (ambient + diffuse) + vec3(specular);
+            }
+          }
           
           // Opacity correction for step size
           float correctedAlpha = 1.0 - pow(1.0 - sampledColor.a, actualStep * 100.0);
@@ -618,7 +651,7 @@ export default {
               }
           }
           
-          if (color.a > 0.95) break;
+          if (color.a > 0.95) break; // Early ray termination
         }
         
         if (color.a < 0.01) discard;
@@ -1148,24 +1181,20 @@ export default {
       const expected = width * height * Math.max(1, depth);
       if (data.length === expected) return [width, height, depth];
 
-      // Try to recover from common dimension mismatches by inferring from data length.
+      // Try to recover when a dimension was unspecified/defaulted (<= 1) by inferring from data length.
       if (depth <= 1) {
-        if (data.length % width === 0) {
+        if (height <= 1 && data.length % width === 0) {
           const inferredH = data.length / width;
-          if (inferredH !== height) {
-            console.warn(`[Three] Dimension mismatch: expected ${expected}, got ${data.length}. Inferred height=${inferredH}.`);
-            return [width, inferredH, 1];
-          }
+          console.warn(`[Three] Inferred height=${inferredH} from data length ${data.length} and width ${width}.`);
+          return [width, inferredH, 1];
         }
-        if (data.length % height === 0) {
+        if (width <= 1 && data.length % height === 0) {
           const inferredW = data.length / height;
-          if (inferredW !== width) {
-            console.warn(`[Three] Dimension mismatch: expected ${expected}, got ${data.length}. Inferred width=${inferredW}.`);
-            return [inferredW, height, 1];
-          }
+          console.warn(`[Three] Inferred width=${inferredW} from data length ${data.length} and height ${height}.`);
+          return [inferredW, height, 1];
         }
       }
-      console.warn(`[Three] Dimension mismatch: expected ${expected}, got ${data.length}. Using provided dims.`);
+      console.warn(`[Three] Dimension mismatch: expected ${expected} (${width}x${height}x${depth}), got ${data.length} elements. Preserving specified dimensions.`);
       return [width, height, depth];
     }
 
@@ -1273,7 +1302,12 @@ export default {
 
       if (is2D) {
         const sliceSize = normalizedDims[0] * normalizedDims[1];
-        const sliceData = data.slice(sliceId.value * sliceSize, (sliceId.value + 1) * sliceSize);
+        let sliceData = data.slice(sliceId.value * sliceSize, (sliceId.value + 1) * sliceSize);
+        if (sliceData.length < sliceSize) {
+          const padded = new Float32Array(sliceSize);
+          padded.set(sliceData);
+          sliceData = padded;
+        }
         const texture = new THREE.DataTexture(sliceData, normalizedDims[0], normalizedDims[1], THREE.RedFormat, THREE.FloatType);
         texture.minFilter = THREE.LinearFilter;
         texture.magFilter = THREE.LinearFilter;

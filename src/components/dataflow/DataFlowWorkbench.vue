@@ -2571,11 +2571,6 @@ export default {
         <div class="card shadow-sm">
           <div class="card-header d-flex align-items-center justify-content-between py-2">
             <span class="fw-semibold">Pipeline Components</span>
-            <div class="d-flex align-items-center gap-1" title="Server limit for concurrent compressor instances">
-              <span class="badge bg-light text-secondary border" style="font-size: 11px;">
-                Limit: {{ maxCompressorInstances }}
-              </span>
-            </div>
           </div>
           <div class="list-group list-group-flush">
             <!-- Data Source -->
@@ -2673,22 +2668,24 @@ export default {
 
             <!-- Compressor Configs -->
             <div
-              class="list-group-item bg-light fw-semibold d-flex justify-content-between align-items-center cursor-pointer"
+              class="list-group-item bg-light fw-semibold d-flex justify-content-between align-items-center cursor-pointer py-2"
               @click="paletteState.compressors = !paletteState.compressors"
             >
-              <div class="d-flex align-items-center gap-2">
-                <i :class="['bi', paletteState.compressors ? 'bi-chevron-down' : 'bi-chevron-right']"></i>
-                <span>Compressor Configs</span>
-                <span
-                  class="badge ms-1"
-                  :class="totalCompressorInstances >= maxCompressorInstances ? 'bg-danger' : 'bg-primary'"
-                  :title="`Active compressor instances: ${totalCompressorInstances} / ${maxCompressorInstances}`"
-                  style="font-size: 10px;"
-                >
-                  {{ totalCompressorInstances }} / {{ maxCompressorInstances }}
-                </span>
+              <div class="d-flex align-items-start gap-2">
+                <i :class="['bi', paletteState.compressors ? 'bi-chevron-down' : 'bi-chevron-right']" style="margin-top: 3px;"></i>
+                <div class="d-flex flex-column align-items-start">
+                  <span>Compressor Configs</span>
+                  <span
+                    class="badge mt-1"
+                    :class="totalCompressorInstances >= maxCompressorInstances ? 'bg-danger' : 'bg-primary'"
+                    :title="`Active compressor instances: ${totalCompressorInstances} / ${maxCompressorInstances} (Server limit)`"
+                    style="font-size: 10px;"
+                  >
+                    Instances: {{ totalCompressorInstances }} / {{ maxCompressorInstances }}
+                  </span>
+                </div>
               </div>
-              <span class="badge bg-secondary">{{ availableCompressors.length }}</span>
+              <span class="badge bg-secondary flex-shrink-0 ms-2">{{ availableCompressors.length }}</span>
             </div>
 
             <template v-if="paletteState.compressors">

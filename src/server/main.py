@@ -14,6 +14,7 @@ import math
 import numpy as np
 import netCDF4 as nc
 import os
+import re
 from pathlib import Path
 from pprint import pprint
 import threading 
@@ -575,6 +576,77 @@ def _read_netcdf_file(filename, variable, sliceParams=None):
             return varData
 
 
+def _sync_saved_datasets_with_disk():
+    """Ensure saved_datasets accurately reflects actual files on disk in upload_dir."""
+    global saved_datasets
+    with datasets_lock:
+        if metadata_file.exists():
+            try:
+                with open(metadata_file, 'r') as f:
+                    saved_datasets = json.load(f)
+            except Exception as e:
+                logger.error(f"Failed to read metadata_file in sync: {e}")
+        changed = False
+        to_remove = []
+        for name, meta in list(saved_datasets.items()):
+            try:
+                target_name = meta.get("name", name) if isinstance(meta, dict) else name
+                target_path = _resolve_upload_path(target_name, must_exist=True)
+                if not target_path.is_file():
+                    to_remove.append(name)
+            except Exception:
+                to_remove.append(name)
+
+        for name in to_remove:
+            logger.info(f"Removing non-existent dataset '{name}' from metadata")
+            saved_datasets.pop(name, None)
+            changed = True
+
+        if upload_dir.exists():
+            for p in upload_dir.iterdir():
+                if not p.is_file() or p.name.startswith('.') or p.name == "metadata.json":
+                    continue
+                fileName = p.name
+                if fileName not in saved_datasets:
+                    size_str = _get_human_readable_size(p)
+                    # Self-describing formats (NetCDF) can be safely auto-discovered
+                    if p.suffix.lower() in ('.nc', '.cdf', '.nc4'):
+                        try:
+                            meta = _read_netcdf_file(fileName, "metadata")
+                            saved_datasets[fileName] = {
+                                "name": fileName,
+                                "type": "netcdf",
+                                "size": size_str,
+                                "vars": meta
+                            }
+                            changed = True
+                            logger.info(f"Auto-discovered NetCDF dataset '{fileName}'")
+                        except Exception as e:
+                            logger.error(f"Failed to auto-discover NetCDF dataset '{fileName}': {e}")
+                    else:
+                        # For raw binary files without existing metadata, extract dimensions only if in filename
+                        dim_match = re.search(r'(\d+)[x_](\d+)[x_](\d+)', fileName)
+                        if dim_match:
+                            w, h, d = int(dim_match.group(3)), int(dim_match.group(2)), int(dim_match.group(1))
+                            prec = 'd' if ('.f64' in fileName or '.d' in fileName) else 'f'
+                            saved_datasets[fileName] = {
+                                "name": fileName,
+                                "type": "raw",
+                                "size": size_str,
+                                "width": w,
+                                "height": h,
+                                "depth": d,
+                                "precision": prec,
+                                "endianness": "little"
+                            }
+                            changed = True
+                            logger.info(f"Auto-discovered pattern-matched raw dataset '{fileName}' ({w}x{h}x{d} {prec})")
+
+        if changed:
+            _persist_datasets()
+
+
+
 # Create Large Language Model (LLM) client
 # You can request a free API key from NVIDIA at
 # https://build.nvidia.com/models
@@ -693,6 +765,7 @@ def verify_token():
 @token_required
 def get_uploaded_datasets():
     with datasets_lock:
+        _sync_saved_datasets_with_disk()
         datasets_copy = dict(saved_datasets)
     return jsonify({"datasets" : datasets_copy}), 200
 
@@ -723,7 +796,11 @@ def send_data_file():
         try:
             sliceParams = json.loads(slices) if slices else None
             varData = _read_netcdf_file(filePath.name, variable, sliceParams)
-            return Response(memoryview(varData), mimetype="application/octet-stream")
+            def generate():
+                mv = memoryview(varData.ravel().view(np.uint8))
+                for i in range(0, len(mv), 8388608):
+                    yield mv[i:i+8388608].tobytes()
+            return Response(generate(), mimetype="application/octet-stream")
         except Exception as e:
             logger.error(f"Error reading netcdf file '{fileName}': {e}")
             return jsonify({"error": f"Failed to read NetCDF data: {str(e)}"}), 500
@@ -1179,7 +1256,11 @@ def get_decompressed_data(data_key):
         if data is None:
             return jsonify({"error": "DATA_KEY_NOT_FOUND", "missing_keys": [data_key]}), 404
         
-        return Response(memoryview(data), mimetype="application/octet-stream")
+        def generate():
+            mv = memoryview(data.ravel().view(np.uint8))
+            for i in range(0, len(mv), 8388608):  # 8 MB chunks
+                yield mv[i:i+8388608].tobytes()
+        return Response(generate(), mimetype="application/octet-stream")
     except Exception as e:
         print(f"Error in get_decompressed_data(): {e}")
         return jsonify({"error": str(e)}), 500
@@ -2083,6 +2164,7 @@ if __name__ == '__main__':
         with datasets_lock:
             with open(metadata_file, 'r') as f:
                 saved_datasets = json.load(f)
+    _sync_saved_datasets_with_disk()
     if case_study_metadata_file.exists():
         with case_studies_lock:
             with open(case_study_metadata_file, 'r') as f:
