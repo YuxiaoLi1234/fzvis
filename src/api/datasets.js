@@ -1,4 +1,5 @@
 import axios from 'axios';
+import store from '@/store';
 
 const BASE_URL = '/api';
 
@@ -18,6 +19,13 @@ export async function listDatasets() {
  * @returns {Promise<{dataset: Object}>}
  */
 export async function uploadDataset(formData, onUploadProgress) {
+  const file = formData.get('file');
+  const maxLimit = store?.state?.maxUploadSizeBytes || (100 * 1024 * 1024);
+  const formattedLimit = store?.state?.maxUploadSizeFormatted || `${(maxLimit / (1024 * 1024)).toFixed(0)} MB`;
+  if (file && file.size && file.size > maxLimit) {
+    const sizeMB = (file.size / (1024 * 1024)).toFixed(2);
+    throw new Error(`File size (${sizeMB} MB) exceeds the ${formattedLimit} upload limit.`);
+  }
   const response = await axios.post(`${BASE_URL}/upload`, formData, {
     onUploadProgress,
   });

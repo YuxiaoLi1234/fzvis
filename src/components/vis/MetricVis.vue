@@ -2,7 +2,7 @@
 import Plotly from 'plotly.js-dist-min';
 import * as d3 from "d3";
 import { mapState } from 'vuex';
-import { getDatasetMinMax, requestWithFallback } from '@/utils/datasetUtils';
+import { getDatasetMinMax, requestWithFallback, generateUUID } from '@/utils/datasetUtils';
 import Multiselect from 'vue-multiselect';
 
 export default {
@@ -346,7 +346,7 @@ export default {
 
   methods: {
     async computeDataKey() {
-      return crypto.randomUUID();
+      return generateUUID();
     },
     isAnalysisSourceUsable(source) {
       if (!source || source.error) return false;

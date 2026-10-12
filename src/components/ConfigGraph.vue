@@ -3,6 +3,7 @@ import * as d3 from 'd3';
 import { Modal } from 'bootstrap';
 import Multiselect from 'vue-multiselect';
 import axios from 'axios';
+import { generateUUID } from '@/utils/datasetUtils';
 
 export default {
   name: 'ConfigGraph',
@@ -923,7 +924,7 @@ export default {
 
       let dataKey = this.$store.state.dataset?.data_key || this.$store.state.dataset?.name || null;
       if (!dataKey && this.$store.state.dataset?.content) {
-        dataKey = crypto.randomUUID();
+        dataKey = generateUUID();
         this.$store.commit('setFileData', {
           dataset: { ...this.$store.state.dataset, data_key: dataKey }
         });

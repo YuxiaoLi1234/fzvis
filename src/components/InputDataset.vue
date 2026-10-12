@@ -9,6 +9,13 @@
     </h1>
     
     <input type="file" class="form-control mt-3 mb-2" id="fileloader" @change="handleFileChange">
+    <div v-if="fileSizeError" class="alert alert-danger py-1 px-2 small mb-2">
+      <i class="bi bi-exclamation-triangle-fill me-1"></i>
+      {{ fileSizeError }}
+    </div>
+    <div class="form-text mb-2 text-muted small">
+      <i class="bi bi-info-circle me-1"></i>Maximum file size: {{ maxUploadSizeFormatted }}.
+    </div>
 
     <div v-if="isNetCDF">
       <small class="py-0 mt-0 text-muted">Click submit button to parse the NetCDF file.</small>
@@ -212,6 +219,7 @@ export default {
       lastDatasetHistoryName: null,
       isNetCDF: false,
       datasetModalInstance: null,
+      fileSizeError: null,
     }
   },
 
@@ -222,6 +230,14 @@ export default {
 
     currentDataset() {
       return this.$store?.state?.dataset || null;
+    },
+
+    maxUploadSizeBytes() {
+      return this.$store?.state?.maxUploadSizeBytes || (100 * 1024 * 1024);
+    },
+
+    maxUploadSizeFormatted() {
+      return this.$store?.state?.maxUploadSizeFormatted || '100 MB';
     },
 
     // Check if all form fields are filled before allowing emission
@@ -333,7 +349,22 @@ export default {
 
     async handleFileChange(event) {
       const newFile = event.target.files[0];
+      this.fileSizeError = null;
       if (newFile) {
+        const maxBytes = this.maxUploadSizeBytes;
+        const maxFormatted = this.maxUploadSizeFormatted;
+        if (newFile.size > maxBytes) {
+          const sizeMB = (newFile.size / (1024 * 1024)).toFixed(2);
+          this.fileSizeError = `File "${newFile.name}" (${sizeMB} MB) exceeds the ${maxFormatted} upload limit. Please select a file smaller than ${maxFormatted}.`;
+          this.$store.commit("setStatus", {
+            type: "danger",
+            message: this.fileSizeError
+          });
+          event.target.value = '';
+          this.file = null;
+          this.fileContent = '';
+          return;
+        }
         this.file = newFile;
         // Handle NetCDF file format
         const validExtensions = [".nc", ".cdf", ".nc4"];
@@ -370,6 +401,14 @@ export default {
     },
 
     async uploadFile() {
+      if (this.file && this.file.size > this.maxUploadSizeBytes) {
+        this.$store.commit("setStatus", {
+          type: "danger",
+          message: `File "${this.file.name}" exceeds the ${this.maxUploadSizeFormatted} upload limit.`
+        });
+        return;
+      }
+
       // Generate form data
       const formData = new FormData();
       if (this.file) {

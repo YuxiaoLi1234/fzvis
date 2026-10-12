@@ -101,7 +101,7 @@
             <div class="col-6 mb-3">
               <label class="form-label text-muted small fw-semibold">Accelerator</label>
               <select class="form-select form-select-sm" v-model="localConfig.accelerator">
-                <option value="">None</option>
+                <option value="">None (CPU)</option>
                 <option value="omp">OpenMP</option>
                 <option value="cuda">CUDA</option>
               </select>

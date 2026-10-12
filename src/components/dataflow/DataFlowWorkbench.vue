@@ -14,6 +14,7 @@ import FFCzCorrection from '../correction/FFCzCorrection.vue';
 import { Splitpanes, Pane } from 'splitpanes';
 import { NodeFactory } from '../../utils/nodeClasses';
 import ConfigGraph from '../ConfigGraph.vue';
+import { generateUUID } from '@/utils/datasetUtils';
 
 export default {
   name: 'DataFlowWorkbench',
@@ -434,7 +435,7 @@ export default {
       if (!dataset || !dataset.content) return;
       let dataKey = dataset.data_key;
       if (!dataKey) {
-        dataKey = crypto.randomUUID();
+        dataKey = generateUUID();
         this.$store.commit('setFileData', { dataset: { ...dataset, data_key: dataKey } });
       }
       if (this.cachedDataKeys.has(dataKey) || this.cachingDataKeys.has(dataKey)) return;
@@ -779,7 +780,7 @@ export default {
         if (existingKey) {
           config.data_key = existingKey;
         } else if (dataset.content) {
-          const newKey = crypto.randomUUID();
+          const newKey = generateUUID();
           config.data_key = newKey;
           this.$store.commit('setFileData', { dataset: { ...dataset, data_key: newKey } });
         }
@@ -1449,7 +1450,7 @@ export default {
       this.selectedNode.status = ready ? 'ready' : 'pending';
     },
     async computeDataKey() {
-      return crypto.randomUUID();
+      return generateUUID();
     },
     async handleRunCompressor(config) {
       if (!this.selectedNode || this.selectedNode.type !== 'compressor') return;

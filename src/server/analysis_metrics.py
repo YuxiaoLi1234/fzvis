@@ -610,7 +610,7 @@ def compute_critical_points(data_array, parameters):
         config = parameters.get('config', {}) or {}
         
         # Support flat parameters for common critical point settings
-        accelerator_name = parameters.get('accelerator', config.get('accelerator', 'omp'))
+        accelerator_name = parameters.get('accelerator', config.get('accelerator', 'none'))
         # Ensure we have a valid config for helper functions
         config = { **config, 'accelerator': accelerator_name }
         
@@ -650,15 +650,53 @@ def compute_critical_points(data_array, parameters):
             )
             logger.info(f"msz.extract_critical_points returned successfully")
         except Exception as msz_error:
-            logger.error(f"msz.extract_critical_points raised exception: {msz_error}")
-            logger.error(traceback.format_exc())
-            return {
-                'type': 'text',
-                'content': f'MSz library error: {str(msz_error)}. This may be due to incompatible accelerator settings or data format issues.'
-            }
+            if accelerator != msz.ACCELERATOR_NONE:
+                logger.warning(f"msz.extract_critical_points failed with accelerator {accelerator} ({msz_error}). Falling back to CPU (None).")
+                accelerator = msz.ACCELERATOR_NONE
+                try:
+                    result = msz.extract_critical_points(
+                        arr_data,
+                        compute_segmentation=compute_segmentation,
+                        connectivity_type=connectivity_type,
+                        W=width,
+                        H=height,
+                        D=depth,
+                        accelerator=accelerator
+                    )
+                except Exception as fb_err:
+                    logger.error(f"Fallback msz.extract_critical_points also failed: {fb_err}")
+                    return {
+                        'type': 'text',
+                        'content': f'MSz library error: {str(fb_err)}.'
+                    }
+            else:
+                logger.error(f"msz.extract_critical_points raised exception: {msz_error}")
+                logger.error(traceback.format_exc())
+                return {
+                    'type': 'text',
+                    'content': f'MSz library error: {str(msz_error)}. This may be due to incompatible accelerator settings or data format issues.'
+                }
         
-        # Check status
+        # Check status and fall back to CPU if accelerator is not implemented
         status = result.get('status', msz.ERR_UNKNOWN_ERROR)
+        if status == msz.ERR_NOT_IMPLEMENTED and accelerator != msz.ACCELERATOR_NONE:
+            logger.warning(f"MSz extraction not implemented for accelerator {accelerator}. Falling back to CPU (None).")
+            accelerator = msz.ACCELERATOR_NONE
+            try:
+                result = msz.extract_critical_points(
+                    arr_data,
+                    compute_segmentation=compute_segmentation,
+                    connectivity_type=connectivity_type,
+                    W=width,
+                    H=height,
+                    D=depth,
+                    accelerator=accelerator
+                )
+                status = result.get('status', msz.ERR_UNKNOWN_ERROR)
+            except Exception as fb_err:
+                logger.error(f"Fallback msz.extract_critical_points also failed: {fb_err}")
+                status = msz.ERR_UNKNOWN_ERROR
+
         if status != msz.ERR_NO_ERROR:
             msg = f'MSZ error: Failed to extract critical points (error code: {status})'
             if status == msz.ERR_NOT_IMPLEMENTED:
@@ -798,7 +836,7 @@ def compute_critical_points_faults(data_array, parameters):
         config = params.get('config', {}) or {}
         
         # Support flat parameters for top-level keys
-        acc_name = params.get('accelerator', config.get('accelerator', 'omp'))
+        acc_name = params.get('accelerator', config.get('accelerator', 'none'))
         # Reconstruct config for helper functions
         config = { **config, 'accelerator': acc_name }
         
@@ -816,12 +854,41 @@ def compute_critical_points_faults(data_array, parameters):
             )
             logger.info(f"msz.count_faults returned successfully")
         except Exception as msz_error:
-            logger.error(f"msz.count_faults raised exception: {msz_error}")
-            logger.error(traceback.format_exc())
-            return {'error': f'MSz count_faults error: {str(msz_error)}'}
+            if accelerator != msz.ACCELERATOR_NONE:
+                logger.warning(f"msz.count_faults failed with accelerator {accelerator} ({msz_error}). Falling back to CPU (None).")
+                accelerator = msz.ACCELERATOR_NONE
+                try:
+                    result = msz.count_faults(
+                        orig_data, 
+                        decp_data, 
+                        connectivity_type=connectivity_type, 
+                        W=W, H=H, D=D,
+                        accelerator=accelerator
+                    )
+                except Exception as fb_err:
+                    return {'error': f'MSz count_faults error: {str(fb_err)}'}
+            else:
+                logger.error(f"msz.count_faults raised exception: {msz_error}")
+                logger.error(traceback.format_exc())
+                return {'error': f'MSz count_faults error: {str(msz_error)}'}
 
-        # Check status
+        # Check status and fall back to CPU if accelerator is not implemented
         status = result.get('status', msz.ERR_UNKNOWN_ERROR)
+        if status == msz.ERR_NOT_IMPLEMENTED and accelerator != msz.ACCELERATOR_NONE:
+            logger.warning(f"MSz fault counting not implemented for accelerator {accelerator}. Falling back to CPU (None).")
+            accelerator = msz.ACCELERATOR_NONE
+            try:
+                result = msz.count_faults(
+                    orig_data, 
+                    decp_data, 
+                    connectivity_type=connectivity_type, 
+                    W=W, H=H, D=D,
+                    accelerator=accelerator
+                )
+                status = result.get('status', msz.ERR_UNKNOWN_ERROR)
+            except Exception as fb_err:
+                return {'error': f'MSz count_faults fallback error: {str(fb_err)}'}
+
         if status != msz.ERR_NO_ERROR:
             msg = f'MSZ error: Failed to count faults (code: {status})'
             if status == msz.ERR_NOT_IMPLEMENTED:
@@ -908,8 +975,37 @@ def apply_critical_points_correction(original, decompressed, parameters):
             )
             logger.info(f"msz.derive_edits finished with status: {status}, num_edits: {len(edits)}")
         except Exception as e:
-            logger.error(f"msz.derive_edits raised exception: {e}")
-            raise
+            if accelerator != msz.ACCELERATOR_NONE:
+                logger.warning(f"msz.derive_edits failed with accelerator {accelerator} ({e}). Falling back to CPU (None).")
+                accelerator = msz.ACCELERATOR_NONE
+                status, edits = _derive_edits_with_data_size_check(
+                    orig_data, 
+                    decp_data,
+                    config,
+                    connectivity_type,
+                    W, H, D,
+                    threshold,
+                    preservation_options,
+                    accelerator
+                )
+            else:
+                logger.error(f"msz.derive_edits raised exception: {e}")
+                raise
+
+        # Fallback to CPU if accelerator is not implemented
+        if status == msz.ERR_NOT_IMPLEMENTED and accelerator != msz.ACCELERATOR_NONE:
+            logger.warning(f"MSz derive_edits not implemented for accelerator {accelerator}. Falling back to CPU (None).")
+            accelerator = msz.ACCELERATOR_NONE
+            status, edits = _derive_edits_with_data_size_check(
+                orig_data, 
+                decp_data,
+                config,
+                connectivity_type,
+                W, H, D,
+                threshold,
+                preservation_options,
+                accelerator
+            )
 
         if status != msz.ERR_NO_ERROR:
             msg = f'MSz derive_edits failed with status {status}'
@@ -924,7 +1020,6 @@ def apply_critical_points_correction(original, decompressed, parameters):
         # that might happen with float32 arrays (where they modify a temporary copy)
         # NOTE: We use ACCELERATOR_NONE (Serial) for apply_edits because it's a very fast
         # operation on CPU (O(N_edits)) and avoids CUDA host-device sync issues.
-        # derive_edits (the heavy part) still uses the selected accelerator.
         logger.info(f"Applying {len(edits)} edits to corrected_data...")
         # Make an explicit deep copy to avoid in-place edits mutating the original decompressed array.
         corrected_data = np.array(decompressed, dtype=np.float64, copy=True, order='C')
@@ -932,7 +1027,7 @@ def apply_critical_points_correction(original, decompressed, parameters):
             corrected_data,
             edits,
             W=W, H=H, D=D,
-            accelerator=accelerator,
+            accelerator=msz.ACCELERATOR_NONE,
             device_id=0
         )
         logger.info(f"msz.apply_edits finished with status: {status}")

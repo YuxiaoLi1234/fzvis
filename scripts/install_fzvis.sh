@@ -394,6 +394,12 @@ if [ "$SKIP_FRONTEND" != "1" ]; then
     echo "Building frontend..."
     (cd "$ROOT_DIR" && npm run build)
   fi
+
+  # If Nginx deployment directory exists and is writable, sync dist files
+  if [ -d "/var/www/html/fzvis" ] && [ -w "/var/www/html/fzvis" ]; then
+    echo "[INFO] Updating Nginx deployment at /var/www/html/fzvis..."
+    cp -r "$ROOT_DIR/dist/"* /var/www/html/fzvis/
+  fi
 else
   echo "[INFO] Skipping frontend build."
 fi

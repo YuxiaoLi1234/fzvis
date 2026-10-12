@@ -40,6 +40,8 @@ export default createStore({
     },
     bulkGenerationRequests: [],
     maxCompressorInstances: 10,
+    maxUploadSizeBytes: 100 * 1024 * 1024,
+    maxUploadSizeFormatted: '100 MB',
     // Authentication state
     token: localStorage.getItem('fzvis_token') || '',
     isAuthenticated: false,
@@ -425,6 +427,12 @@ export default createStore({
       const val = Math.max(1, parseInt(limit, 10) || 10);
       state.maxCompressorInstances = val;
     },
+    setMaxUploadSize(state, payload) {
+      if (payload && payload.bytes) {
+        state.maxUploadSizeBytes = payload.bytes;
+        state.maxUploadSizeFormatted = payload.formatted || formatBytes(payload.bytes) || `${(payload.bytes / (1024 * 1024)).toFixed(0)} MB`;
+      }
+    },
     // Authentication mutations
     setAuthToken(state, token) {
       state.token = token || '';
@@ -509,6 +517,12 @@ export default createStore({
         const { data } = await axios.get('/api/auth-status');
         if (data && data.maxCompressorInstances) {
           commit('setMaxCompressorInstances', data.maxCompressorInstances);
+        }
+        if (data && data.maxUploadSizeBytes) {
+          commit('setMaxUploadSize', {
+            bytes: data.maxUploadSizeBytes,
+            formatted: data.maxUploadSizeFormatted
+          });
         }
         const passcodeRequired = Boolean(data.passcodeRequired);
 

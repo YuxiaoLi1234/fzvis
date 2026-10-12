@@ -49,7 +49,7 @@
               multiple
               @change="handleFolderChange"
             >
-            <div class="form-text">Use this when the study is not already present on the server.</div>
+            <div class="form-text">Use this when the study is not already present on the server (max total folder size: {{ maxUploadSizeFormatted }}).</div>
           </div>
           <div class="col-lg-3">
             <div v-if="folderSummary" class="small text-muted">
@@ -314,6 +314,12 @@ export default {
     busy() {
       return this.uploading || this.registeringServerPath
     },
+    maxUploadSizeBytes() {
+      return this.$store?.state?.maxUploadSizeBytes || (100 * 1024 * 1024)
+    },
+    maxUploadSizeFormatted() {
+      return this.$store?.state?.maxUploadSizeFormatted || '100 MB'
+    },
     caseStudyList() {
       return Object.values(this.caseStudies || {}).sort((a, b) => String(a.name || a.id).localeCompare(String(b.name || b.id)))
     },
@@ -389,6 +395,15 @@ export default {
         this.folderSummary = null
         return
       }
+      const totalSize = files.reduce((acc, f) => acc + (f.size || 0), 0)
+      if (totalSize > this.maxUploadSizeBytes) {
+        const sizeMB = (totalSize / (1024 * 1024)).toFixed(2)
+        this.notifyError(`Selected folder (${sizeMB} MB) exceeds the ${this.maxUploadSizeFormatted} upload limit.`)
+        this.folderFiles = []
+        this.folderSummary = null
+        if (this.$refs.folderInput) this.$refs.folderInput.value = ''
+        return
+      }
       const root = (files[0].webkitRelativePath || files[0].name).split('/')[0]
       this.folderSummary = { root, fileCount: files.length }
       if (!this.uploadStudyName) this.uploadStudyName = root
@@ -396,6 +411,11 @@ export default {
 
     async uploadFolder() {
       if (!this.folderFiles.length) return
+      const totalSize = this.folderFiles.reduce((acc, f) => acc + (f.size || 0), 0)
+      if (totalSize > this.maxUploadSizeBytes) {
+        this.notifyError(`Total folder size exceeds the ${this.maxUploadSizeFormatted} upload limit.`)
+        return
+      }
       this.uploading = true
       const formData = new FormData()
       this.folderFiles.forEach((file) => {
