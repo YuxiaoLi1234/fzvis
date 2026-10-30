@@ -17,6 +17,7 @@ FZVIS_HOST="${FZVIS_HOST:-0.0.0.0}"
 FZVIS_PORT="${FZVIS_PORT:-10080}"
 SPACK_LIBPRESSIO_SPEC="${SPACK_LIBPRESSIO_SPEC:-libpressio+python+sz3+zfp+fpzip+mgard ^openblas~fortran}"
 SPACK_NODE_SPEC="${SPACK_NODE_SPEC:-node-js@20:}"
+SPACK_NPM_SPEC="${SPACK_NPM_SPEC:-npm}"
 
 FZVIS_SKIP_SPACK="${FZVIS_SKIP_SPACK:-0}"
 FZVIS_SKIP_NODE="${FZVIS_SKIP_NODE:-0}"
@@ -117,7 +118,6 @@ clone_or_update() {
     fi
   else
     echo "Cloning $repo_url to $target_dir..."
-    git clone --depth 1 "$repo_url" "$target_dir"
     if [ -n "$branch" ]; then
       git clone --depth 1 --branch "$branch" "$repo_url" "$target_dir"
     else
@@ -315,6 +315,9 @@ if [ "$SKIP_SPACK_PACKAGES" != "1" ]; then
   if [ "$FZVIS_SKIP_NODE" != "1" ] && ! command -v node >/dev/null 2>&1; then
     spack add "$SPACK_NODE_SPEC"
   fi
+  if [ "$FZVIS_SKIP_NODE" != "1" ] && ! command -v npm >/dev/null 2>&1; then
+    spack add "$SPACK_NPM_SPEC"
+  fi
   echo "Installing Spack environment dependencies..."
   spack install
 else
@@ -330,7 +333,18 @@ echo " 4. Python Requirements (requirements.txt)"
 echo "============================================================"
 
 PYTHON_REQ_OK=0
-if python -c "import flask, flask_cors, netCDF4, numpy, openai, matplotlib, pywt, jwt, dotenv, cachetools, scipy" >/dev/null 2>&1; then
+MISSING_PKG=""
+if ! MISSING_PKG="$(python -c '
+reqs = ["flask", "flask_cors", "netCDF4", "numpy", "openai", "matplotlib", "pywt", "jwt", "dotenv", "cachetools", "scipy"]
+for pkg in reqs:
+    try:
+        __import__(pkg)
+    except Exception as e:
+        print(f"{pkg} ({e})")
+        sys.exit(1)
+' 2>&1)"; then
+  PYTHON_REQ_OK=0
+else
   PYTHON_REQ_OK=1
 fi
 
@@ -341,7 +355,10 @@ if [ "$PYTHON_REQ_OK" = "1" ]; then
     SKIP_PIP=1
   fi
 else
-  echo "[INFO] Some Python requirements are not installed in the current environment."
+  echo "[INFO] Some Python requirements are not installed or failed to import:"
+  if [ -n "$MISSING_PKG" ]; then
+    echo "       Failed import: $MISSING_PKG"
+  fi
   if ! prompt_yes_no "Install Python requirements via pip?" "Y"; then
     SKIP_PIP=1
   fi
@@ -416,15 +433,29 @@ OPT_DEPS_DIR="$ROOT_DIR/external"
 mkdir -p "$OPT_DEPS_DIR"
 
 # Check MSz
+PYTHON_BIN="$(command -v python || command -v python3)"
+PY_VER="$($PYTHON_BIN -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")' 2>/dev/null || echo "3.11")"
+LOCAL_SITE="$FZVIS_ENV_DIR/local/lib/python$PY_VER/site-packages"
+SPACK_PYTHON_SITE="$($PYTHON_BIN -c 'import site; print(site.getsitepackages()[0])' 2>/dev/null || echo "$LOCAL_SITE")"
+
+mkdir -p "$LOCAL_SITE"
+export PYTHONPATH="$SPACK_PYTHON_SITE:$LOCAL_SITE:${PYTHONPATH:-}"
+
+# Clean any Spack view/lib from LD_LIBRARY_PATH to avoid GLIBCXX/libstdc++ conflicts with system tools (cmake, etc.)
+CLEAN_LD=""
+if [ -n "${LD_LIBRARY_PATH:-}" ]; then
+  IFS=':' read -ra ADDR <<< "$LD_LIBRARY_PATH"
+  for p in "${ADDR[@]}"; do
+    if [[ "$p" != *".spack-env/view"* ]]; then
+      CLEAN_LD="${CLEAN_LD:+$CLEAN_LD:}$p"
+    fi
+  done
+fi
+export LD_LIBRARY_PATH="$FZVIS_ENV_DIR/local/lib${CLEAN_LD:+:$CLEAN_LD}"
+
 MSZ_INSTALLED=0
-if python -c "import msz" >/dev/null 2>&1; then
+if $PYTHON_BIN -c "import msz; assert hasattr(msz, 'extract_critical_points')" >/dev/null 2>&1; then
   MSZ_INSTALLED=1
-else
-  # Check if python can import it with LD_LIBRARY_PATH and local site-packages
-  PY_VER="$(python -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")' 2>/dev/null || echo "3.11")"
-  if PYTHONPATH="$FZVIS_ENV_DIR/local/lib/python$PY_VER/site-packages:${PYTHONPATH:-}" LD_LIBRARY_PATH="$FZVIS_ENV_DIR/local/lib:${LD_LIBRARY_PATH:-}" python -c "import msz" >/dev/null 2>&1; then
-    MSZ_INSTALLED=1
-  fi
 fi
 
 if [ "$MSZ_INSTALLED" = "1" ]; then
@@ -447,36 +478,56 @@ if [ "$BUILD_MSZ" = "1" ]; then
   echo "Cloning and building MSz (branch 'fz' with Python bindings)..."
   clone_or_update "https://github.com/YuxiaoLi1234/MSz.git" "$OPT_DEPS_DIR/MSz" "fz"
 
-  PY_VER="$(python -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")' 2>/dev/null || echo "3.11")"
-  LOCAL_SITE="$FZVIS_ENV_DIR/local/lib/python$PY_VER/site-packages"
-  mkdir -p "$LOCAL_SITE"
+  PYTHON_PREFIX="$($PYTHON_BIN -c 'import sys; print(sys.prefix)' 2>/dev/null || true)"
   (
     cd "$OPT_DEPS_DIR/MSz"
     mkdir -p build && cd build
     cmake \
-      -DPython3_EXECUTABLE="$(which python)" \
+      -DPython3_EXECUTABLE="$PYTHON_BIN" \
+      ${PYTHON_PREFIX:+-DPython3_ROOT_DIR="$PYTHON_PREFIX"} \
+      -DMSZ_PYTHON_INSTALL_DIR="$LOCAL_SITE" \
       -DCMAKE_INSTALL_PREFIX="$FZVIS_ENV_DIR/local" \
-      -DCMAKE_INSTALL_RPATH="$FZVIS_ENV_DIR/local/lib" \
+      -DCMAKE_INSTALL_RPATH="\$ORIGIN:$FZVIS_ENV_DIR/local/lib" \
       -DCMAKE_BUILD_WITH_INSTALL_RPATH=ON \
       -DMSZ_ENABLE_CUDA=OFF \
       ..
     make -j"$(nproc)"
     make install
   )
-  # Ensure the compiled python module is in local site-packages
-  for so_file in "$OPT_DEPS_DIR/MSz/build"/msz*.so; do
+
+  # Copy compiled module msz*.so into Spack environment site-packages and LOCAL_SITE
+  for so_file in "$OPT_DEPS_DIR/MSz/build"/msz*.so "$LOCAL_SITE"/msz*.so; do
     if [ -f "$so_file" ]; then
-      cp -f "$so_file" "$LOCAL_SITE/"
+      cp -f "$so_file" "$LOCAL_SITE/" 2>/dev/null || true
+      if [ -n "$SPACK_PYTHON_SITE" ] && [ -d "$SPACK_PYTHON_SITE" ] && [ -w "$SPACK_PYTHON_SITE" ]; then
+        cp -f "$so_file" "$SPACK_PYTHON_SITE/" 2>/dev/null || true
+      fi
     fi
   done
 
+  # Also copy libMSz shared library next to msz extension and into local/lib.
+  # With $ORIGIN in RPATH, placing libMSz next to msz*.so eliminates LD_LIBRARY_PATH dependency!
+  for lib_file in "$OPT_DEPS_DIR/MSz/build"/libMSz*.so* "$FZVIS_ENV_DIR/local/lib"/libMSz*.so*; do
+    if [ -f "$lib_file" ]; then
+      cp -a "$lib_file" "$LOCAL_SITE/" 2>/dev/null || true
+      if [ -n "$SPACK_PYTHON_SITE" ] && [ -d "$SPACK_PYTHON_SITE" ] && [ -w "$SPACK_PYTHON_SITE" ]; then
+        cp -a "$lib_file" "$SPACK_PYTHON_SITE/" 2>/dev/null || true
+      fi
+    fi
+  done
+
+  # Place .pth file in Spack environment site-packages pointing to LOCAL_SITE as a fallback
+  if [ -n "$SPACK_PYTHON_SITE" ] && [ -d "$SPACK_PYTHON_SITE" ] && [ -w "$SPACK_PYTHON_SITE" ]; then
+    echo "$LOCAL_SITE" > "$SPACK_PYTHON_SITE/fzvis_msz.pth" 2>/dev/null || true
+  fi
+
   # Verify import
-  export LD_LIBRARY_PATH="$FZVIS_ENV_DIR/local/lib:${LD_LIBRARY_PATH:-}"
-  export PYTHONPATH="$LOCAL_SITE:${PYTHONPATH:-}"
-  if python -c "import msz" >/dev/null 2>&1; then
+  if $PYTHON_BIN -c "import msz; assert hasattr(msz, 'extract_critical_points')" >/dev/null 2>&1; then
     echo "[INFO] Verified: 'import msz' succeeded in Python!"
   else
-    echo "[WARNING] 'import msz' failed after build. Please check external/MSz/build logs."
+    echo "[WARNING] 'import msz' verification failed after build."
+    echo "          Diagnostics:"
+    $PYTHON_BIN -c "import msz" || true
   fi
 else
   echo "[INFO] Skipping MSz build."
@@ -503,25 +554,83 @@ if [ "$FFCZ_INSTALLED" = "1" ]; then
   fi
 else
   echo "[INFO] FFCz is not installed."
-  # Check if required FFTW3 dependencies (fftw3, fftw3f) are available in pkg-config
+  if prompt_yes_no "Install FFCz?" "Y"; then
+    BUILD_FFCZ=1
+  else
+    BUILD_FFCZ=0
+  fi
+fi
+
+if [ "$BUILD_FFCZ" = "1" ]; then
+  # Ensure PKG_CONFIG_PATH includes local, system multiarch, and standard prefixes
+  ARCH_TRIPLET="$(gcc -dumpmachine 2>/dev/null || uname -m)-linux-gnu"
+  for pcdir in \
+    "$FZVIS_ENV_DIR/local/lib/pkgconfig" \
+    "/usr/lib/$ARCH_TRIPLET/pkgconfig" \
+    "/usr/lib/x86_64-linux-gnu/pkgconfig" \
+    "/usr/lib/aarch64-linux-gnu/pkgconfig" \
+    "/usr/lib64/pkgconfig" \
+    "/usr/lib/pkgconfig" \
+    "/usr/local/lib/pkgconfig" \
+    "/usr/share/pkgconfig"; do
+    if [ -d "$pcdir" ]; then
+      case ":${PKG_CONFIG_PATH:-}:" in
+        *":$pcdir:"*) ;;
+        *) export PKG_CONFIG_PATH="${PKG_CONFIG_PATH:+$PKG_CONFIG_PATH:}$pcdir" ;;
+      esac
+    fi
+  done
+
+  # Check if required FFTW3 dependencies (fftw3, fftw3f) are available in pkg-config or local/Spack prefixes
   FFTW_AVAILABLE=0
   if pkg-config --exists fftw3 fftw3f 2>/dev/null; then
+    FFTW_AVAILABLE=1
+  elif [ -f "$FZVIS_ENV_DIR/local/lib/pkgconfig/fftw3.pc" ] && [ -f "$FZVIS_ENV_DIR/local/lib/pkgconfig/fftw3f.pc" ]; then
+    FFTW_AVAILABLE=1
+  elif spack find fftw 2>/dev/null | grep -q fftw; then
     FFTW_AVAILABLE=1
   fi
 
   if [ "$FFTW_AVAILABLE" != "1" ]; then
     echo "[WARNING] FFCz requires FFTW3 (single and double precision: fftw3 and fftw3f)."
     echo "          Missing fftw3/fftw3f pkg-config definitions."
-    echo "          To install on Ubuntu/Debian: sudo apt-get install -y libfftw3-dev"
-    if ! prompt_yes_no "Attempt building FFCz anyway?" "N"; then
-      BUILD_FFCZ=0
-    else
-      BUILD_FFCZ=1
+    if prompt_yes_no "Download and install FFTW3 locally without root (into $FZVIS_ENV_DIR/local)?" "Y"; then
+      echo "Downloading and building FFTW 3.3.10 locally (float & double)..."
+      FFTW_SRC_DIR="$OPT_DEPS_DIR/fftw-3.3.10"
+      mkdir -p "$OPT_DEPS_DIR"
+      if [ ! -f "$OPT_DEPS_DIR/fftw-3.3.10.tar.gz" ]; then
+        curl -fsSL "https://www.fftw.org/fftw-3.3.10.tar.gz" -o "$OPT_DEPS_DIR/fftw-3.3.10.tar.gz" || \
+        wget -q "https://www.fftw.org/fftw-3.3.10.tar.gz" -O "$OPT_DEPS_DIR/fftw-3.3.10.tar.gz"
+      fi
+      if [ ! -d "$FFTW_SRC_DIR" ]; then
+        tar -xzf "$OPT_DEPS_DIR/fftw-3.3.10.tar.gz" -C "$OPT_DEPS_DIR"
+      fi
+      mkdir -p "$FZVIS_ENV_DIR/local"
+      # Build double precision (fftw3)
+      echo "Building FFTW3 (double precision)..."
+      (
+        cd "$FFTW_SRC_DIR"
+        ./configure --prefix="$FZVIS_ENV_DIR/local" --enable-shared --enable-threads
+        make -j"$(nproc)"
+        make install
+      )
+      # Build single precision (fftw3f)
+      echo "Building FFTW3 (single precision)..."
+      (
+        cd "$FFTW_SRC_DIR"
+        ./configure --prefix="$FZVIS_ENV_DIR/local" --enable-shared --enable-threads --enable-float
+        make -j"$(nproc)"
+        make install
+      )
+      export PKG_CONFIG_PATH="$FZVIS_ENV_DIR/local/lib/pkgconfig:${PKG_CONFIG_PATH:-}"
+      export LD_LIBRARY_PATH="$FZVIS_ENV_DIR/local/lib:${LD_LIBRARY_PATH:-}"
+      FFTW_AVAILABLE=1
+      echo "[INFO] Successfully installed local FFTW3 and FFTW3F!"
     fi
-  else
-    if prompt_yes_no "Install FFCz?" "Y"; then
-      BUILD_FFCZ=1
-    else
+  fi
+
+  if [ "$FFTW_AVAILABLE" != "1" ]; then
+    if ! prompt_yes_no "Attempt building FFCz anyway?" "N"; then
       BUILD_FFCZ=0
     fi
   fi
@@ -533,7 +642,11 @@ if [ "$BUILD_FFCZ" = "1" ]; then
   (
     cd "$OPT_DEPS_DIR/FFCz/CPU"
     mkdir -p build && cd build
-    cmake .. -DCMAKE_BUILD_TYPE=Release
+    cmake .. \
+      -DCMAKE_BUILD_TYPE=Release \
+      -DCMAKE_PREFIX_PATH="$FZVIS_ENV_DIR/local" \
+      -DCMAKE_INSTALL_RPATH="$FZVIS_ENV_DIR/local/lib" \
+      -DCMAKE_BUILD_WITH_INSTALL_RPATH=ON
     make -j"$(nproc)"
   )
   mkdir -p "$FZVIS_ENV_DIR/local/bin"
@@ -613,7 +726,7 @@ echo "============================================================"
 echo "Active environment: $FZVIS_ENV_DIR"
 echo
 echo "Component Verification Status:"
-if python -c "import msz; assert hasattr(msz, 'extract_critical_points')" >/dev/null 2>&1; then
+if $PYTHON_BIN -c "import msz; assert hasattr(msz, 'extract_critical_points')" >/dev/null 2>&1; then
   echo "  - MSz (Python module):       INSTALLED & VERIFIED"
 else
   echo "  - MSz (Python module):       NOT AVAILABLE"
