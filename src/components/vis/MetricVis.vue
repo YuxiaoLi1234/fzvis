@@ -214,6 +214,7 @@ export default {
     availableCompressionMetricSelections() {
       const groups = {};
       this.compressionMetricRows.forEach(row => {
+        if (row.category === 'other') return;
         if (!groups[row.category]) groups[row.category] = new Map();
         if (!groups[row.category].has(row.label)) {
           groups[row.category].set(row.label, row.key);
@@ -229,7 +230,9 @@ export default {
       return result;
     },
     compressionCategoriesList() {
-      return Object.keys(this.availableCompressionMetricSelections || {}).sort();
+      return Object.keys(this.availableCompressionMetricSelections || {})
+        .filter(category => category !== 'other')
+        .sort();
     },
     selectedCompressionKeys() {
       const selected = new Set();
@@ -273,15 +276,36 @@ export default {
         this.selectedSources = this.selectedSources.filter(id => availableIds.includes(id));
         
         // Also remove results from active metrics for these sources
+        let resultsModified = false;
         this.activeMetrics.forEach(metric => {
           if (metric.results) {
-            Object.keys(metric.results).forEach(sourceId => {
+            let metricModified = false;
+            const nextResults = { ...metric.results };
+            Object.keys(nextResults).forEach(sourceId => {
               if (sourceId !== 'original' && !availableIds.includes(sourceId)) {
-                delete metric.results[sourceId];
+                delete nextResults[sourceId];
+                metricModified = true;
+                resultsModified = true;
               }
             });
+            if (metricModified) {
+              metric.results = nextResults;
+            }
           }
         });
+
+        if (resultsModified) {
+          this.$nextTick(() => {
+            this.activeMetrics.forEach(metric => {
+              if (metric.id === 'histogram') this.drawHistogram(metric);
+              else if (metric.id === 'power_spectrum') this.drawPowerSpectrum(metric);
+              else if (metric.id === 'correlation') this.drawCorrelation(metric);
+              if (metric.viewMode === 'plot') {
+                this.drawMetricPlot(metric);
+              }
+            });
+          });
+        }
 
         if (this.autoSelectAllSources && this.hasSelectableSources) {
           this.selectedSources = ['original', ...this.selectableSourceIds];
@@ -2162,6 +2186,8 @@ export default {
                 category = 'qoi';
               }
             }
+
+            if (category === 'other') return;
 
             if (!categories[category]) {
               categories[category] = [];

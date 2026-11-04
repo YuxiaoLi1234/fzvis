@@ -153,7 +153,20 @@ input_data_cache = ThreadSafeLRUCache(name="input_data_cache", maxsize=INPUT_CAC
 decompressed_data_cache = ThreadSafeLRUCache(name="decompressed_data_cache", maxsize=DECOMPRESSED_CACHE_SIZE)
 
 # Compressor Instance Limits
-MAX_COMPRESSOR_INSTANCES = int(os.getenv("FZVIS_MAX_COMPRESSOR_INSTANCES", "10"))
+def _parse_max_compressor_instances(val):
+    if val is None:
+        return 10
+    val_str = str(val).strip().lower()
+    if val_str in ("", "0", "-1", "none", "null", "unlimited", "inf", "infinity", "no", "false"):
+        return 0
+    try:
+        parsed = int(val_str)
+        return parsed if parsed > 0 else 0
+    except ValueError:
+        logger.warning(f"Invalid FZVIS_MAX_COMPRESSOR_INSTANCES value: '{val}'. Defaulting to 10.")
+        return 10
+
+MAX_COMPRESSOR_INSTANCES = _parse_max_compressor_instances(os.getenv("FZVIS_MAX_COMPRESSOR_INSTANCES", "10"))
 active_compressor_lock = threading.Lock()
 active_compressor_count = 0
 
@@ -1328,14 +1341,14 @@ def indexlist():
                 if isinstance(config, dict) and config.get("compressor_id") != ''
             }
 
-            if len(active_configs) > MAX_COMPRESSOR_INSTANCES:
+            if MAX_COMPRESSOR_INSTANCES > 0 and len(active_configs) > MAX_COMPRESSOR_INSTANCES:
                 return jsonify({
                     "error": f"Requested {len(active_configs)} compressor instances, which exceeds the maximum limit of {MAX_COMPRESSOR_INSTANCES}."
                 }), 400
 
             global active_compressor_count
             with active_compressor_lock:
-                if active_compressor_count + len(active_configs) > MAX_COMPRESSOR_INSTANCES:
+                if MAX_COMPRESSOR_INSTANCES > 0 and active_compressor_count + len(active_configs) > MAX_COMPRESSOR_INSTANCES:
                     return jsonify({
                         "error": f"Server busy: currently running {active_compressor_count} compressor instance(s). Running {len(active_configs)} more would exceed the system limit of {MAX_COMPRESSOR_INSTANCES}."
                     }), 429

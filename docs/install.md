@@ -96,6 +96,6 @@ Important values:
 - `FZVIS_CACHE_SIZE`: default item limit for in-memory LRU caches (default: 50)
 - `FZVIS_INPUT_CACHE_SIZE`: item limit for uploaded input datasets cache (default: 50)
 - `FZVIS_DECOMPRESSED_CACHE_SIZE`: item limit for decompressed data cache (default: 50)
-- `FZVIS_MAX_COMPRESSOR_INSTANCES`: maximum concurrent compressor instances per session (default: 10)
+- `FZVIS_MAX_COMPRESSOR_INSTANCES`: maximum concurrent compressor instances per session (default: 10; set to `0`, empty, or `none` for unlimited)
 - `FZVIS_MAX_UPLOAD_SIZE`: maximum file upload size (e.g. `100MB`, `500MB`, `2GB`; default: `100MB`)
 - `FZVIS_CASE_STUDY_ROOT`: directory path for saved case studies (default: `./case_studies`)

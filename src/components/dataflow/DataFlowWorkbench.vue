@@ -193,7 +193,8 @@ export default {
       return this.$store?.state?.compressorOptions || {};
     },
     maxCompressorInstances() {
-      return this.$store?.state?.maxCompressorInstances || 10;
+      const limit = this.$store?.state?.maxCompressorInstances;
+      return (limit !== undefined && limit !== null) ? limit : 10;
     },
     totalCompressorInstances() {
       let count = 0;
@@ -214,6 +215,7 @@ export default {
       return count;
     },
     canAddMoreCompressors() {
+      if (this.maxCompressorInstances <= 0) return true;
       return this.totalCompressorInstances < this.maxCompressorInstances;
     },
     comparisonData() {
@@ -358,6 +360,7 @@ export default {
     window.addEventListener('mousemove', this.onMouseMove);
     window.addEventListener('mouseup', this.onMouseUp);
     window.addEventListener('resize', this.onWindowResize);
+    window.addEventListener('keydown', this.onKeyDown);
     this.$nextTick(() => {
       this.initializeCanvasSize();
     });
@@ -367,9 +370,15 @@ export default {
     window.removeEventListener('mousemove', this.onMouseMove);
     window.removeEventListener('mouseup', this.onMouseUp);
     window.removeEventListener('resize', this.onWindowResize);
+    window.removeEventListener('keydown', this.onKeyDown);
   },
 
   methods: {
+    onKeyDown(event) {
+      if (event.key === 'Escape' && this.showPropertiesModal) {
+        this.closePropertiesModal();
+      }
+    },
     resolveConfigBaseIdForNode(node) {
       if (!node) return null;
 
@@ -707,7 +716,7 @@ export default {
       const newContrib = existing.length + values.length;
       const netIncrease = newContrib - currentContrib;
 
-      if (this.totalCompressorInstances + netIncrease > this.maxCompressorInstances) {
+      if (this.maxCompressorInstances > 0 && this.totalCompressorInstances + netIncrease > this.maxCompressorInstances) {
         this.$store.commit('setStatus', {
           type: 'warning',
           message: `Cannot generate ${values.length} variants: maximum limit of ${this.maxCompressorInstances} compressor instances would be exceeded (${this.totalCompressorInstances} currently active).`
@@ -902,7 +911,7 @@ export default {
       const newContrib = existing.length + values.length;
       const netIncrease = newContrib - currentContrib;
 
-      if (this.totalCompressorInstances + netIncrease > this.maxCompressorInstances) {
+      if (this.maxCompressorInstances > 0 && this.totalCompressorInstances + netIncrease > this.maxCompressorInstances) {
         this.$store.commit('setStatus', {
           type: 'warning',
           message: `Cannot generate ${values.length} variants: maximum limit of ${this.maxCompressorInstances} compressor instances would be exceeded (${this.totalCompressorInstances} currently active).`
@@ -1085,6 +1094,26 @@ export default {
         node.generatedComparisonIds = nextGeneratedIds;
       }
 
+      if (nextGeneratedIds.length > 0 && this.$store?.state?.comparisonData) {
+        nextGeneratedIds.forEach(resultId => {
+          const item = this.$store.state.comparisonData[resultId];
+          if (!item) return;
+          const dims = this.extractDimensionsFromResult(item);
+          const normalizedSegmentation = this.normalizeSegmentation(
+            item.segmentation || item.critical_points?.segmentation,
+            dims
+          );
+          if (normalizedSegmentation) {
+            item.segmentation = normalizedSegmentation;
+            this.$store.commit('setSegmentation', { source: resultId, data: normalizedSegmentation });
+          }
+          const cpPayload = item.critical_points || (item.type === 'critical_points' ? item : null);
+          if (cpPayload) {
+            this.$store.commit('setCriticalPoints', { source: resultId, data: cpPayload });
+          }
+        });
+      }
+
       const rawResult = payload?.result || null;
       if (!rawResult) {
         this.handleFilterSuccess(nodeId, payload);
@@ -1221,6 +1250,15 @@ export default {
           this.cleanupNodeGeneratedComparisonData(childNode);
           if (this.$store) {
             this.$store.commit('removeComparisonData', childId);
+            if (childNode.correctedKey && childNode.correctedKey !== childId) {
+              this.$store.commit('removeComparisonData', childNode.correctedKey);
+            }
+            const compData = this.$store.state?.comparisonData || {};
+            Object.entries(compData).forEach(([key, entry]) => {
+              if (entry?.correction_node_id === childId) {
+                this.$store.commit('removeComparisonData', key);
+              }
+            });
           }
           this.resetDownstreamNodes(childId); // Recursive reset
         }
@@ -2279,10 +2317,10 @@ export default {
 </script>
 
 <template>
-  <div class="dataflow-workbench h-100 container-fluid py-2">
+  <div class="dataflow-workbench h-100 container-fluid py-2 position-relative overflow-hidden">
     <!-- Delete Confirmation Modal -->
     <div
-      class="modal fade"
+      class="modal fade graph-scoped-modal"
       :class="{ show: deleteConfirmation.show, 'd-block': deleteConfirmation.show }"
       tabindex="-1"
       role="dialog"
@@ -2315,11 +2353,11 @@ export default {
         </div>
       </div>
     </div>
-    <div v-if="deleteConfirmation.show" class="modal-backdrop fade show"></div>
+    <div v-if="deleteConfirmation.show" class="modal-backdrop fade show graph-scoped-backdrop"></div>
 
     <!-- Novice Exploration Modal -->
     <div
-      class="modal fade"
+      class="modal fade graph-scoped-modal"
       :class="{ show: showExploreModal, 'd-block': showExploreModal }"
       tabindex="-1"
       role="dialog"
@@ -2407,164 +2445,7 @@ export default {
         </div>
       </div>
     </div>
-    <div v-if="showExploreModal" class="modal-backdrop fade show"></div>
-
-    <!-- Node Properties Modal -->
-    <div
-      class="modal fade"
-      :class="{ show: showPropertiesModal, 'd-block': showPropertiesModal }"
-      tabindex="-1"
-      role="dialog"
-      @click.self="closePropertiesModal"
-    >
-      <div class="modal-dialog modal-lg modal-dialog-centered modal-dialog-scrollable" role="document">
-        <div class="modal-content">
-          <div class="modal-header">
-            <h5 class="modal-title">
-              <i v-if="selectedNode" :class="['bi', selectedNode.icon, 'me-2']"></i>
-              {{ selectedNode ? selectedNode.label : 'Node Properties' }}
-            </h5>
-            <button type="button" class="btn-close" @click="closePropertiesModal" aria-label="Close"></button>
-          </div>
-          <div class="modal-body" v-if="selectedNode">
-            <template v-if="selectedNode.type === 'source'">
-              <keep-alive>
-                <InputDataset
-                  @dataset-fetch-start="handleDataSourceFetchStart"
-                  @dataset-fetch-complete="handleDataSourceFetchComplete"
-                  @dataset-fetch-error="handleDataSourceFetchError"
-                />
-              </keep-alive>
-              <div v-if="dataSourceFetchInProgress || dataSourceAutoCloseCountdown !== null" class="alert alert-info mt-3">
-                <div v-if="dataSourceFetchInProgress">
-                  <i class="bi bi-hourglass-split me-2"></i>Fetching the dataset from the backend...
-                </div>
-                <div v-else>
-                  <i class="bi bi-check-circle me-2"></i>Dataset ready. Closing this window in {{ dataSourceAutoCloseCountdown }}s.
-                </div>
-              </div>
-            </template>
-
-            <template v-else-if="selectedNode.type === 'filter'">
-              <p v-if="selectedNode.description" class="text-muted small mb-3">
-                {{ selectedNode.description }}
-              </p>
-              <template v-if="selectedNode.editorComponent">
-                <keep-alive>
-                  <component
-                    :is="selectedNode.editorComponent"
-                    :key="selectedNode.id"
-                    :nodeId="selectedNode.id"
-                    v-bind="selectedNode.props"
-                    @filter-start="() => handleFilterStart(selectedNode.id)"
-                    @filter-success="($event) => handleFilterSuccess($event.nodeId || selectedNode.id, $event)"
-                    @filter-error="($event) => handleFilterError($event.nodeId || selectedNode.id, $event)"
-                    @filter-invalid="($event) => handleFilterInvalid($event.nodeId || selectedNode.id, $event)"
-                    @filter-finish="() => handleFilterFinish(selectedNode.id)"
-                    @dataset-change="() => handleFilterDatasetChange(selectedNode.id)"
-                  />
-                </keep-alive>
-              </template>
-              <p v-else class="text-muted small mb-0">No filter UI available.</p>
-            </template>
-
-            <template v-else-if="selectedNode.type === 'module' && showCompressionModules">
-              <p v-if="selectedNode.description" class="text-muted small mb-3">
-                {{ selectedNode.description }}
-              </p>
-              <div class="alert alert-info small mb-3">
-                <i class="bi bi-info-circle"></i>
-                This module requires {{ selectedNode.inputs.length }} input{{ selectedNode.inputs.length > 1 ? 's' : '' }}.
-                {{ selectedNode.inputs.length > 1 ? 'Connect multiple data sources or filters to the input ports.' : 'Connect a data source or filter to the input port.' }}
-              </div>
-              <template v-if="selectedNode.editorComponent">
-                <keep-alive>
-                  <component
-                    :is="selectedNode.editorComponent"
-                    :key="selectedNode.id"
-                    :node-id="selectedNode.id"
-                    :module-definition="availableModules.find(m => m.id === selectedNode.definitionId) || {}"
-                    :node-config="selectedNode.config || {}"
-                    @config-change="onNodeConfigChange"
-                  />
-                </keep-alive>
-              </template>
-              <p v-else class="text-muted small mb-0">No module UI available.</p>
-            </template>
-
-            <template v-else-if="selectedNode.type === 'module'">
-              <div class="alert alert-secondary small mb-0">
-                Compression modules are temporarily hidden from the front end.
-              </div>
-            </template>
-
-            <template v-else-if="selectedNode.type === 'compressor'">
-              <div class="mb-3" v-if="selectedNode.definitionId">
-                <label class="form-label fw-semibold">
-                  Compressor: {{ selectedNode.label }}
-                </label>
-                <p class="text-muted small mb-0">
-                  {{ selectedNode.description }}
-                </p>
-              </div>
-              <template v-if="selectedNode.editorComponent">
-                <keep-alive>
-                  <component
-                    :is="selectedNode.editorComponent"
-                    :key="`compressor-${selectedNode.id}-${selectedNode.selectedModuleIdx ?? 'all'}`"
-                    :node-id="selectedNode.id"
-                    :focused-module-idx="selectedNode.selectedModuleIdx"
-                    :modules="selectedNode.modules"
-                    :config="selectedNode.config"
-                    :explore-state="selectedNode.exploreState"
-                    :status="selectedNode.status"
-                    @config-change="onNodeConfigChange"
-                    @pipeline-modules-updated="handlePipelineModulesUpdated"
-                    @run-compressor="handleRunCompressor"
-                    @generate-configs="handleCombinatorialGeneration"
-                    @explore-state-changed="($event) => handleExploreStateChanged(selectedNode.id, $event)"
-                  />
-                </keep-alive>
-              </template>
-              <p v-else class="text-muted small mb-0">No compressor UI available.</p>
-            </template>
-
-            <template v-else-if="selectedNode.type === 'correction'">
-              <p v-if="selectedNode.description" class="text-muted small mb-3">
-                {{ selectedNode.description }}
-              </p>
-              <template v-if="selectedNode.editorComponent">
-                <keep-alive>
-                  <component
-                    :is="selectedNode.editorComponent"
-                    :key="selectedNode.id"
-                    :nodeId="selectedNode.id"
-                    :config="selectedNode.config"
-                    :input-data="getIncomingData(selectedNode.id)"
-                    @config-change="onNodeConfigChange"
-                    @start="(nodeId) => handleFilterStart(nodeId)"
-                    @success="handleCorrectionSuccess"
-                    @error="($event) => handleFilterError($event.nodeId || selectedNode.id, $event)"
-                    @finish="($event) => handleFilterFinish($event || selectedNode.id)"
-                  />
-                </keep-alive>
-              </template>
-              <p v-else class="text-muted small mb-0">No correction UI available.</p>
-            </template>
-
-            <template v-else>
-              <p class="text-muted small mb-0">No editor available for this node type ({{ selectedNode.type }}).</p>
-            </template>
-          </div>
-          <div class="modal-footer">
-            <button type="button" class="btn btn-secondary" @click="closePropertiesModal">
-              Close
-            </button>
-          </div>
-        </div>
-      </div>
-    </div>
-    <div v-if="showPropertiesModal" class="modal-backdrop fade show"></div>
+    <div v-if="showExploreModal" class="modal-backdrop fade show graph-scoped-backdrop"></div>
 
     <Splitpanes class="default-theme w-100 h-100" :dbl-click-splitter="false" @resized="onSplitResize">
       <!-- Left: Node Palette -->
@@ -2677,6 +2558,7 @@ export default {
                 <div class="d-flex flex-column align-items-start">
                   <span>Compressor Configs</span>
                   <span
+                    v-if="maxCompressorInstances > 0"
                     class="badge mt-1"
                     :class="totalCompressorInstances >= maxCompressorInstances ? 'bg-danger' : 'bg-primary'"
                     :title="`Active compressor instances: ${totalCompressorInstances} / ${maxCompressorInstances} (Server limit)`"
@@ -3010,10 +2892,189 @@ export default {
         </div>
       </Pane>
     </Splitpanes>
+
+    <!-- Node Properties Modal (Centered within Left Pane: Pipeline Components + Workflow Graph) -->
+    <div
+      class="modal fade graph-scoped-modal"
+      :class="{ show: showPropertiesModal, 'd-block': showPropertiesModal }"
+      tabindex="-1"
+      role="dialog"
+      @click.self="closePropertiesModal"
+    >
+      <div class="modal-dialog modal-lg modal-dialog-centered modal-dialog-scrollable" role="document">
+        <div class="modal-content">
+          <div class="modal-header">
+            <h5 class="modal-title">
+              <i v-if="selectedNode" :class="['bi', selectedNode.icon, 'me-2']"></i>
+              {{ selectedNode ? selectedNode.label : 'Node Properties' }}
+            </h5>
+            <button type="button" class="btn-close" @click="closePropertiesModal" aria-label="Close"></button>
+          </div>
+          <div class="modal-body" v-if="selectedNode">
+            <template v-if="selectedNode.type === 'source'">
+              <keep-alive>
+                <InputDataset
+                  @dataset-fetch-start="handleDataSourceFetchStart"
+                  @dataset-fetch-complete="handleDataSourceFetchComplete"
+                  @dataset-fetch-error="handleDataSourceFetchError"
+                />
+              </keep-alive>
+              <div v-if="dataSourceFetchInProgress || dataSourceAutoCloseCountdown !== null" class="alert alert-info mt-3">
+                <div v-if="dataSourceFetchInProgress">
+                  <i class="bi bi-hourglass-split me-2"></i>Fetching the dataset from the backend...
+                </div>
+                <div v-else>
+                  <i class="bi bi-check-circle me-2"></i>Dataset ready. Closing this window in {{ dataSourceAutoCloseCountdown }}s.
+                </div>
+              </div>
+            </template>
+
+            <template v-else-if="selectedNode.type === 'filter'">
+              <p v-if="selectedNode.description" class="text-muted small mb-3">
+                {{ selectedNode.description }}
+              </p>
+              <template v-if="selectedNode.editorComponent">
+                <keep-alive>
+                  <component
+                    :is="selectedNode.editorComponent"
+                    :key="selectedNode.id"
+                    :nodeId="selectedNode.id"
+                    v-bind="selectedNode.props"
+                    @filter-start="() => handleFilterStart(selectedNode.id)"
+                    @filter-success="($event) => handleFilterSuccess($event.nodeId || selectedNode.id, $event)"
+                    @filter-error="($event) => handleFilterError($event.nodeId || selectedNode.id, $event)"
+                    @filter-invalid="($event) => handleFilterInvalid($event.nodeId || selectedNode.id, $event)"
+                    @filter-finish="() => handleFilterFinish(selectedNode.id)"
+                    @dataset-change="() => handleFilterDatasetChange(selectedNode.id)"
+                  />
+                </keep-alive>
+              </template>
+              <p v-else class="text-muted small mb-0">No filter UI available.</p>
+            </template>
+
+            <template v-else-if="selectedNode.type === 'module' && showCompressionModules">
+              <p v-if="selectedNode.description" class="text-muted small mb-3">
+                {{ selectedNode.description }}
+              </p>
+              <div class="alert alert-info small mb-3">
+                <i class="bi bi-info-circle"></i>
+                This module requires {{ selectedNode.inputs.length }} input{{ selectedNode.inputs.length > 1 ? 's' : '' }}.
+                {{ selectedNode.inputs.length > 1 ? 'Connect multiple data sources or filters to the input ports.' : 'Connect a data source or filter to the input port.' }}
+              </div>
+              <template v-if="selectedNode.editorComponent">
+                <keep-alive>
+                  <component
+                    :is="selectedNode.editorComponent"
+                    :key="selectedNode.id"
+                    :node-id="selectedNode.id"
+                    :module-definition="availableModules.find(m => m.id === selectedNode.definitionId) || {}"
+                    :node-config="selectedNode.config || {}"
+                    @config-change="onNodeConfigChange"
+                  />
+                </keep-alive>
+              </template>
+              <p v-else class="text-muted small mb-0">No module UI available.</p>
+            </template>
+
+            <template v-else-if="selectedNode.type === 'module'">
+              <div class="alert alert-secondary small mb-0">
+                Compression modules are temporarily hidden from the front end.
+              </div>
+            </template>
+
+            <template v-else-if="selectedNode.type === 'compressor'">
+              <div class="mb-3" v-if="selectedNode.definitionId">
+                <label class="form-label fw-semibold">
+                  Compressor: {{ selectedNode.label }}
+                </label>
+                <p class="text-muted small mb-0">
+                  {{ selectedNode.description }}
+                </p>
+              </div>
+              <template v-if="selectedNode.editorComponent">
+                <keep-alive>
+                  <component
+                    :is="selectedNode.editorComponent"
+                    :key="`compressor-${selectedNode.id}-${selectedNode.selectedModuleIdx ?? 'all'}`"
+                    :node-id="selectedNode.id"
+                    :focused-module-idx="selectedNode.selectedModuleIdx"
+                    :modules="selectedNode.modules"
+                    :config="selectedNode.config"
+                    :explore-state="selectedNode.exploreState"
+                    :status="selectedNode.status"
+                    @config-change="onNodeConfigChange"
+                    @pipeline-modules-updated="handlePipelineModulesUpdated"
+                    @run-compressor="handleRunCompressor"
+                    @generate-configs="handleCombinatorialGeneration"
+                    @explore-state-changed="($event) => handleExploreStateChanged(selectedNode.id, $event)"
+                  />
+                </keep-alive>
+              </template>
+              <p v-else class="text-muted small mb-0">No compressor UI available.</p>
+            </template>
+
+            <template v-else-if="selectedNode.type === 'correction'">
+              <p v-if="selectedNode.description" class="text-muted small mb-3">
+                {{ selectedNode.description }}
+              </p>
+              <template v-if="selectedNode.editorComponent">
+                <keep-alive>
+                  <component
+                    :is="selectedNode.editorComponent"
+                    :key="selectedNode.id"
+                    :nodeId="selectedNode.id"
+                    :config="selectedNode.config"
+                    :input-data="getIncomingData(selectedNode.id)"
+                    @config-change="onNodeConfigChange"
+                    @start="(nodeId) => handleFilterStart(nodeId)"
+                    @success="handleCorrectionSuccess"
+                    @error="($event) => handleFilterError($event.nodeId || selectedNode.id, $event)"
+                    @finish="($event) => handleFilterFinish($event || selectedNode.id)"
+                  />
+                </keep-alive>
+              </template>
+              <p v-else class="text-muted small mb-0">No correction UI available.</p>
+            </template>
+
+            <template v-else>
+              <p class="text-muted small mb-0">No editor available for this node type ({{ selectedNode.type }}).</p>
+            </template>
+          </div>
+          <div class="modal-footer">
+            <button type="button" class="btn btn-secondary" @click="closePropertiesModal">
+              Close
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div v-if="showPropertiesModal" class="modal-backdrop fade show graph-scoped-backdrop" @click="closePropertiesModal"></div>
   </div>
 </template>
 
 <style scoped>
+
+.graph-scoped-modal {
+  position: absolute !important;
+  top: 0 !important;
+  left: 0 !important;
+  width: 100% !important;
+  height: 100% !important;
+  z-index: 1055 !important;
+}
+
+.graph-scoped-modal > .modal-dialog {
+  max-width: min(var(--bs-modal-width, 800px), calc(100% - 2rem));
+}
+
+.graph-scoped-backdrop {
+  position: absolute !important;
+  top: 0 !important;
+  left: 0 !important;
+  width: 100% !important;
+  height: 100% !important;
+  z-index: 1050 !important;
+}
 
 .canvas :deep(.card-body) {
   min-width: fit-content;

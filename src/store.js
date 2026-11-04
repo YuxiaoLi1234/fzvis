@@ -424,8 +424,8 @@ export default createStore({
       state.bulkGenerationRequests = state.bulkGenerationRequests.filter(r => r.id !== requestId);
     },
     setMaxCompressorInstances(state, limit) {
-      const val = Math.max(1, parseInt(limit, 10) || 10);
-      state.maxCompressorInstances = val;
+      const parsed = parseInt(limit, 10);
+      state.maxCompressorInstances = (isNaN(parsed) || parsed <= 0) ? 0 : parsed;
     },
     setMaxUploadSize(state, payload) {
       if (payload && payload.bytes) {
@@ -515,7 +515,7 @@ export default createStore({
     async checkAuthStatus({ commit }) {
       try {
         const { data } = await axios.get('/api/auth-status');
-        if (data && data.maxCompressorInstances) {
+        if (data && data.maxCompressorInstances !== undefined && data.maxCompressorInstances !== null) {
           commit('setMaxCompressorInstances', data.maxCompressorInstances);
         }
         if (data && data.maxUploadSizeBytes) {
@@ -597,6 +597,7 @@ export default createStore({
       return total;
     },
     canAddCompressorInstance: (state, getters) => (additional = 1) => {
+      if (state.maxCompressorInstances <= 0) return true;
       return (getters.totalCompressorInstances + additional) <= state.maxCompressorInstances;
     },
   },

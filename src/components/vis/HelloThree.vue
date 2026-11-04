@@ -3,7 +3,6 @@ import { ref, onMounted, onBeforeUnmount, computed, watch, nextTick, markRaw } f
 import { useStore } from 'vuex';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls';
-import { TransformControls } from 'three/examples/jsm/controls/TransformControls';
 import vtkColorMaps from '@kitware/vtk.js/Rendering/Core/ColorTransferFunction/ColorMaps';
 import html2canvas from 'html2canvas';
 
@@ -101,8 +100,6 @@ export default {
     // ROI
     const roiEnabled = ref(false);
     const roiApplied = ref(false); // Whether ROI cropping is currently applied to visualization
-    const roiMode = ref('scale'); // 'scale' | 'translate'
-    const isTransformingROI = ref(false);
     const roiXStart = ref(20);
     const roiXEnd = ref(80);
     const roiYStart = ref(20);
@@ -252,8 +249,6 @@ export default {
     });
 
     function updateROIVisual() {
-      if (isTransformingROI.value) return;
-
       const orig = context.value.original;
       const decp = context.value.decompressed;
 
@@ -265,13 +260,29 @@ export default {
         [orig, decp].forEach(ctx => {
           if (ctx && ctx.roiGroup) {
             ctx.roiGroup.visible = false;
-            if (ctx.transformControls) ctx.transformControls.detach();
             if (ctx.roiInteractiveMesh) {
               ctx.roiGroup.remove(ctx.roiInteractiveMesh);
               ctx.roiInteractiveMesh = null;
             }
           }
         });
+        return;
+      }
+
+      const xs = Number(roiXStart.value);
+      const xe = Number(roiXEnd.value);
+      const ys = Number(roiYStart.value);
+      const ye = Number(roiYEnd.value);
+      const zs = Number(roiZStart.value);
+      const ze = Number(roiZEnd.value);
+      if (
+        roiXStart.value === '' || roiXEnd.value === '' ||
+        roiYStart.value === '' || roiYEnd.value === '' ||
+        roiZStart.value === '' || roiZEnd.value === '' ||
+        !Number.isFinite(xs) || !Number.isFinite(xe) ||
+        !Number.isFinite(ys) || !Number.isFinite(ye) ||
+        !Number.isFinite(zs) || !Number.isFinite(ze)
+      ) {
         return;
       }
 
@@ -284,12 +295,12 @@ export default {
       const aspectZ = d / maxD;
 
       // Calculate box position based on ROI percentages
-      const x0 = (Math.min(roiXStart.value, roiXEnd.value) / 100) * aspectX - aspectX / 2;
-      const x1 = (Math.max(roiXStart.value, roiXEnd.value) / 100) * aspectX - aspectX / 2;
-      const y0 = (Math.min(roiYStart.value, roiYEnd.value) / 100) * aspectY - aspectY / 2;
-      const y1 = (Math.max(roiYStart.value, roiYEnd.value) / 100) * aspectY - aspectY / 2;
-      const z0 = (Math.min(roiZStart.value, roiZEnd.value) / 100) * aspectZ - aspectZ / 2;
-      const z1 = (Math.max(roiZStart.value, roiZEnd.value) / 100) * aspectZ - aspectZ / 2;
+      const x0 = (Math.min(xs, xe) / 100) * aspectX - aspectX / 2;
+      const x1 = (Math.max(xs, xe) / 100) * aspectX - aspectX / 2;
+      const y0 = (Math.min(ys, ye) / 100) * aspectY - aspectY / 2;
+      const y1 = (Math.max(ys, ye) / 100) * aspectY - aspectY / 2;
+      const z0 = (Math.min(zs, ze) / 100) * aspectZ - aspectZ / 2;
+      const z1 = (Math.max(zs, ze) / 100) * aspectZ - aspectZ / 2;
 
       const vs = visualScale.value;
       const cx = (x0 + x1) / 2 * vs;
@@ -316,15 +327,6 @@ export default {
           ctx.roiGroup.add(mesh);
           ctx.roiGroup.visible = true;
           ctx.roiInteractiveMesh = mesh;
-          
-          if (ctx.transformControls) {
-            if ((leadContext.value === 'original' && ctx === orig) || (leadContext.value === 'decompressed' && ctx === decp)) {
-              ctx.transformControls.setMode(roiMode.value);
-              ctx.transformControls.attach(mesh);
-            } else {
-              ctx.transformControls.detach();
-            }
-          }
       });
     }
 
@@ -339,11 +341,6 @@ export default {
       if (isMounted.value) {
         refreshFromDatasetMetadata();
       }
-    });
-
-    watch(roiMode, (m) => {
-        if (context.value.original?.transformControls) context.value.original.transformControls.setMode(m);
-        if (context.value.decompressed?.transformControls) context.value.decompressed.transformControls.setMode(m);
     });
 
     function computeROIMetrics() {
@@ -1001,60 +998,6 @@ export default {
       controls.enableDamping = true;
       controls.dampingFactor = 0.1;
 
-      const transformControls = new TransformControls(camera, renderer.domElement);
-      transformControls.addEventListener('dragging-changed', (event) => {
-        controls.enabled = !event.value;
-      });
-
-      transformControls.addEventListener('change', () => {
-        if (!roiEnabled.value || !dimensions.value) return;
-        const attachedMesh = transformControls.object;
-        if (!attachedMesh) return;
-        
-        isTransformingROI.value = true;
-        
-        const w = dimensions.value[0];
-        const h = dimensions.value[1];
-        const d = dimensions.value[2] || 1;
-        const maxD = Math.max(w, h, d);
-        const aspectX = w / maxD;
-        const aspectY = h / maxD;
-        const aspectZ = d / maxD;
-
-        const vs = visualScale.value;
-        const posX = attachedMesh.position.x / vs;
-        const posY = attachedMesh.position.y / vs;
-        const posZ = attachedMesh.position.z / vs;
-        const scaleX = attachedMesh.scale.x / vs;
-        const scaleY = attachedMesh.scale.y / vs;
-        const scaleZ = attachedMesh.scale.z / vs;
-
-        const x0 = posX - scaleX / 2;
-        const x1 = posX + scaleX / 2;
-        const y0 = posY - scaleY / 2;
-        const y1 = posY + scaleY / 2;
-        const z0 = posZ - scaleZ / 2;
-        const z1 = posZ + scaleZ / 2;
-        
-        let nx0 = ((x0 + aspectX / 2) / aspectX) * 100;
-        let nx1 = ((x1 + aspectX / 2) / aspectX) * 100;
-        let ny0 = ((y0 + aspectY / 2) / aspectY) * 100;
-        let ny1 = ((y1 + aspectY / 2) / aspectY) * 100;
-        let nz0 = ((z0 + aspectZ / 2) / aspectZ) * 100;
-        let nz1 = ((z1 + aspectZ / 2) / aspectZ) * 100;
-        
-        roiXStart.value = Math.round(Math.max(0, Math.min(100, Math.min(nx0, nx1))));
-        roiXEnd.value = Math.round(Math.max(0, Math.min(100, Math.max(nx0, nx1))));
-        roiYStart.value = Math.round(Math.max(0, Math.min(100, Math.min(ny0, ny1))));
-        roiYEnd.value = Math.round(Math.max(0, Math.min(100, Math.max(ny0, ny1))));
-        roiZStart.value = Math.round(Math.max(0, Math.min(100, Math.min(nz0, nz1))));
-        roiZEnd.value = Math.round(Math.max(0, Math.min(100, Math.max(nz0, nz1))));
-        
-        setTimeout(() => { isTransformingROI.value = false; }, 10);
-      });
-
-      scene.add(transformControls);
-
       // Track lead context for two-way sync
       const interactionHandler = () => {
         leadContext.value = container === containerOriginal.value ? 'original' : 'decompressed';
@@ -1078,7 +1021,6 @@ export default {
         renderer: markRaw(renderer),
         camera: markRaw(camera),
         controls: markRaw(controls),
-        transformControls: markRaw(transformControls),
         resizeObserver,
         volumeMesh: null,
         sliceMesh: null,
@@ -1089,6 +1031,8 @@ export default {
         transferTextureOpaque: markRaw(createTransferFunctionTexture(colormap.value, { opaque: true })),
         cachedData: null,
         cachedRange: [0, 1],
+        cameraInitialized: false,
+        is2DMode: undefined
       });
       scene.add(ctx.cpGroup);
       scene.add(ctx.roiGroup);
@@ -1099,6 +1043,7 @@ export default {
     function fitCameraToView(ctx) {
       if (!ctx || !ctx.camera || !ctx.renderer) return;
       const container = ctx.renderer.domElement.parentElement;
+      if (!container) return;
       const width = container.clientWidth;
       const height = container.clientHeight;
       if (width === 0 || height === 0) return;
@@ -1118,9 +1063,11 @@ export default {
       const distance = (size / 2) / Math.tan(fovRad / 2) / Math.min(1, ctx.camera.aspect);
       
       ctx.camera.position.set(0, 0, distance);
+      ctx.camera.up.set(0, 1, 0);
       ctx.camera.lookAt(0, 0, 0);
       ctx.controls.target.set(0, 0, 0);
       ctx.controls.update();
+      ctx.controls.saveState();
     }
 
     function toFloat32Data(content, precisionHint, endianness = 'little') {
@@ -1378,23 +1325,30 @@ export default {
         ctx.sliceMesh.scale.set(visualScale.value, visualScale.value, visualScale.value);
         scene.add(ctx.sliceMesh);
         
-        // Reset camera for 2D
+        // 2D Controls
         ctx.controls.enableRotate = false;
         ctx.controls.mouseButtons = {
           LEFT: THREE.MOUSE.PAN,
           MIDDLE: THREE.MOUSE.DOLLY,
           RIGHT: THREE.MOUSE.ROTATE
         };
-        // Reset camera view to look straight down Z-axis
-        ctx.camera.position.set(0, 0, 1.6);
-        ctx.camera.up.set(0, 1, 0);
-        ctx.camera.lookAt(0, 0, 0);
-        ctx.controls.reset();
         
-        // Ensure the 2D plane fits the view
-        nextTick(() => {
-          fitCameraToView(ctx);
-        });
+        const modeChanged = ctx.is2DMode !== undefined && ctx.is2DMode !== true;
+        ctx.is2DMode = true;
+
+        // Preserve existing camera view unless uninitialized, explicitly reset, or 2D/3D mode changed
+        if (!ctx.cameraInitialized || options.resetCamera || modeChanged) {
+          ctx.camera.position.set(0, 0, 1.6);
+          ctx.camera.up.set(0, 1, 0);
+          ctx.camera.lookAt(0, 0, 0);
+          ctx.controls.target.set(0, 0, 0);
+          ctx.controls.reset();
+          ctx.cameraInitialized = true;
+          
+          nextTick(() => {
+            fitCameraToView(ctx);
+          });
+        }
       } else {
         const texture = new THREE.Data3DTexture(data, normalizedDims[0], normalizedDims[1], normalizedDims[2]);
         texture.format = THREE.RedFormat;
@@ -1436,6 +1390,17 @@ export default {
           MIDDLE: THREE.MOUSE.DOLLY,
           RIGHT: THREE.MOUSE.PAN
         };
+
+        const modeChanged = ctx.is2DMode !== undefined && ctx.is2DMode !== false;
+        ctx.is2DMode = false;
+
+        // Preserve existing camera view unless uninitialized, explicitly reset, or 2D/3D mode changed
+        if (!ctx.cameraInitialized || options.resetCamera || modeChanged) {
+          ctx.cameraInitialized = true;
+          nextTick(() => {
+            fitCameraToView(ctx);
+          });
+        }
       }
       
       renderCriticalPoints(ctx);
@@ -2095,7 +2060,17 @@ export default {
 
     watch(colormap, updateColormap);
     watch([sliceId, rescaleMethod, customMin, customMax], updateVisuals);
-    watch([dimensions, precision, endianness, isTimeVarying], refreshFromDatasetMetadata, { deep: true });
+    watch([dimensions, precision, endianness, isTimeVarying], () => {
+      if (context.value.original) {
+        context.value.original.cameraInitialized = false;
+        context.value.original.is2DMode = undefined;
+      }
+      if (context.value.decompressed) {
+        context.value.decompressed.cameraInitialized = false;
+        context.value.decompressed.is2DMode = undefined;
+      }
+      refreshFromDatasetMetadata();
+    }, { deep: true });
     watch(segmentation, updateSegmentationThreePanels, { deep: true });
     watch(segmentationMode, (mode) => {
       if (mode !== 'none' && !hasAnySegmentation.value) {
@@ -2110,10 +2085,25 @@ export default {
       if (context.value.decompressed) renderCriticalPoints(context.value.decompressed);
     }, { deep: true });
 
-    watch([criticalPointsDisplay, minimaColor, maximaColor, saddleColor, criticalPointsScale, showBoundaryLines], () => {
+    watch([criticalPointsDisplay, minimaColor, maximaColor, saddleColor, criticalPointsScale], () => {
       if (context.value.original) renderCriticalPoints(context.value.original);
       if (context.value.decompressed) renderCriticalPoints(context.value.decompressed);
-      updateVisuals();
+    });
+
+    watch(showBoundaryLines, (show) => {
+      [context.value.original, context.value.decompressed].forEach(ctx => {
+        if (!ctx) return;
+        const showVal = segmentationMode.value !== 'none' && show;
+        if (ctx.sliceMesh?.material?.uniforms?.showBoundaries) {
+          ctx.sliceMesh.material.uniforms.showBoundaries.value = showVal;
+        }
+        if (ctx.volumeMesh?.material?.uniforms?.showBoundaries) {
+          ctx.volumeMesh.material.uniforms.showBoundaries.value = showVal;
+        }
+      });
+      if (segmentationMode.value !== 'none') {
+        updateSegmentationThreePanels();
+      }
     });
 
     watch(layoutMode, (newMode) => {
@@ -2191,6 +2181,18 @@ export default {
       setTimeout(() => URL.revokeObjectURL(url), 5000);
     }
 
+    function resetCameraView() {
+      if (context.value.original) {
+        fitCameraToView(context.value.original);
+      }
+      if (context.value.decompressed) {
+        fitCameraToView(context.value.decompressed);
+      }
+      if (sameCamera.value) {
+        syncCameras();
+      }
+    }
+
     function resetROI() {
       roiXStart.value = 20;
       roiXEnd.value = 80;
@@ -2259,7 +2261,6 @@ export default {
       scalarBarLeft,
       roiEnabled,
       roiApplied,
-      roiMode,
       roiXStart,
       roiXEnd,
       roiYStart,
@@ -2273,6 +2274,7 @@ export default {
       onROIMouseDown,
       computeROIMetrics,
       resetROI,
+      resetCameraView,
       startDrag,
       fileData,
       segmentationLabel,
@@ -2293,8 +2295,8 @@ export default {
       <!-- Top controls row -->
       <div class="d-flex flex-wrap align-items-center justify-content-center gap-3 w-100 px-3">
         <!-- Colormap -->
-        <div class="d-flex align-items-center me-2">
-          <label class="me-2 mb-0 fw-semibold text-secondary small">
+        <div class="d-flex align-items-center flex-shrink-0">
+          <label class="me-2 mb-0 fw-semibold text-secondary small text-nowrap d-flex align-items-center">
             <i class="bi bi-palette me-1"></i>Colormap:
           </label>
           <select
@@ -2309,8 +2311,8 @@ export default {
         </div>
 
         <!-- Background Color -->
-        <div class="d-flex align-items-center me-2">
-          <label class="me-2 mb-0 fw-semibold text-secondary small">
+        <div class="d-flex align-items-center flex-shrink-0">
+          <label class="me-2 mb-0 fw-semibold text-secondary small text-nowrap d-flex align-items-center">
             <i class="bi bi-image me-1"></i>Background:
           </label>
           <select
@@ -2327,7 +2329,7 @@ export default {
         </div>
 
         <button
-          :class="['btn btn-sm d-flex align-items-center', sameCamera ? 'btn-primary' : 'btn-outline-primary']"
+          :class="['btn btn-sm d-flex align-items-center text-nowrap', sameCamera ? 'btn-primary' : 'btn-outline-primary']"
           @click="sameCamera = !sameCamera"
           title="Synchronize camera views"
         >
@@ -2335,7 +2337,15 @@ export default {
         </button>
 
         <button
-          class="btn btn-sm btn-outline-secondary d-flex align-items-center"
+          class="btn btn-sm btn-outline-secondary d-flex align-items-center text-nowrap"
+          @click="resetCameraView"
+          title="Reset camera view to default orientation and fit"
+        >
+          <i class="bi bi-arrow-counterclockwise me-1"></i>Reset Camera
+        </button>
+
+        <button
+          class="btn btn-sm btn-outline-secondary d-flex align-items-center text-nowrap"
           @click="refreshFromDatasetMetadata"
           title="Refresh visualization"
         >
@@ -2343,7 +2353,7 @@ export default {
         </button>
 
         <!-- Layout Mode Toggle -->
-        <div class="btn-group btn-group-sm">
+        <div class="btn-group btn-group-sm flex-shrink-0">
           <button 
             class="btn" 
             :class="layoutMode === 'horizontal' ? 'btn-primary' : 'btn-outline-primary'"
@@ -2370,7 +2380,7 @@ export default {
         v-if="hasDecompressedData"
         class="d-flex align-items-center justify-content-center gap-2 w-100 mt-2 border-top pt-2 px-3"
       >
-        <label class="me-2 mb-0 fw-semibold text-secondary small">
+        <label class="me-2 mb-0 fw-semibold text-secondary small text-nowrap d-flex align-items-center">
           <i class="bi bi-box me-1"></i>Decompressed View:
         </label>
         <select
@@ -2394,7 +2404,7 @@ export default {
 
       <!-- ROI Selection -->
       <div v-if="hasDecompressedData" class="d-flex flex-wrap align-items-center justify-content-center gap-2 w-100 mt-2 border-top pt-2 px-3">
-        <label class="me-2 mb-0 fw-semibold text-secondary small">
+        <label class="me-2 mb-0 fw-semibold text-secondary small text-nowrap d-flex align-items-center">
           <i class="bi bi-bounding-box me-1"></i>ROI:
         </label>
         <!-- Enable toggle -->
@@ -2404,20 +2414,6 @@ export default {
         </div>
 
         <template v-if="roiEnabled">
-          <!-- TransformControls mode: Resize / Move -->
-          <div class="btn-group btn-group-sm" title="You can interactively resize or move the ROI box in the 3D view">
-            <button
-              :class="['btn', roiMode === 'scale' ? 'btn-secondary' : 'btn-outline-secondary']"
-              @click="roiMode = 'scale'"
-              title="Resize ROI"
-            ><i class="bi bi-arrows-angle-expand"></i></button>
-            <button
-              :class="['btn', roiMode === 'translate' ? 'btn-secondary' : 'btn-outline-secondary']"
-              @click="roiMode = 'translate'"
-              title="Move ROI"
-            ><i class="bi bi-arrows-move"></i></button>
-          </div>
-
           <!-- Reset ROI button -->
           <button
             class="btn btn-sm btn-outline-secondary"
@@ -2463,8 +2459,8 @@ export default {
       <!-- Critical Points Settings Row -->
       <div v-if="hasAnyCriticalPoints" class="d-flex flex-wrap align-items-center justify-content-center gap-3 w-100 mt-1 border-top pt-2 px-3">
         <!-- Mode -->
-        <div class="d-flex align-items-center">
-          <label class="me-2 mb-0 fw-semibold text-secondary small">
+        <div class="d-flex align-items-center flex-shrink-0">
+          <label class="me-2 mb-0 fw-semibold text-secondary small text-nowrap d-flex align-items-center">
             <i class="bi bi-bullseye me-1"></i>Critical Points:
           </label>
           <select
@@ -2523,7 +2519,7 @@ export default {
 
       <!-- Segmentation Selection -->
       <div class="d-flex flex-wrap align-items-center justify-content-center gap-2 w-100 mt-2 border-top pt-2 px-3">
-        <label class="me-2 mb-0 fw-semibold text-secondary small">
+        <label class="me-2 mb-0 fw-semibold text-secondary small text-nowrap d-flex align-items-center">
           <i class="bi bi-grid-1x2 me-1"></i>Segmentation:
         </label>
         <select
@@ -2538,10 +2534,10 @@ export default {
         </select>
         <div v-if="segmentationMode !== 'none'" class="form-check form-switch ms-2 mb-0 d-flex align-items-center">
           <input class="form-check-input" type="checkbox" id="showBoundariesToggle" v-model="showBoundaryLines">
-          <label class="form-check-label small text-secondary ms-1 fw-semibold" for="showBoundariesToggle">Boundaries</label>
+          <label class="form-check-label small text-secondary ms-1 fw-semibold text-nowrap" for="showBoundariesToggle">Boundaries</label>
         </div>
         <div v-if="segmentationMode !== 'none'" class="d-flex align-items-center ms-2 mb-0">
-          <label class="me-1 mb-0 fw-semibold text-secondary small">Highlights:</label>
+          <label class="me-1 mb-0 fw-semibold text-secondary small text-nowrap">Highlights:</label>
           <select v-model="highlightRegionMode" class="form-select form-select-sm" style="width: 140px; font-size: 0.75rem;">
             <option value="none">None</option>
             <option value="top5">Top 5 Regions</option>

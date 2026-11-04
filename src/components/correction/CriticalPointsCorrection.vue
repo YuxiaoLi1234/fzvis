@@ -458,9 +458,13 @@ export default {
       this.statusMessage = `Completed ${this.batchStatus.results.length}/${ids.length} corrections.`;
 
       if (this.batchStatus.results.length > 0) {
+        const resultIds = Object.keys(this.variantResults)
+          .filter(k => this.variantResults[k] === 'done')
+          .map(k => `${k}-corrected`);
         this.$emit('success', {
           nodeId: this.nodeId,
-          resultCount: this.batchStatus.results.length
+          resultCount: this.batchStatus.results.length,
+          resultIds
         });
       }
     },
@@ -500,7 +504,14 @@ export default {
           ...(result.metrics || {})
         };
 
-        return { ...result, config, compressor_id: dataset.compressor_id, compressor_config: dataset.compressor_config };
+        return {
+          ...result,
+          config,
+          compressor_id: dataset.compressor_id,
+          compressor_config: dataset.compressor_config,
+          correction_node_id: nodeId || this.nodeId,
+          corrected_from: variantId || nodeId || this.nodeId
+        };
       } catch (error) {
         this.status = 'error';
         this.statusMessage = error.message || 'Correction failed';
@@ -526,6 +537,17 @@ export default {
       this.batchStatus.running = false;
       this.status = 'success';
       this.statusMessage = `Batch complete: ${this.batchStatus.results.length}/${vars.length} succeeded.`;
+
+      if (this.batchStatus.results.length > 0) {
+        const resultIds = Object.keys(this.variantResults)
+          .filter(k => this.variantResults[k] === 'done')
+          .map(k => `${k}-corrected`);
+        this.$emit('success', {
+          nodeId: this.nodeId,
+          resultCount: this.batchStatus.results.length,
+          resultIds
+        });
+      }
     }
   },
   watch: {

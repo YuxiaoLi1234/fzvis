@@ -311,6 +311,15 @@ export class CorrectionNode extends BaseNode {
           }
         });
       }
+      const compData = context.store.state?.comparisonData || {};
+      Object.entries(compData).forEach(([key, entry]) => {
+        if (
+          entry?.correction_node_id === this.id ||
+          (this.editorComponent === 'CriticalPointsPreservation' && key.endsWith('-corrected') && !entry?.correction_node_id)
+        ) {
+          context.store.commit('removeComparisonData', key);
+        }
+      });
     }
   }
 }
