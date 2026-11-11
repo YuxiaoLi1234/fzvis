@@ -15,7 +15,8 @@ SPACK_REPO_DIR="${SPACK_REPO_DIR:-"$HOME/.fzvis/spack_packages"}"
 FZVIS_ENV_DIR="${FZVIS_ENV_DIR:-""}"
 FZVIS_HOST="${FZVIS_HOST:-0.0.0.0}"
 FZVIS_PORT="${FZVIS_PORT:-10080}"
-SPACK_LIBPRESSIO_SPEC="${SPACK_LIBPRESSIO_SPEC:-libpressio+python+sz3+zfp+fpzip+mgard ^openblas~fortran}"
+SPACK_LIBPRESSIO_SPEC="${SPACK_LIBPRESSIO_SPEC:-libpressio@:1.0.3+python+sz3+zfp+fpzip+mgard ^sz3@:3.2 ^py-numpy@1.26.4 ^openblas~fortran}"
+SPACK_PYTHON_SPEC="${SPACK_PYTHON_SPEC:-python@3.11}"
 SPACK_NODE_SPEC="${SPACK_NODE_SPEC:-node-js@20:}"
 SPACK_NPM_SPEC="${SPACK_NPM_SPEC:-npm}"
 
@@ -104,25 +105,37 @@ clone_or_update() {
   local repo_url="$1"
   local target_dir="$2"
   local branch="${3:-}"
-  if [ -d "$target_dir/.git" ]; then
+  if [ -d "$target_dir/.git" ] && git -C "$target_dir" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
     echo "Updating repository in $target_dir..."
-    git -C "$target_dir" fetch --depth 1 origin
-    git -C "$target_dir" reset --hard FETCH_HEAD
+    local update_ok=0
     if [ -n "$branch" ]; then
-      git -C "$target_dir" fetch --depth 1 origin "$branch"
-      git -C "$target_dir" checkout "$branch" 2>/dev/null || git -C "$target_dir" checkout -B "$branch" FETCH_HEAD
-      git -C "$target_dir" reset --hard FETCH_HEAD
+      if git -C "$target_dir" fetch --depth 1 origin "$branch" &&
+         { git -C "$target_dir" checkout "$branch" 2>/dev/null || git -C "$target_dir" checkout -B "$branch" FETCH_HEAD; } &&
+         git -C "$target_dir" reset --hard FETCH_HEAD; then
+        update_ok=1
+      fi
     else
-      git -C "$target_dir" fetch --depth 1 origin
-      git -C "$target_dir" reset --hard FETCH_HEAD
+      if git -C "$target_dir" fetch --depth 1 origin &&
+         git -C "$target_dir" reset --hard FETCH_HEAD; then
+        update_ok=1
+      fi
     fi
+    if [ "$update_ok" = "1" ]; then
+      return 0
+    fi
+    echo "[WARNING] Failed to update existing git repository at $target_dir. Re-cloning fresh..."
+    rm -rf "$target_dir"
+  elif [ -e "$target_dir" ]; then
+    echo "[INFO] Removing existing non-git or incomplete directory at $target_dir..."
+    rm -rf "$target_dir"
+  fi
+
+  mkdir -p "$(dirname "$target_dir")"
+  echo "Cloning $repo_url to $target_dir..."
+  if [ -n "$branch" ]; then
+    git clone --depth 1 --branch "$branch" "$repo_url" "$target_dir"
   else
-    echo "Cloning $repo_url to $target_dir..."
-    if [ -n "$branch" ]; then
-      git clone --depth 1 --branch "$branch" "$repo_url" "$target_dir"
-    else
-      git clone --depth 1 "$repo_url" "$target_dir"
-    fi
+    git clone --depth 1 "$repo_url" "$target_dir"
   fi
 }
 
@@ -165,6 +178,9 @@ else
   echo "Error: Spack environment setup script not found at $SPACK_ROOT/share/spack/setup-env.sh" >&2
   exit 1
 fi
+
+# Refresh Spack compiler detection so C, C++, and Fortran compilers are registered
+spack compiler find >/dev/null 2>&1 || true
 
 echo
 echo "Checking Libpressio Spack package repository..."
@@ -295,11 +311,22 @@ if spack find libpressio >/dev/null 2>&1; then
   LIBPRESSIO_FOUND=1
 fi
 
+PYTHON_COMPAT_OK=1
+ACTIVE_PY_VER="$(python -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")' 2>/dev/null || echo "")"
+if ! python -c 'import sys; sys.exit(0 if (3, 10) <= sys.version_info[:2] <= (3, 12) else 1)' 2>/dev/null; then
+  PYTHON_COMPAT_OK=0
+fi
+
 SKIP_SPACK_PACKAGES=0
-if [ "$LIBPRESSIO_FOUND" = "1" ]; then
+if [ "$LIBPRESSIO_FOUND" = "1" ] && [ "$PYTHON_COMPAT_OK" = "1" ]; then
   INSTALLED_SPEC="$(spack find libpressio 2>/dev/null | grep -E '^libpressio' | head -n 1 | tr -s ' ' || echo "libpressio")"
-  echo "[INFO] libpressio is ALREADY INSTALLED in this environment: $INSTALLED_SPEC"
+  echo "[INFO] libpressio is ALREADY INSTALLED in this environment: $INSTALLED_SPEC (Python $ACTIVE_PY_VER)"
   if prompt_yes_no "Skip adding and installing Spack dependencies (libpressio, etc.)?" "Y"; then
+    SKIP_SPACK_PACKAGES=1
+  fi
+elif [ "$LIBPRESSIO_FOUND" = "1" ] && [ "$PYTHON_COMPAT_OK" = "0" ]; then
+  echo "[WARNING] Existing Spack environment uses Python ${ACTIVE_PY_VER:-unknown}, which is incompatible with numpy==1.26.4 (requires Python 3.10-3.12)."
+  if ! prompt_yes_no "Re-concretize and install Spack dependencies with $SPACK_PYTHON_SPEC?" "Y"; then
     SKIP_SPACK_PACKAGES=1
   fi
 else
@@ -311,7 +338,11 @@ fi
 
 if [ "$SKIP_SPACK_PACKAGES" != "1" ]; then
   echo "Adding dependencies to Spack environment..."
-  spack add py-pip python@3.10: $SPACK_LIBPRESSIO_SPEC
+  # Remove any previously added python/libpressio specs before adding the pinned specs
+  spack remove python >/dev/null 2>&1 || true
+  spack remove libpressio >/dev/null 2>&1 || true
+  spack compiler find >/dev/null 2>&1 || true
+  spack add py-pip "$SPACK_PYTHON_SPEC" $SPACK_LIBPRESSIO_SPEC
   if [ "$FZVIS_SKIP_NODE" != "1" ] && ! command -v node >/dev/null 2>&1; then
     spack add "$SPACK_NODE_SPEC"
   fi
@@ -319,7 +350,12 @@ if [ "$SKIP_SPACK_PACKAGES" != "1" ]; then
     spack add "$SPACK_NPM_SPEC"
   fi
   echo "Installing Spack environment dependencies..."
+  spack concretize -f
   spack install
+  # Re-activate and refresh shell command cache so the updated python/node/npm are in PATH
+  spack env deactivate 2>/dev/null || true
+  spack env activate -d "$FZVIS_ENV_DIR"
+  hash -r 2>/dev/null || true
 else
   echo "[INFO] Skipping Spack package installation."
 fi
@@ -332,9 +368,8 @@ echo "============================================================"
 echo " 4. Python Requirements (requirements.txt)"
 echo "============================================================"
 
-PYTHON_REQ_OK=0
-MISSING_PKG=""
-if ! MISSING_PKG="$(python -c '
+PYTHON_REQ_CHECK='
+import sys
 reqs = ["flask", "flask_cors", "netCDF4", "numpy", "openai", "matplotlib", "pywt", "jwt", "dotenv", "cachetools", "scipy"]
 for pkg in reqs:
     try:
@@ -342,7 +377,16 @@ for pkg in reqs:
     except Exception as e:
         print(f"{pkg} ({e})")
         sys.exit(1)
-' 2>&1)"; then
+import numpy as np
+major = int(np.__version__.split(".")[0])
+if major >= 2:
+    print(f"numpy ({np.__version__} >= 2.0, expected 1.26.4)")
+    sys.exit(1)
+'
+
+PYTHON_REQ_OK=0
+MISSING_PKG=""
+if ! MISSING_PKG="$(python -c "$PYTHON_REQ_CHECK" 2>&1)"; then
   PYTHON_REQ_OK=0
 else
   PYTHON_REQ_OK=1
@@ -368,7 +412,21 @@ if [ "$SKIP_PIP" != "1" ]; then
   echo "Installing Python requirements into Spack environment..."
   python -m ensurepip --upgrade >/dev/null 2>&1 || true
   python -m pip install --upgrade pip || true
-  python -m pip install -r "$ROOT_DIR/requirements.txt" || true
+  # Constrain cftime < 1.6.5 and numpy==1.26.4 so netCDF4/cftime wheels remain ABI-compatible with NumPy 1.x
+  PIP_CONSTRAINT_FILE="$(mktemp)"
+  cat > "$PIP_CONSTRAINT_FILE" <<'CONSTRAINTS'
+numpy==1.26.4
+cftime<1.6.5
+CONSTRAINTS
+  PIP_CONSTRAINT="$PIP_CONSTRAINT_FILE" python -m pip install -c "$PIP_CONSTRAINT_FILE" -r "$ROOT_DIR/requirements.txt"
+  rm -f "$PIP_CONSTRAINT_FILE"
+
+  # Re-verify imports after pip installation
+  if ! VERIFY_ERR="$(python -c "$PYTHON_REQ_CHECK" 2>&1)"; then
+    echo "[ERROR] Python requirement verification failed after pip install:" >&2
+    echo "        $VERIFY_ERR" >&2
+    exit 1
+  fi
 else
   echo "[INFO] Skipping Python pip installation."
 fi
@@ -393,6 +451,40 @@ elif [ -f "$ROOT_DIR/dist/index.html" ]; then
 fi
 
 if [ "$SKIP_FRONTEND" != "1" ]; then
+  # Ensure node and npm are available; if missing, install prebuilt Node.js LTS into $FZVIS_ENV_DIR/local (no root required)
+  if ! command -v npm >/dev/null 2>&1 || ! command -v node >/dev/null 2>&1; then
+    echo "[INFO] node and/or npm not found in PATH."
+    if prompt_yes_no "Download and install prebuilt Node.js LTS into $FZVIS_ENV_DIR/local?" "Y"; then
+      NODE_VERSION="${NODE_VERSION:-"v20.18.0"}"
+      ARCH="$(uname -m)"
+      case "$ARCH" in
+        x86_64)  NODE_ARCH="x64" ;;
+        aarch64) NODE_ARCH="arm64" ;;
+        armv7l)  NODE_ARCH="armv7l" ;;
+        *)       NODE_ARCH="x64" ;;
+      esac
+      NODE_TAR="node-${NODE_VERSION}-linux-${NODE_ARCH}.tar.xz"
+      NODE_URL="https://nodejs.org/dist/${NODE_VERSION}/${NODE_TAR}"
+      echo "[INFO] Downloading prebuilt Node.js ($NODE_VERSION) from $NODE_URL..."
+      mkdir -p "$FZVIS_ENV_DIR/local"
+      mkdir -p "$ROOT_DIR/external"
+      if [ ! -f "$ROOT_DIR/external/$NODE_TAR" ]; then
+        if command -v curl >/dev/null 2>&1; then
+          curl -fsSL "$NODE_URL" -o "$ROOT_DIR/external/$NODE_TAR"
+        elif command -v wget >/dev/null 2>&1; then
+          wget -q "$NODE_URL" -O "$ROOT_DIR/external/$NODE_TAR"
+        fi
+      fi
+      if [ -f "$ROOT_DIR/external/$NODE_TAR" ]; then
+        tar -xJf "$ROOT_DIR/external/$NODE_TAR" -C "$FZVIS_ENV_DIR/local" --strip-components=1
+        export PATH="$FZVIS_ENV_DIR/local/bin:$PATH"
+        echo "[INFO] Successfully installed Node.js $(node -v 2>/dev/null || true) and npm $(npm -v 2>/dev/null || true) into $FZVIS_ENV_DIR/local"
+      else
+        echo "[WARNING] Failed to download prebuilt Node.js."
+      fi
+    fi
+  fi
+
   need_cmd npm
   if [ -d "$ROOT_DIR/node_modules" ]; then
     echo "[INFO] node_modules directory already exists."
@@ -481,6 +573,7 @@ if [ "$BUILD_MSZ" = "1" ]; then
   PYTHON_PREFIX="$($PYTHON_BIN -c 'import sys; print(sys.prefix)' 2>/dev/null || true)"
   (
     cd "$OPT_DEPS_DIR/MSz"
+    rm -rf build
     mkdir -p build && cd build
     cmake \
       -DPython3_EXECUTABLE="$PYTHON_BIN" \
@@ -641,7 +734,9 @@ if [ "$BUILD_FFCZ" = "1" ]; then
   clone_or_update "https://github.com/guoxiliu/FFCz.git" "$OPT_DEPS_DIR/FFCz"
   (
     cd "$OPT_DEPS_DIR/FFCz/CPU"
+    rm -rf build
     mkdir -p build && cd build
+    export PKG_CONFIG_PATH="$FZVIS_ENV_DIR/local/lib/pkgconfig:${PKG_CONFIG_PATH:-}"
     cmake .. \
       -DCMAKE_BUILD_TYPE=Release \
       -DCMAKE_PREFIX_PATH="$FZVIS_ENV_DIR/local" \

@@ -119,5 +119,5 @@ __pypackages__/
 # mkdocs documentation
 /site
 
-# External dependencies
 external/
+fzvis-env/

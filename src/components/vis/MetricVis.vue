@@ -169,11 +169,13 @@ export default {
           if (category === 'time' && !['compress', 'decompress'].includes(metricName)) {
             return;
           }
+          const unit = this.getMetricUnit(key);
           rows.push({
             sourceId,
             compressorId: data.compressor_id || '-',
             key,
             label: this.formatMetricKey(key),
+            unit,
             category,
             metricName,
             value,
@@ -199,7 +201,8 @@ export default {
         return (
           row.sourceId.toLowerCase().includes(text) ||
           row.compressorId.toLowerCase().includes(text) ||
-          row.label.toLowerCase().includes(text)
+          row.label.toLowerCase().includes(text) ||
+          (row.unit && row.unit.toLowerCase().includes(text))
         );
       });
     },
@@ -216,8 +219,9 @@ export default {
       this.compressionMetricRows.forEach(row => {
         if (row.category === 'other') return;
         if (!groups[row.category]) groups[row.category] = new Map();
-        if (!groups[row.category].has(row.label)) {
-          groups[row.category].set(row.label, row.key);
+        const optionLabel = row.unit ? `${row.label} (${row.unit})` : row.label;
+        if (!groups[row.category].has(optionLabel)) {
+          groups[row.category].set(optionLabel, row.key);
         }
       });
       const result = {};
@@ -1734,6 +1738,37 @@ export default {
               return `<strong>${formattedKey}:</strong> ${value}`;
       }).join("<br>"); // add linebreak
     },
+    getMetricUnit(key) {
+      if (!key) return '';
+      const lower = String(key).toLowerCase();
+      const parts = lower.split(':');
+      const category = parts.length > 1 ? parts[0] : '';
+      const subMetric = parts.length > 1 ? parts.slice(1).join(':') : lower;
+
+      if (category === 'time') return 'ms';
+      if (
+        subMetric === 'compression_rate' ||
+        subMetric === 'compression_rate_many' ||
+        subMetric === 'decompression_rate' ||
+        subMetric === 'decompression_rate_many'
+      ) {
+        return 'kB/s';
+      }
+      if (subMetric === 'bit_rate' || subMetric === 'bitrate') {
+        return 'bpv';
+      }
+      if (
+        subMetric.endsWith('_size') ||
+        subMetric.endsWith('_bytes') ||
+        subMetric === 'additional_storage'
+      ) {
+        return 'B';
+      }
+      if (subMetric === 'psnr' || subMetric === 'ssnr') {
+        return 'dB';
+      }
+      return '';
+    },
     formatMetricKey(key) {
       if (!key) return '';
       if (key === 'error_bound' || key === 'FFCz:frequency_error_bound') return 'Error Bound';
@@ -2192,10 +2227,13 @@ export default {
             if (!categories[category]) {
               categories[category] = [];
             }
+            const unit = this.getMetricUnit(key);
+            const metricLabel = unit ? `${subMetric} (${unit})` : subMetric;
             categories[category].push({
               compressor: name,
               compressor_id: data.compressor_id,
-              metric: subMetric,
+              metric: metricLabel,
+              unit,
               value: isNaN(value) || value === "Infinity" || value === null ? null : parseFloat(value),
               rawValue: value,
               compressor_config: data.compressor_config,
@@ -2237,6 +2275,7 @@ export default {
             const item = data.find(d => d.metric === metric && d.compressor === compressor);
             return item ? {
               rawValue: item.rawValue,
+              formattedValue: item.unit ? `${item.rawValue} ${item.unit}` : `${item.rawValue}`,
               config: this.formatConfig(item.compressor_config)
             } : null;
           });
@@ -2249,7 +2288,7 @@ export default {
             type: 'bar',
             hovertemplate: '<b>%{fullData.name}</b><br>' +
                           'Metric: %{x}<br>' +
-                          'Value: %{customdata.rawValue}<br>' +
+                          'Value: %{customdata.formattedValue}<br>' +
                           '<extra></extra>',
             marker: {
               line: { width: 0.5, color: '#fff' }
@@ -2578,6 +2617,7 @@ export default {
                   <th>Config</th>
                   <th>Compressor</th>
                   <th>Metric</th>
+                  <th>Unit</th>
                   <th class="text-end">Value</th>
                 </tr>
               </thead>
@@ -2586,6 +2626,7 @@ export default {
                   <td>{{ row.sourceId }}</td>
                   <td>{{ row.compressorId }}</td>
                   <td>{{ row.label }}</td>
+                  <td>{{ row.unit || '-' }}</td>
                   <td class="text-end">{{ formatNumber(row.value) }}</td>
                 </tr>
               </tbody>
