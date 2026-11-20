@@ -1,0 +1,39 @@
+name: Performance Issue
+description: Report slow computation, high memory usage, or UI lag
+title: "[Performance] "
+labels: ["performance"]
+body:
+  - type: textarea
+    id: description
+    attributes:
+      label: Bottleneck Description
+      description: Which operation or stage is slow?
+      placeholder: e.g., Topological feature computation takes a long time to finish...
+    validations:
+      required: true
+
+  - type: input
+    id: dataset
+    attributes:
+      label: Dataset Details
+      description: Format, dimensions, data type, and approximate size (e.g., `NetCDF, 512x512x512, float32, ~500 MB`).
+    validations:
+      required: true
+
+  - type: input
+    id: timing
+    attributes:
+      label: Observed Timing / Memory
+      description: Approximate runtime or memory footprint observed.
+
+  - type: textarea
+    id: environment
+    attributes:
+      label: Execution Environment
+      description: CPU/GPU hardware, OS, and relevant backend/library versions.
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Potential Optimization / Alternatives
+      description: Any alternative implementations, backends, or ideas to evaluate.

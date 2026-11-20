@@ -1,0 +1,51 @@
+name: Bug Report
+description: Report a crash, incorrect metric/visualization, or dependency/install failure
+title: "[Bug] "
+labels: ["bug"]
+body:
+  - type: textarea
+    id: description
+    attributes:
+      label: What Happened?
+      description: A clear description of the bug or unexpected behavior.
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps to Reproduce
+      description: Minimal steps to trigger the issue.
+      placeholder: |
+        1. Load dataset...
+        2. Connect node...
+        3. Click...
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Error Output / Traceback
+      description: Paste any console logs, Python tracebacks, or browser errors.
+      render: console
+
+  - type: textarea
+    id: screenshots
+    attributes:
+      label: Screenshots
+      description: If applicable, drag and drop or paste screenshots to help explain the problem.
+
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: |
+        - Install method (e.g., pip, Spack, from source):
+        - OS:
+        - Python version:
+        - Node / npm version:
+        - Key package versions (e.g., libpressio, flask-socketio):
+    validations:
+      required: true
+

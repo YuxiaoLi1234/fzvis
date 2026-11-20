@@ -1,0 +1,25 @@
+name: Documentation
+description: Request or improve setup, architecture, or usage documentation
+title: "[Docs] "
+labels: ["documentation"]
+body:
+  - type: dropdown
+    id: doc_type
+    attributes:
+      label: Documentation Type
+      options:
+        - Development Environment Setup
+        - Installation / Spack / Dependencies
+        - Architecture / File Overview (Python & Vue/JS)
+        - User Guide / Workflow Examples
+    validations:
+      required: true
+
+  - type: textarea
+    id: details
+    attributes:
+      label: What Should Be Documented?
+      description: List the specific topics, files, or setup steps that are missing or unclear.
+    validations:
+      required: true
+

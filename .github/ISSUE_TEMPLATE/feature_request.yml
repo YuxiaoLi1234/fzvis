@@ -1,0 +1,51 @@
+name: Feature Request
+description: Propose a new feature for FZ-VIS
+title: "[Feature Request] "
+labels: ["enhancement"]
+body:
+  - type: dropdown
+    id: area
+    attributes:
+      label: Pipeline Area
+      description: Which part of FZ-VIS does this feature affect?
+      options:
+        - Data Loading / File Formats
+        - Compressor Integration (e.g., LibPressio, neural compressors)
+        - Data Visualization
+        - Compression Metrics / Analysis
+        - QoI Module
+        - Correction / Post-processing
+        - DataFlow Workbench / UI
+        - Backend / Server
+        - AI Agent / LLM
+        - Others
+    validations:
+      required: true
+
+  - type: textarea
+    id: summary
+    attributes:
+      label: Problem / Motivation
+      description: What gap or use case does this address?
+      placeholder: Currently, FZ-VIS only supports...
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed Design / Requirements
+      description: |
+        Describe what should be added. For new compressors or modules, include:
+        - Parameters to expose in the UI
+        - Expected outputs / metrics for downstream analysis
+        - Any external dependencies or reference repos
+    validations:
+      required: true
+
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional Context
+      description: Links, papers, discussions, or examples.
+
