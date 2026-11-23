@@ -2,7 +2,8 @@
 <script>
 import { markRaw } from 'vue';
 import axios from 'axios';
-import InputDataset from '../InputDataset.vue';
+import InputDataset from '../dataset/InputDataset.vue';
+import DecompressedDataset from '../dataset/DecompressedDataset.vue';
 import DataClipping from '../filter/DataClipping.vue';
 import DataThresholdMask from '../filter/DataThresholdMask.vue';
 import DataNormalization from '../filter/DataNormalization.vue';
@@ -20,6 +21,7 @@ export default {
   name: 'DataFlowWorkbench',
   components: {
     InputDataset,
+    DecompressedDataset,
     DataClipping,
     DataThresholdMask,
     DataNormalization,
@@ -34,6 +36,20 @@ export default {
 
   data() {
     return {
+      availableSources: [
+        {
+          id: 'original',
+          label: 'Original Data',
+          description: 'Load and manage the original input dataset.',
+          icon: 'bi-database',
+        },
+        {
+          id: 'decompressed',
+          label: 'Decompressed Data',
+          description: 'Upload a locally decompressed file to analyze.',
+          icon: 'bi-file-earmark-arrow-up',
+        },
+      ],
       // Filters imported from PipelineBrowser definitions
       availableFilters: [
         {
@@ -124,6 +140,7 @@ export default {
       ]),
       showCompressionModules: false,
       paletteState: {
+        sources: true,
         filters: true,
         modules: true,
         compressors: true,
@@ -162,6 +179,35 @@ export default {
   computed: {
     selectedNode() {
       return this.nodes.find(n => n.id === this.selectedNodeId) || null;
+    },
+    visibleSources() {
+      if (!this.selectedNode) return this.availableSources;
+      return this.availableSources.filter(src => this.canDragPaletteComponent('source', src.id));
+    },
+    visibleFilters() {
+      if (!this.selectedNode) return this.availableFilters;
+      return this.availableFilters.filter(f => this.canDragPaletteComponent('filter', f.id));
+    },
+    visibleModules() {
+      if (!this.selectedNode) return this.availableModules;
+      return this.availableModules.filter(m => this.canDragPaletteComponent('module', m.id));
+    },
+    visibleCompressors() {
+      if (!this.selectedNode) return this.availableCompressors;
+      return this.availableCompressors.filter(c => this.canDragPaletteComponent('compressor', c.id));
+    },
+    visibleCorrections() {
+      if (!this.selectedNode) return this.availableCorrections;
+      return this.availableCorrections.filter(c => this.canDragPaletteComponent('correction', c.id));
+    },
+    hasVisiblePaletteComponents() {
+      return (
+        this.visibleSources.length > 0 ||
+        this.visibleFilters.length > 0 ||
+        (this.showCompressionModules && this.visibleModules.length > 0) ||
+        this.visibleCompressors.length > 0 ||
+        this.visibleCorrections.length > 0
+      );
     },
     datasetToken() {
       return this.$store?.state?.dataset?.content || null;
@@ -304,14 +350,23 @@ export default {
     datasetLoaded: {
       immediate: true,
       handler(loaded) {
-        this.nodes.filter(n => n.type === 'source').forEach(n => {
-          n.status = loaded ? 'ready' : 'empty';
-        });
+        this.nodes
+          .filter(n => n.type === 'source' && n.sourceKind !== 'decompressed')
+          .forEach(n => {
+            n.status = loaded ? 'ready' : 'empty';
+          });
       }
     },
     datasetToken: {
       immediate: true,
-      handler() {
+      handler(newVal, oldVal) {
+        if (oldVal && newVal !== oldVal) {
+          this.nodes
+            .filter(n => n.type === 'source' && n.sourceKind === 'decompressed' && n.status === 'ready')
+            .forEach(n => {
+              this.setNodeStatus(n.id, 'stale', 'Original dataset changed. Recompute or reload decompressed data.');
+            });
+        }
         this.$nextTick(() => {
           this.ensureDatasetCached();
         });
@@ -493,10 +548,18 @@ export default {
       this.canvasSize.width = availableWidth;
       this.canvasSize.height = availableHeight;
     },
-    canAddNodeType(type) {
+    canAddNodeType(type, defId = null) {
       const nodeClass = NodeFactory.getClassByType(type);
-      const context = type === 'compressor' ? { canAddCompressor: this.canAddMoreCompressors } : null;
+      const context = type === 'compressor'
+        ? { canAddCompressor: this.canAddMoreCompressors }
+        : (type === 'source' ? { defId: defId || 'original' } : null);
       return nodeClass.canAdd(this.nodes, context);
+    },
+    canDragPaletteComponent(type, defId = null) {
+      if (!this.canAddNodeType(type, defId)) return false;
+      if (!this.selectedNode) return true;
+      const probe = NodeFactory.createNode(type, '__probe__', '', '', defId);
+      return this.selectedNode.canConnectTo(probe);
     },
     clearSelection() {
       this.selectedNodeId = null;
@@ -520,16 +583,19 @@ export default {
         return;
       }
 
+      const defId = event.dataTransfer.getData('operation/id') || null;
+
       // Validation check using OOP
       const nodeClass = NodeFactory.getClassByType(typeRaw);
-      const context = typeRaw === 'compressor' ? { canAddCompressor: this.canAddMoreCompressors } : null;
+      const context = typeRaw === 'compressor'
+        ? { canAddCompressor: this.canAddMoreCompressors }
+        : (typeRaw === 'source' ? { defId: defId || 'original' } : null);
       if (!nodeClass.canAdd(this.nodes, context)) {
         // You could also show a toast or a more subtle UI notification
         console.warn(`Cannot add ${typeRaw} node at this stage.`);
         return;
       }
 
-      const defId = event.dataTransfer.getData('operation/id') || null;
       const rect = this.$refs.canvas?.getBoundingClientRect();
       const x = event.clientX - (rect?.left || 0);
       const y = event.clientY - (rect?.top || 0);
@@ -542,9 +608,12 @@ export default {
       let config = {}; // Module-specific configuration
 
       if (type === 'source') {
+        const sourceKind = defId === 'decompressed' ? 'decompressed' : 'original';
+        const def = this.availableSources.find(s => s.id === sourceKind);
         this.counters.source += 1;
-        label = 'Data Source';
-        icon = 'bi-database';
+        label = def?.label || (sourceKind === 'decompressed' ? 'Decompressed Data' : 'Original Data');
+        icon = def?.icon || (sourceKind === 'decompressed' ? 'bi-file-earmark-arrow-up' : 'bi-database');
+        description = def?.description || '';
       } else if (type === 'filter') {
         const def = this.availableFilters.find(f => f.id === defId);
         if (!def) return;
@@ -602,8 +671,13 @@ export default {
       node.description = description;
 
       if (type === 'source') {
-        node.status = this.datasetLoaded ? 'ready' : 'empty';
-        node.editorComponent = markRaw(InputDataset);
+        if (defId === 'decompressed') {
+          node.status = 'empty';
+          node.editorComponent = markRaw(DecompressedDataset);
+        } else {
+          node.status = this.datasetLoaded ? 'ready' : 'empty';
+          node.editorComponent = markRaw(InputDataset);
+        }
       } else if (type === 'filter') {
         if (defId === 'clipping') node.editorComponent = markRaw(DataClipping);
         else if (defId === 'threshold_mask') node.editorComponent = markRaw(DataThresholdMask);
@@ -625,10 +699,11 @@ export default {
         node.status = 'pending';
       }
 
+      const previousSelectedNode = this.selectedNode;
       this.nodes.push(node);
       this.selectedNodeId = id;
       this.$nextTick(() => {
-        this.autoConnectNewNode(node);
+        this.autoConnectNewNode(node, previousSelectedNode);
         this.updateCanvasSize();
       });
     },
@@ -1163,6 +1238,31 @@ export default {
         this.setNodeStatus(nodeId, 'pending', 'Review the output or run again.');
       }
     },
+    hasConnectedOriginalSource(nodeId) {
+      return this.edges.some(edge => {
+        if (edge.to.nodeId !== nodeId) return false;
+        const src = this.nodes.find(n => n.id === edge.from.nodeId);
+        return src?.type === 'source' && src?.sourceKind !== 'decompressed';
+      });
+    },
+    handleDecompressedLoaded(payload) {
+      const node = this.nodes.find(n => n.id === payload?.nodeId);
+      if (!node) return;
+      node.lastResult = payload;
+      this.setNodeStatus(node.id, 'ready', `Loaded ${payload.name}`);
+    },
+    handleDecompressedError(payload) {
+      const node = this.nodes.find(n => n.id === payload?.nodeId);
+      if (!node) return;
+      this.setNodeStatus(node.id, 'error', payload?.error || 'Failed to load decompressed data.');
+    },
+    formatSourceMetric(val) {
+      if (!Number.isFinite(val)) return '-';
+      if (Math.abs(val) >= 1000 || (Math.abs(val) > 0 && Math.abs(val) < 1e-3)) {
+        return val.toExponential(2);
+      }
+      return val.toFixed(3);
+    },
     handleFilterDatasetChange(nodeId) {
       const node = this.nodes.find(n => n.id === nodeId);
       if (!node || node.status === 'running') return;
@@ -1426,17 +1526,28 @@ export default {
         y: r.top - canvasRect.top + r.height / 2,
       };
     },
-    autoConnectNewNode(newNode) {
-      const candidates = this.nodes.filter(n => n.id !== newNode.id && Array.isArray(n.outputs) && n.outputs.length && this.validateConnection(n.id, newNode.id));
-      if (!candidates.length) return;
-      const closest = candidates.reduce((best, n) => {
-        const dx = (n.x || 0) - (newNode.x || 0);
-        const dy = (n.y || 0) - (newNode.y || 0);
-        const dist = Math.sqrt(dx * dx + dy * dy);
-        if (!best || dist < best.dist) return { node: n, dist };
-        return best;
-      }, null);
-      const src = closest?.node;
+    autoConnectNewNode(newNode, preferredSourceNode = null) {
+      let src = null;
+      if (
+        preferredSourceNode &&
+        preferredSourceNode.id !== newNode.id &&
+        Array.isArray(preferredSourceNode.outputs) &&
+        preferredSourceNode.outputs.length &&
+        this.validateConnection(preferredSourceNode.id, newNode.id)
+      ) {
+        src = preferredSourceNode;
+      } else {
+        const candidates = this.nodes.filter(n => n.id !== newNode.id && Array.isArray(n.outputs) && n.outputs.length && this.validateConnection(n.id, newNode.id));
+        if (!candidates.length) return;
+        const closest = candidates.reduce((best, n) => {
+          const dx = (n.x || 0) - (newNode.x || 0);
+          const dy = (n.y || 0) - (newNode.y || 0);
+          const dist = Math.sqrt(dx * dx + dy * dy);
+          if (!best || dist < best.dist) return { node: n, dist };
+          return best;
+        }, null);
+        src = closest?.node || null;
+      }
       if (!src) return;
       const sourcePortId = src.outputs[0]?.id;
       const targetPortId = newNode.inputs[0]?.id;
@@ -1726,7 +1837,7 @@ export default {
         if (!sourceNode) return;
 
         let sourceData = null;
-        if (sourceNode.type === 'source') {
+        if (sourceNode.type === 'source' && sourceNode.sourceKind !== 'decompressed') {
           sourceData = {
             data_key: this.$store.state.dataset?.data_key || this.$store.state.dataset?.name,
             meta: {
@@ -1739,8 +1850,15 @@ export default {
               name: this.$store.state.dataset?.name
             }
           };
-        } else if (sourceNode.type === 'filter' || sourceNode.type === 'compressor' || sourceNode.type === 'correction') {
-          const rawData = sourceNode.lastResult || (this.comparisonData ? this.comparisonData[sourceNode.id] : null);
+        } else if (
+          (sourceNode.type === 'source' && sourceNode.sourceKind === 'decompressed') ||
+          sourceNode.type === 'filter' ||
+          sourceNode.type === 'compressor' ||
+          sourceNode.type === 'correction'
+        ) {
+          const rawData = (sourceNode.type === 'source' && sourceNode.sourceKind === 'decompressed')
+            ? (this.comparisonData ? this.comparisonData[sourceNode.id] : null)
+            : (sourceNode.lastResult || (this.comparisonData ? this.comparisonData[sourceNode.id] : null));
           if (rawData) {
             // Include node ID for downstream traceability (e.g. for batch processing)
             sourceData = { ...rawData, sourceNodeId: sourceNode.id };
@@ -1755,7 +1873,7 @@ export default {
 
       // Special handling for correction nodes: implicitly provide original data
       if (node && node.type === 'correction') {
-        const originalSourceNode = this.nodes.find(n => n.type === 'source');
+        const originalSourceNode = this.nodes.find(n => n.type === 'source' && n.sourceKind !== 'decompressed');
         if (originalSourceNode) {
           data['original'] = {
             data_key: this.$store.state.dataset?.data_key || this.$store.state.dataset?.name,
@@ -1827,6 +1945,7 @@ export default {
     getWorkflowDefinition(type, definitionId) {
       if (!definitionId) return null;
       const registries = {
+        source: this.availableSources,
         filter: this.availableFilters,
         module: this.availableModules,
         compressor: this.availableCompressors,
@@ -2014,7 +2133,7 @@ export default {
       const config = this.hasWorkflowValue(node.config)
         ? this.stripWorkflowMetadata(node.config)
         : {};
-      if (node.type === 'source') {
+      if (node.type === 'source' && node.sourceKind !== 'decompressed') {
         const datasetSnapshot = this.buildWorkflowDatasetSnapshot();
         if (datasetSnapshot) config.dataset = datasetSnapshot;
       }
@@ -2054,7 +2173,9 @@ export default {
     },
     applyWorkflowEditorComponent(node, definitionId) {
       if (node.type === 'source') {
-        node.editorComponent = markRaw(InputDataset);
+        node.editorComponent = (definitionId === 'decompressed' || node.sourceKind === 'decompressed')
+          ? markRaw(DecompressedDataset)
+          : markRaw(InputDataset);
       } else if (node.type === 'filter') {
         if (definitionId === 'clipping') node.editorComponent = markRaw(DataClipping);
         else if (definitionId === 'threshold_mask') node.editorComponent = markRaw(DataThresholdMask);
@@ -2235,7 +2356,9 @@ export default {
 
             // Set initial status based on node type
             if (node.type === 'source') {
-              node.status = this.datasetLoaded ? 'ready' : 'empty';
+              node.status = node.sourceKind === 'decompressed'
+                ? 'empty'
+                : (this.datasetLoaded ? 'ready' : 'empty');
             } else {
               node.status = 'pending';
             }
@@ -2453,184 +2576,238 @@ export default {
         <div class="card shadow-sm">
           <div class="card-header d-flex align-items-center justify-content-between py-2">
             <span class="fw-semibold">Pipeline Components</span>
+            <button
+              v-if="selectedNode"
+              type="button"
+              class="btn btn-sm btn-outline-secondary py-0 px-2"
+              @click="clearSelection"
+              title="Show all pipeline components"
+            >
+              Clear
+            </button>
+          </div>
+          <div v-if="selectedNode" class="px-3 py-2 bg-primary bg-opacity-10 border-bottom small">
+            <div class="text-muted">
+              <i class="bi bi-funnel-fill me-1 text-primary"></i>
+              Filtered by selected node:
+            </div>
+            <div class="fw-semibold text-truncate">{{ selectedNode.label }}</div>
+          </div>
+          <div v-if="selectedNode && !hasVisiblePaletteComponents" class="p-3 text-muted small">
+            <template v-if="selectedNode.type === 'source' && selectedNode.sourceKind !== 'decompressed' && selectedNode.status !== 'ready'">
+              Load a dataset in <strong>{{ selectedNode.label }}</strong> first to unlock downstream components.
+            </template>
+            <template v-else-if="!selectedNode.outputs || selectedNode.outputs.length === 0">
+              <strong>{{ selectedNode.label }}</strong> has no outgoing ports. Click the canvas or <em>Clear</em> to show all components.
+            </template>
+            <template v-else>
+              No components can connect after <strong>{{ selectedNode.label }}</strong>. Click the canvas or <em>Clear</em> to show all components.
+            </template>
           </div>
           <div class="list-group list-group-flush">
             <!-- Data Source -->
-            <button
-              type="button"
-              class="list-group-item d-flex align-items-center justify-content-between text-start"
-              :class="{
-                'node-disabled': !canAddNodeType('source'),
-                'node-enabled': canAddNodeType('source')
-              }"
-              :draggable="canAddNodeType('source')"
-              @dragstart="onDragStart($event, { type: 'source', id: 'source' })"
-              title="Load and manage input dataset."
-            >
-              <div class="d-flex align-items-center gap-2">
-                <i class="bi bi-database" aria-hidden="true"></i>
-                <span class="fw-semibold">Data Source</span>
-              </div>
-              <i class="bi bi-arrows-move text-muted" aria-hidden="true" title="Drag to canvas"></i>
-            </button>
-
-            <!-- Data Filters -->
-            <div
-              class="list-group-item bg-light fw-semibold d-flex justify-content-between align-items-center cursor-pointer"
-              @click="paletteState.filters = !paletteState.filters"
-            >
-              <div class="d-flex align-items-center gap-2">
-                <i :class="['bi', paletteState.filters ? 'bi-chevron-down' : 'bi-chevron-right']"></i>
-                <span>Data Filters</span>
-              </div>
-              <span class="badge bg-secondary">{{ availableFilters.length }}</span>
-            </div>
-
-            <template v-if="paletteState.filters">
-              <button
-                v-for="filter in availableFilters"
-                :key="`pf-${filter.id}`"
-                type="button"
-                class="list-group-item d-flex align-items-center justify-content-between text-start"
-                :class="{
-                  'node-disabled': !canAddNodeType('filter'),
-                  'node-enabled': canAddNodeType('filter')
-                }"
-                :draggable="canAddNodeType('filter')"
-                @dragstart="onDragStart($event, { type: 'filter', id: filter.id })"
-                :title="filter.description"
+            <template v-if="visibleSources.length > 0">
+              <div
+                class="list-group-item bg-light fw-semibold d-flex justify-content-between align-items-center cursor-pointer"
+                @click="paletteState.sources = !paletteState.sources"
               >
                 <div class="d-flex align-items-center gap-2">
-                  <i :class="['bi', filter.icon || 'bi-funnel']" aria-hidden="true"></i>
-                  <div>
-                    <div class="fw-semibold">{{ filter.label }}</div>
-                    <div class="text-muted small">{{ filter.description }}</div>
-                  </div>
+                  <i :class="['bi', paletteState.sources ? 'bi-chevron-down' : 'bi-chevron-right']"></i>
+                  <span>Data Source</span>
                 </div>
-                <i class="bi bi-arrows-move text-muted" aria-hidden="true" title="Drag to canvas"></i>
-              </button>
+                <span class="badge bg-secondary">{{ visibleSources.length }}</span>
+              </div>
+
+              <template v-if="paletteState.sources">
+                <button
+                  v-for="src in visibleSources"
+                  :key="`ps-${src.id}`"
+                  type="button"
+                  class="list-group-item d-flex align-items-center justify-content-between text-start"
+                  :class="{
+                    'node-disabled': !canDragPaletteComponent('source', src.id),
+                    'node-enabled': canDragPaletteComponent('source', src.id)
+                  }"
+                  :draggable="canDragPaletteComponent('source', src.id)"
+                  @dragstart="onDragStart($event, { type: 'source', id: src.id })"
+                  :title="src.description"
+                >
+                  <div class="d-flex align-items-center gap-2">
+                    <i :class="['bi', src.icon || 'bi-database']" aria-hidden="true"></i>
+                    <div>
+                      <div class="fw-semibold">{{ src.label }}</div>
+                      <div class="text-muted small">{{ src.description }}</div>
+                    </div>
+                  </div>
+                  <i class="bi bi-arrows-move text-muted" aria-hidden="true" title="Drag to canvas"></i>
+                </button>
+              </template>
             </template>
 
-            <div
-              v-if="showCompressionModules"
-              class="list-group-item bg-light fw-semibold d-flex justify-content-between align-items-center cursor-pointer"
-              @click="paletteState.modules = !paletteState.modules"
-            >
-              <div class="d-flex align-items-center gap-2">
-                <i :class="['bi', paletteState.modules ? 'bi-chevron-down' : 'bi-chevron-right']"></i>
-                <span>Compression Modules</span>
-              </div>
-              <span class="badge bg-secondary">{{ availableModules.length }}</span>
-            </div>
-
-            <template v-if="showCompressionModules && paletteState.modules">
-              <button
-                v-for="mod in availableModules"
-                :key="`pm-${mod.id}`"
-                type="button"
-                class="list-group-item d-flex align-items-center justify-content-between text-start"
-                :class="{
-                  'node-disabled': !canAddNodeType('module'),
-                  'node-enabled': canAddNodeType('module')
-                }"
-                :draggable="canAddNodeType('module')"
-                @dragstart="onDragStart($event, { type: 'module', id: mod.id })"
-                :title="mod.description"
+            <!-- Data Filters -->
+            <template v-if="visibleFilters.length > 0">
+              <div
+                class="list-group-item bg-light fw-semibold d-flex justify-content-between align-items-center cursor-pointer"
+                @click="paletteState.filters = !paletteState.filters"
               >
                 <div class="d-flex align-items-center gap-2">
-                  <i :class="['bi', mod.icon || 'bi-puzzle']" aria-hidden="true"></i>
-                  <div>
-                    <div class="fw-semibold">{{ mod.label }}</div>
-                    <div class="text-muted small">{{ mod.description }}</div>
-                  </div>
+                  <i :class="['bi', paletteState.filters ? 'bi-chevron-down' : 'bi-chevron-right']"></i>
+                  <span>Data Filters</span>
                 </div>
-                <i class="bi bi-arrows-move text-muted" aria-hidden="true" title="Drag to canvas"></i>
-              </button>
+                <span class="badge bg-secondary">{{ visibleFilters.length }}</span>
+              </div>
+
+              <template v-if="paletteState.filters">
+                <button
+                  v-for="filter in visibleFilters"
+                  :key="`pf-${filter.id}`"
+                  type="button"
+                  class="list-group-item d-flex align-items-center justify-content-between text-start"
+                  :class="{
+                    'node-disabled': !canDragPaletteComponent('filter', filter.id),
+                    'node-enabled': canDragPaletteComponent('filter', filter.id)
+                  }"
+                  :draggable="canDragPaletteComponent('filter', filter.id)"
+                  @dragstart="onDragStart($event, { type: 'filter', id: filter.id })"
+                  :title="filter.description"
+                >
+                  <div class="d-flex align-items-center gap-2">
+                    <i :class="['bi', filter.icon || 'bi-funnel']" aria-hidden="true"></i>
+                    <div>
+                      <div class="fw-semibold">{{ filter.label }}</div>
+                      <div class="text-muted small">{{ filter.description }}</div>
+                    </div>
+                  </div>
+                  <i class="bi bi-arrows-move text-muted" aria-hidden="true" title="Drag to canvas"></i>
+                </button>
+              </template>
+            </template>
+
+            <template v-if="showCompressionModules && visibleModules.length > 0">
+              <div
+                class="list-group-item bg-light fw-semibold d-flex justify-content-between align-items-center cursor-pointer"
+                @click="paletteState.modules = !paletteState.modules"
+              >
+                <div class="d-flex align-items-center gap-2">
+                  <i :class="['bi', paletteState.modules ? 'bi-chevron-down' : 'bi-chevron-right']"></i>
+                  <span>Compression Modules</span>
+                </div>
+                <span class="badge bg-secondary">{{ visibleModules.length }}</span>
+              </div>
+
+              <template v-if="paletteState.modules">
+                <button
+                  v-for="mod in visibleModules"
+                  :key="`pm-${mod.id}`"
+                  type="button"
+                  class="list-group-item d-flex align-items-center justify-content-between text-start"
+                  :class="{
+                    'node-disabled': !canDragPaletteComponent('module', mod.id),
+                    'node-enabled': canDragPaletteComponent('module', mod.id)
+                  }"
+                  :draggable="canDragPaletteComponent('module', mod.id)"
+                  @dragstart="onDragStart($event, { type: 'module', id: mod.id })"
+                  :title="mod.description"
+                >
+                  <div class="d-flex align-items-center gap-2">
+                    <i :class="['bi', mod.icon || 'bi-puzzle']" aria-hidden="true"></i>
+                    <div>
+                      <div class="fw-semibold">{{ mod.label }}</div>
+                      <div class="text-muted small">{{ mod.description }}</div>
+                    </div>
+                  </div>
+                  <i class="bi bi-arrows-move text-muted" aria-hidden="true" title="Drag to canvas"></i>
+                </button>
+              </template>
             </template>
 
             <!-- Compressor Configs -->
-            <div
-              class="list-group-item bg-light fw-semibold d-flex justify-content-between align-items-center cursor-pointer py-2"
-              @click="paletteState.compressors = !paletteState.compressors"
-            >
-              <div class="d-flex align-items-start gap-2">
-                <i :class="['bi', paletteState.compressors ? 'bi-chevron-down' : 'bi-chevron-right']" style="margin-top: 3px;"></i>
-                <div class="d-flex flex-column align-items-start">
-                  <span>Compressor Configs</span>
-                  <span
-                    v-if="maxCompressorInstances > 0"
-                    class="badge mt-1"
-                    :class="totalCompressorInstances >= maxCompressorInstances ? 'bg-danger' : 'bg-primary'"
-                    :title="`Active compressor instances: ${totalCompressorInstances} / ${maxCompressorInstances} (Server limit)`"
-                    style="font-size: 10px;"
-                  >
-                    Instances: {{ totalCompressorInstances }} / {{ maxCompressorInstances }}
-                  </span>
-                </div>
-              </div>
-              <span class="badge bg-secondary flex-shrink-0 ms-2">{{ availableCompressors.length }}</span>
-            </div>
-
-            <template v-if="paletteState.compressors">
-              <button
-                v-for="comp in availableCompressors"
-                :key="`pc-${comp.id}`"
-                type="button"
-                class="list-group-item d-flex align-items-center justify-content-between text-start"
-                :class="{
-                  'node-disabled': !canAddNodeType('compressor'),
-                  'node-enabled': canAddNodeType('compressor')
-                }"
-                :draggable="canAddNodeType('compressor')"
-                @dragstart="onDragStart($event, { type: 'compressor', id: comp.id })"
-                :title="comp.description"
+            <template v-if="visibleCompressors.length > 0">
+              <div
+                class="list-group-item bg-light fw-semibold d-flex justify-content-between align-items-center cursor-pointer py-2"
+                @click="paletteState.compressors = !paletteState.compressors"
               >
-                <div class="d-flex align-items-center gap-2">
-                  <i :class="['bi', comp.icon || 'bi-cpu']" aria-hidden="true"></i>
-                  <div>
-                    <div class="fw-semibold">{{ comp.label }}</div>
-                    <div class="text-muted small">{{ comp.description }}</div>
+                <div class="d-flex align-items-start gap-2">
+                  <i :class="['bi', paletteState.compressors ? 'bi-chevron-down' : 'bi-chevron-right']" style="margin-top: 3px;"></i>
+                  <div class="d-flex flex-column align-items-start">
+                    <span>Compressor Configs</span>
+                    <span
+                      v-if="maxCompressorInstances > 0"
+                      class="badge mt-1"
+                      :class="totalCompressorInstances >= maxCompressorInstances ? 'bg-danger' : 'bg-primary'"
+                      :title="`Active compressor instances: ${totalCompressorInstances} / ${maxCompressorInstances} (Server limit)`"
+                      style="font-size: 10px;"
+                    >
+                      Instances: {{ totalCompressorInstances }} / {{ maxCompressorInstances }}
+                    </span>
                   </div>
                 </div>
-                <i class="bi bi-arrows-move text-muted" aria-hidden="true" title="Drag to canvas"></i>
-              </button>
+                <span class="badge bg-secondary flex-shrink-0 ms-2">{{ visibleCompressors.length }}</span>
+              </div>
+
+              <template v-if="paletteState.compressors">
+                <button
+                  v-for="comp in visibleCompressors"
+                  :key="`pc-${comp.id}`"
+                  type="button"
+                  class="list-group-item d-flex align-items-center justify-content-between text-start"
+                  :class="{
+                    'node-disabled': !canDragPaletteComponent('compressor', comp.id),
+                    'node-enabled': canDragPaletteComponent('compressor', comp.id)
+                  }"
+                  :draggable="canDragPaletteComponent('compressor', comp.id)"
+                  @dragstart="onDragStart($event, { type: 'compressor', id: comp.id })"
+                  :title="comp.description"
+                >
+                  <div class="d-flex align-items-center gap-2">
+                    <i :class="['bi', comp.icon || 'bi-cpu']" aria-hidden="true"></i>
+                    <div>
+                      <div class="fw-semibold">{{ comp.label }}</div>
+                      <div class="text-muted small">{{ comp.description }}</div>
+                    </div>
+                  </div>
+                  <i class="bi bi-arrows-move text-muted" aria-hidden="true" title="Drag to canvas"></i>
+                </button>
+              </template>
             </template>
 
             <!-- Corrections -->
-            <div
-              class="list-group-item bg-light fw-semibold d-flex justify-content-between align-items-center cursor-pointer"
-              @click="paletteState.corrections = !paletteState.corrections"
-            >
-              <div class="d-flex align-items-center gap-2">
-                <i :class="['bi', paletteState.corrections ? 'bi-chevron-down' : 'bi-chevron-right']"></i>
-                <span>Correction Modules</span>
-              </div>
-              <span class="badge bg-secondary">{{ availableCorrections.length }}</span>
-            </div>
-
-            <template v-if="paletteState.corrections">
-              <button
-                v-for="corr in availableCorrections"
-                :key="`pc-${corr.id}`"
-                type="button"
-                class="list-group-item d-flex align-items-center justify-content-between text-start"
-                :class="{
-                  'node-disabled': !canAddNodeType('correction'),
-                  'node-enabled': canAddNodeType('correction')
-                }"
-                :draggable="canAddNodeType('correction')"
-                @dragstart="onDragStart($event, { type: 'correction', id: corr.id })"
-                :title="corr.description"
+            <template v-if="visibleCorrections.length > 0">
+              <div
+                class="list-group-item bg-light fw-semibold d-flex justify-content-between align-items-center cursor-pointer"
+                @click="paletteState.corrections = !paletteState.corrections"
               >
                 <div class="d-flex align-items-center gap-2">
-                  <i :class="['bi', corr.icon || 'bi-gear']" aria-hidden="true"></i>
-                  <div>
-                    <div class="fw-semibold">{{ corr.label }}</div>
-                    <div class="text-muted small">{{ corr.description }}</div>
-                  </div>
+                  <i :class="['bi', paletteState.corrections ? 'bi-chevron-down' : 'bi-chevron-right']"></i>
+                  <span>Correction Modules</span>
                 </div>
-                <i class="bi bi-arrows-move text-muted" aria-hidden="true" title="Drag to canvas"></i>
-              </button>
+                <span class="badge bg-secondary">{{ visibleCorrections.length }}</span>
+              </div>
+
+              <template v-if="paletteState.corrections">
+                <button
+                  v-for="corr in visibleCorrections"
+                  :key="`pc-${corr.id}`"
+                  type="button"
+                  class="list-group-item d-flex align-items-center justify-content-between text-start"
+                  :class="{
+                    'node-disabled': !canDragPaletteComponent('correction', corr.id),
+                    'node-enabled': canDragPaletteComponent('correction', corr.id)
+                  }"
+                  :draggable="canDragPaletteComponent('correction', corr.id)"
+                  @dragstart="onDragStart($event, { type: 'correction', id: corr.id })"
+                  :title="corr.description"
+                >
+                  <div class="d-flex align-items-center gap-2">
+                    <i :class="['bi', corr.icon || 'bi-gear']" aria-hidden="true"></i>
+                    <div>
+                      <div class="fw-semibold">{{ corr.label }}</div>
+                      <div class="text-muted small">{{ corr.description }}</div>
+                    </div>
+                  </div>
+                  <i class="bi bi-arrows-move text-muted" aria-hidden="true" title="Drag to canvas"></i>
+                </button>
+              </template>
             </template>
           </div>
         </div>
@@ -2749,11 +2926,28 @@ export default {
                 </div>
                 <div class="card-body py-2 small text-muted">
                   <div v-if="node.type === 'source'">
-                    <div>Provides dataset to the flow.</div>
-                    <div v-if="datasetInfo && node.status !== 'empty'" class="mt-1">
-                      <div v-if="datasetInfo.name">Name: <b>{{ datasetInfo.name }}</b></div>
-                      <div>Type: <b>{{ datasetInfo.type || 'Unknown' }}</b></div>
-                    </div>
+                    <template v-if="node.sourceKind === 'decompressed'">
+                      <div>Provides local decompressed data for analysis.</div>
+                      <div v-if="comparisonData?.[node.id]" class="mt-1">
+                        <div v-if="comparisonData[node.id].name">File: <b>{{ comparisonData[node.id].name }}</b></div>
+                        <div v-if="comparisonData[node.id].metrics">
+                          <span v-if="Number.isFinite(comparisonData[node.id].metrics['error:PSNR'] ?? comparisonData[node.id].metrics['error:psnr'] ?? comparisonData[node.id].metrics.psnr)" class="me-2">
+                            PSNR: <b>{{ formatSourceMetric(comparisonData[node.id].metrics['error:PSNR'] ?? comparisonData[node.id].metrics['error:psnr'] ?? comparisonData[node.id].metrics.psnr) }}</b>
+                          </span>
+                          <span v-if="Number.isFinite(comparisonData[node.id].metrics['error:RMSE'] ?? comparisonData[node.id].metrics['error:rmse'] ?? comparisonData[node.id].metrics.rmse)">
+                            RMSE: <b>{{ formatSourceMetric(comparisonData[node.id].metrics['error:RMSE'] ?? comparisonData[node.id].metrics['error:rmse'] ?? comparisonData[node.id].metrics.rmse) }}</b>
+                          </span>
+                        </div>
+                      </div>
+                      <div v-else class="mt-1">No decompressed file loaded.</div>
+                    </template>
+                    <template v-else>
+                      <div>Provides dataset to the flow.</div>
+                      <div v-if="datasetInfo && node.status !== 'empty'" class="mt-1">
+                        <div v-if="datasetInfo.name">Name: <b>{{ datasetInfo.name }}</b></div>
+                        <div>Type: <b>{{ datasetInfo.type || 'Unknown' }}</b></div>
+                      </div>
+                    </template>
                   </div>
                   <template v-else-if="node.type === 'filter'">
                     <!-- <div v-if="node.lastRunAt">Last run: {{ formatTimestamp(node.lastRunAt) }}</div> -->
@@ -2912,21 +3106,32 @@ export default {
           </div>
           <div class="modal-body" v-if="selectedNode">
             <template v-if="selectedNode.type === 'source'">
-              <keep-alive>
-                <InputDataset
-                  @dataset-fetch-start="handleDataSourceFetchStart"
-                  @dataset-fetch-complete="handleDataSourceFetchComplete"
-                  @dataset-fetch-error="handleDataSourceFetchError"
+              <template v-if="selectedNode.sourceKind === 'decompressed'">
+                <DecompressedDataset
+                  :key="selectedNode.id"
+                  :nodeId="selectedNode.id"
+                  :hasConnectedOriginal="hasConnectedOriginalSource(selectedNode.id)"
+                  @decompressed-loaded="handleDecompressedLoaded"
+                  @decompressed-error="handleDecompressedError"
                 />
-              </keep-alive>
-              <div v-if="dataSourceFetchInProgress || dataSourceAutoCloseCountdown !== null" class="alert alert-info mt-3">
-                <div v-if="dataSourceFetchInProgress">
-                  <i class="bi bi-hourglass-split me-2"></i>Fetching the dataset from the backend...
+              </template>
+              <template v-else>
+                <keep-alive>
+                  <InputDataset
+                    @dataset-fetch-start="handleDataSourceFetchStart"
+                    @dataset-fetch-complete="handleDataSourceFetchComplete"
+                    @dataset-fetch-error="handleDataSourceFetchError"
+                  />
+                </keep-alive>
+                <div v-if="dataSourceFetchInProgress || dataSourceAutoCloseCountdown !== null" class="alert alert-info mt-3">
+                  <div v-if="dataSourceFetchInProgress">
+                    <i class="bi bi-hourglass-split me-2"></i>Fetching the dataset from the backend...
+                  </div>
+                  <div v-else>
+                    <i class="bi bi-check-circle me-2"></i>Dataset ready. Closing this window in {{ dataSourceAutoCloseCountdown }}s.
+                  </div>
                 </div>
-                <div v-else>
-                  <i class="bi bi-check-circle me-2"></i>Dataset ready. Closing this window in {{ dataSourceAutoCloseCountdown }}s.
-                </div>
-              </div>
+              </template>
             </template>
 
             <template v-else-if="selectedNode.type === 'filter'">

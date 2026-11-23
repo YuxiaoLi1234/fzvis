@@ -12,13 +12,7 @@ export async function listDatasets() {
   return response.data;
 }
 
-/**
- * Upload a new dataset or update dataset metadata.
- * @param {FormData} formData
- * @param {Function} [onUploadProgress]
- * @returns {Promise<{dataset: Object}>}
- */
-export async function uploadDataset(formData, onUploadProgress) {
+function _validateUploadSize(formData) {
   const file = formData.get('file');
   const maxLimit = store?.state?.maxUploadSizeBytes || (100 * 1024 * 1024);
   const formattedLimit = store?.state?.maxUploadSizeFormatted || `${(maxLimit / (1024 * 1024)).toFixed(0)} MB`;
@@ -26,7 +20,31 @@ export async function uploadDataset(formData, onUploadProgress) {
     const sizeMB = (file.size / (1024 * 1024)).toFixed(2);
     throw new Error(`File size (${sizeMB} MB) exceeds the ${formattedLimit} upload limit.`);
   }
-  const response = await axios.post(`${BASE_URL}/upload`, formData, {
+}
+
+/**
+ * Upload a new dataset or update dataset metadata.
+ * @param {FormData} formData
+ * @param {Function} [onUploadProgress]
+ * @returns {Promise<{dataset: Object}>}
+ */
+export async function uploadDataset(formData, onUploadProgress) {
+  _validateUploadSize(formData);
+  const response = await axios.post(`${BASE_URL}/upload/original/`, formData, {
+    onUploadProgress,
+  });
+  return response.data;
+}
+
+/**
+ * Upload a locally decompressed dataset to the server's decompressed folder.
+ * @param {FormData} formData
+ * @param {Function} [onUploadProgress]
+ * @returns {Promise<{dataset: Object}>}
+ */
+export async function uploadDecompressedDataset(formData, onUploadProgress) {
+  _validateUploadSize(formData);
+  const response = await axios.post(`${BASE_URL}/upload/decompressed/`, formData, {
     onUploadProgress,
   });
   return response.data;
@@ -81,10 +99,48 @@ export async function downloadNetCDFVariable({ filename, variable, slices }, onD
   return response.data;
 }
 
+/**
+ * Fetch all saved/uploaded decompressed datasets from the server.
+ * @returns {Promise<{datasets: Object}>}
+ */
+export async function listDecompressedDatasets() {
+  const response = await axios.get(`${BASE_URL}/listDecompressedDatasets`);
+  return response.data;
+}
+
+/**
+ * Update decompressed datasets state (e.g., deleting saved decompressed datasets).
+ * @param {FormData} formData
+ * @returns {Promise<{datasets: Object}>}
+ */
+export async function updateDecompressedDatasets(formData) {
+  const response = await axios.post(`${BASE_URL}/updateDecompressedDatasets`, formData);
+  return response.data;
+}
+
+/**
+ * Download a saved decompressed dataset binary file from the server.
+ * @param {string} filename
+ * @param {Function} [onDownloadProgress]
+ * @returns {Promise<ArrayBuffer>}
+ */
+export async function downloadDecompressedDataset(filename, onDownloadProgress) {
+  const response = await axios.get(`${BASE_URL}/download/decompressed`, {
+    params: { filename },
+    responseType: 'arraybuffer',
+    onDownloadProgress,
+  });
+  return response.data;
+}
+
 export default {
   listDatasets,
+  listDecompressedDatasets,
   uploadDataset,
+  uploadDecompressedDataset,
   updateDatasets,
+  updateDecompressedDatasets,
   downloadDataset,
+  downloadDecompressedDataset,
   downloadNetCDFVariable,
 };

@@ -90,11 +90,28 @@
       <small v-else class="pt-1 text-muted">Please fill all fields to submit changes.</small>
     </div>
 
-    <button type="button" class="btn btn-success my-1" @click="uploadFile" :disabled="!isFormValid">
+    <button type="button" class="btn btn-success my-1" @click="uploadFile" :disabled="!isFormValid || isUploading">
+      <span v-if="isUploading" class="spinner-border spinner-border-sm me-1" role="status" aria-hidden="true"></span>
       {{ currentDataset == null ? 'Upload' : 'Update' }}
     </button>
     <!-- Button trigger modal -->
-    <button id="viewDatasetsBtn" type="button" class="btn btn-info ms-2 my-1" @click="viewDatasets" :disabled="isApplyingDatasetSelection || isLoadingDatasets" title="View all uploaded datasets">View datasets</button>
+    <button id="viewDatasetsBtn" type="button" class="btn btn-info ms-2 my-1" @click="viewDatasets" :disabled="isApplyingDatasetSelection || isLoadingDatasets || isUploading" title="View all uploaded datasets">View datasets</button>
+    <div v-if="isUploading" class="mt-2">
+      <div class="d-flex justify-content-between small text-muted mb-1">
+        <span>{{ uploadProgressMessage || 'Uploading file...' }}</span>
+        <span>{{ uploadProgress }}%</span>
+      </div>
+      <div class="progress" style="height: 8px;">
+        <div
+          class="progress-bar progress-bar-striped progress-bar-animated"
+          role="progressbar"
+          :style="{ width: `${uploadProgress}%` }"
+          :aria-valuenow="uploadProgress"
+          aria-valuemin="0"
+          aria-valuemax="100"
+        ></div>
+      </div>
+    </div>
     <div v-if="currentDataset == null" class="alert alert-danger mt-1">
       No dataset selected for processing.
     </div>
@@ -187,7 +204,7 @@
 
 <script>
 import { Modal } from 'bootstrap';
-import NetCDFControls from './NetCDFControls.vue';
+import NetCDFControls from '../NetCDFControls.vue';
 import {
   listDatasets,
   uploadDataset,
@@ -220,6 +237,9 @@ export default {
       isNetCDF: false,
       datasetModalInstance: null,
       fileSizeError: null,
+      isUploading: false,
+      uploadProgress: 0,
+      uploadProgressMessage: "",
     }
   },
 
@@ -417,7 +437,10 @@ export default {
         formData.append("filename", this.currentDataset.name);
       }
 
-      // Set progress bar active in store
+      // Set progress bar active in store & local UI
+      this.isUploading = true;
+      this.uploadProgress = 0;
+      this.uploadProgressMessage = this.file ? `Uploading ${this.file.name}...` : "Updating dataset...";
       this.$store.commit("setProgress", { active: true, percent: 0, message: "Uploading file..." });
       this.$store.commit("setStatus", { type: "info", message: "Uploading file..." });
 
@@ -437,11 +460,14 @@ export default {
         const data = await uploadDataset(formData, (eventData) => {
           if (eventData.lengthComputable) {
             const percent = Math.round((eventData.loaded / eventData.total) * 100);
+            this.uploadProgress = percent;
+            this.uploadProgressMessage = this.file ? `Uploading ${this.file.name}...` : "Uploading file...";
             this.$store.commit("setProgress", { active: true, percent, message: `Uploading... ${percent}%` });
           }
         });
 
         const serverDataset = data.dataset || {};
+        this.uploadProgress = 100;
         this.$store.commit("setProgress", { active: false, percent: 100, message: "Upload complete" });
         this.$store.commit("setStatus", { type: "success", message: "Uploaded file successfully!" });
         // update the cached dataset list
@@ -483,6 +509,10 @@ export default {
       } catch (error) {
         this.$store.commit("setProgress", { active: false, percent: 0, message: "Upload failed" });
         this.$store.commit("setStatus", { type: "danger", message: `Upload file failed. ${error}` });
+      } finally {
+        this.isUploading = false;
+        this.uploadProgress = 0;
+        this.uploadProgressMessage = "";
       }
     },
 

@@ -97,28 +97,51 @@ export class BaseNode {
 }
 
 /**
- * Data Source Node: The entry point of the pipeline.
+ * Helper to find the original DataSourceNode in a node list.
+ */
+function findOriginalSourceNode(existingNodes = []) {
+  return existingNodes.find(
+    n => n instanceof DataSourceNode && n.sourceKind !== 'decompressed'
+  );
+}
+
+/**
+ * Data Source Node: Original dataset entry point or paired decompressed dataset.
  */
 export class DataSourceNode extends BaseNode {
-  constructor(id, label = 'Data Source', icon = 'bi-database') {
-    super(id, label, icon, 0, 1);
+  constructor(id, label = 'Original Data', icon = 'bi-database', sourceKind = 'original') {
+    const isDecompressed = sourceKind === 'decompressed';
+    super(id, label, icon, isDecompressed ? 1 : 0, 1);
     this.type = 'source';
+    this.sourceKind = isDecompressed ? 'decompressed' : 'original';
     this.status = 'empty';
-    this.initializePorts('', 'Data Out');
-    this.editorComponent = 'InputDataset';
+    this.initializePorts(
+      isDecompressed ? 'Original Data' : '',
+      isDecompressed ? 'Decompressed Data' : 'Data Out'
+    );
+    this.editorComponent = isDecompressed ? 'DecompressedDataset' : 'InputDataset';
   }
 
-  static canAdd(existingNodes) {
-    return existingNodes.length === 0;
+  static canAdd(existingNodes, context = null) {
+    const defId = context?.defId || 'original';
+    const originalNode = findOriginalSourceNode(existingNodes);
+    if (defId === 'decompressed') {
+      return !!originalNode && originalNode.status === 'ready';
+    }
+    return !originalNode;
   }
 
-  // eslint-disable-next-line no-unused-vars
   canAcceptInput(sourceNode) {
-    return false;
+    if (this.sourceKind !== 'decompressed') return false;
+    const isOriginalSource = sourceNode?.type === 'source' && sourceNode?.sourceKind !== 'decompressed';
+    return isOriginalSource && super.canAcceptInput(sourceNode);
   }
 
   onDestroy(context) {
-    if (context?.store) {
+    if (!context?.store) return;
+    if (this.sourceKind === 'decompressed') {
+      context.store.commit('removeComparisonData', this.id);
+    } else {
       context.store.commit('clearFileData');
     }
   }
@@ -143,7 +166,7 @@ export class FilterNode extends BaseNode {
   }
 
   static canAdd(existingNodes) {
-    const sourceNode = existingNodes.find(n => n instanceof DataSourceNode);
+    const sourceNode = findOriginalSourceNode(existingNodes);
     return !!sourceNode && sourceNode.status === 'ready';
   }
 
@@ -199,7 +222,7 @@ export class ModuleNode extends BaseNode {
   }
 
   static canAdd(existingNodes) {
-    const sourceNode = existingNodes.find(n => n instanceof DataSourceNode);
+    const sourceNode = findOriginalSourceNode(existingNodes);
     return !!sourceNode && sourceNode.status === 'ready';
   }
 
@@ -234,7 +257,7 @@ export class CompressorNode extends BaseNode {
   }
 
   static canAdd(existingNodes, context = null) {
-    const sourceNode = existingNodes.find(n => n instanceof DataSourceNode);
+    const sourceNode = findOriginalSourceNode(existingNodes);
     if (!sourceNode || sourceNode.status !== 'ready') return false;
     if (context?.canAddCompressor !== undefined) {
       return Boolean(context.canAddCompressor);
@@ -279,19 +302,21 @@ export class CorrectionNode extends BaseNode {
   }
 
   static canAdd(existingNodes) {
-    const sourceNode = existingNodes.find(n => n instanceof DataSourceNode);
+    const sourceNode = findOriginalSourceNode(existingNodes);
     if (!sourceNode || sourceNode.status !== 'ready') return false;
 
-    // Require at least one compressor node
-    const compressorNode = existingNodes.find(n =>
-      n instanceof CompressorNode
+    // Require at least one compressor node or a ready decompressed data source
+    const hasCompressor = existingNodes.some(n => n instanceof CompressorNode);
+    const hasReadyDecompressed = existingNodes.some(
+      n => n instanceof DataSourceNode && n.sourceKind === 'decompressed' && n.status === 'ready'
     );
-    return !!compressorNode;
+    return hasCompressor || hasReadyDecompressed;
   }
 
   canAcceptInput(sourceNode) {
-    // Only accept input from compressor for the single input port
-    if (sourceNode.type === 'compressor') {
+    // Accept input from compressor or decompressed data source
+    const isDecompressedSource = sourceNode?.type === 'source' && sourceNode?.sourceKind === 'decompressed';
+    if (sourceNode?.type === 'compressor' || isDecompressedSource) {
       return this.inputs.length > 0;
     }
     return false;
@@ -331,7 +356,7 @@ export class NodeFactory {
   static createNode(type, id, label, icon, defId = null, config = {}) {
     switch (type) {
       case 'source':
-        return new DataSourceNode(id, label, icon);
+        return new DataSourceNode(id, label, icon, defId || 'original');
       case 'filter':
         return new FilterNode(id, label, icon, defId);
       case 'module':

@@ -121,3 +121,4 @@ __pypackages__/
 
 external/
 fzvis-env/
+run_fzvis.sh

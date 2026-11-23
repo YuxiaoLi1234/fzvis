@@ -56,16 +56,21 @@ project_root = Path(__file__).parent.parent.parent
 dist_dir = project_root / "dist"
 root_dir = Path.home() / ".fzvis"
 upload_dir = root_dir / "uploads"
+decompressed_dir = root_dir / "decompressed"
 case_study_dir = Path(os.getenv("FZVIS_CASE_STUDY_ROOT", str(root_dir / "case_studies"))).expanduser().resolve()
 work_dir = root_dir / "data"
 work_dir.mkdir(parents=True, exist_ok=True)
 upload_dir.mkdir(parents=True, exist_ok=True)
+decompressed_dir.mkdir(parents=True, exist_ok=True)
 case_study_dir.mkdir(parents=True, exist_ok=True)
 metadata_file = upload_dir / "metadata.json"
+decompressed_metadata_file = decompressed_dir / "metadata.json"
 case_study_metadata_file = case_study_dir / "metadata.json"
 saved_datasets = {}
+saved_decompressed_datasets = {}
 saved_case_studies = {}
 datasets_lock = threading.RLock()
+decompressed_datasets_lock = threading.RLock()
 case_studies_lock = threading.RLock()
 
 # Helper size formatting and parsing utilities
@@ -191,9 +196,9 @@ def _sanitize_relative_path(relative_path):
     return Path(*parts)
 
 
-def _resolve_upload_path(filename, must_exist=False):
+def _resolve_dir_path(base_dir_path, filename, must_exist=False):
     """
-    Safely resolves a filename within upload_dir, preventing path traversal attacks.
+    Safely resolves a filename within base_dir_path, preventing path traversal attacks.
     Returns the resolved Path object.
     Raises ValueError on invalid/unsafe paths or FileNotFoundError if must_exist is True and file missing.
     """
@@ -211,7 +216,7 @@ def _resolve_upload_path(filename, must_exist=False):
     if not safe_name:
         raise ValueError("Invalid filename")
 
-    base_dir = upload_dir.resolve()
+    base_dir = base_dir_path.resolve()
     target_path = (base_dir / safe_name).resolve()
 
     if not target_path.is_relative_to(base_dir) or target_path == base_dir:
@@ -221,6 +226,16 @@ def _resolve_upload_path(filename, must_exist=False):
         raise FileNotFoundError(f"File '{safe_name}' not found")
 
     return target_path
+
+
+def _resolve_upload_path(filename, must_exist=False):
+    """Safely resolves a filename within upload_dir."""
+    return _resolve_dir_path(upload_dir, filename, must_exist=must_exist)
+
+
+def _resolve_decompressed_path(filename, must_exist=False):
+    """Safely resolves a filename within decompressed_dir."""
+    return _resolve_dir_path(decompressed_dir, filename, must_exist=must_exist)
 
 
 def _read_json_file(file_path):
@@ -235,6 +250,22 @@ def _persist_datasets():
         with open(temp_file, 'w') as f:
             json.dump(saved_datasets, f, indent=4)
         temp_file.replace(metadata_file)
+
+
+def _persist_decompressed_datasets():
+    """Atomically write saved_decompressed_datasets to decompressed_metadata_file. Must hold decompressed_datasets_lock."""
+    temp_file = decompressed_metadata_file.parent / f".decompressed_metadata.tmp.{os.getpid()}.{threading.get_ident()}"
+    try:
+        with open(temp_file, "w") as f:
+            json.dump(saved_decompressed_datasets, f, indent=2)
+        temp_file.replace(decompressed_metadata_file)
+    except Exception as e:
+        logger.error(f"Failed to persist decompressed datasets metadata: {e}")
+        if temp_file.exists():
+            try:
+                temp_file.unlink()
+            except OSError:
+                pass
 
 
 def _persist_case_studies():
@@ -822,7 +853,7 @@ def send_data_file():
 
 
 # Route to handle file upload
-@app.route("/api/upload", methods=["POST"])
+@app.route("/api/upload/original/", methods=["POST"])
 @token_required
 def upload_file():
     try:
@@ -905,6 +936,117 @@ def upload_file():
         
     except Exception as e:
         print("Error in upload_file():", e)
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/upload/decompressed/", methods=["POST"])
+@token_required
+def upload_decompressed_file():
+    """Save an uploaded decompressed dataset into decompressed_dir (~/.fzvis/decompressed)."""
+    try:
+        if "file" not in request.files:
+            return jsonify({"error": "No file provided"}), 400
+
+        uploaded_file = request.files["file"]
+        if not uploaded_file or not uploaded_file.filename:
+            return jsonify({"error": "No file selected"}), 400
+
+        base_name = os.path.basename(uploaded_file.filename.strip())
+        try:
+            file_path = _resolve_decompressed_path(base_name, must_exist=False)
+        except ValueError as e:
+            return jsonify({"error": f"Invalid upload filename: {str(e)}"}), 400
+
+        uploaded_file.save(file_path)
+        file_name = file_path.name
+
+        dimensions_raw = request.form.get("dimensions")
+        try:
+            dimensions = json.loads(dimensions_raw) if dimensions_raw else []
+        except Exception:
+            dimensions = []
+
+        entry = {
+            "name": file_name,
+            "size": _get_human_readable_size(file_path),
+            "precision": request.form.get("precision"),
+            "endianness": request.form.get("endianness", "little"),
+            "dimensions": dimensions,
+            "original_name": request.form.get("original_name") or None,
+            "node_id": request.form.get("node_id") or None,
+            "path": str(file_path),
+        }
+
+        with decompressed_datasets_lock:
+            saved_decompressed_datasets[file_name] = entry
+            _persist_decompressed_datasets()
+
+        return jsonify({"dataset": entry}), 200
+    except Exception as e:
+        logger.error("Error in upload_decompressed_file(): %s", e)
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/listDecompressedDatasets", methods=["GET", "POST"])
+@token_required
+def get_decompressed_datasets():
+    with decompressed_datasets_lock:
+        # Remove stale entries whose files no longer exist on disk
+        stale_keys = [
+            k for k, v in saved_decompressed_datasets.items()
+            if not (decompressed_dir / v.get("name", k)).is_file()
+        ]
+        if stale_keys:
+            for k in stale_keys:
+                saved_decompressed_datasets.pop(k, None)
+            _persist_decompressed_datasets()
+        datasets_copy = dict(saved_decompressed_datasets)
+    return jsonify({"datasets": datasets_copy}), 200
+
+
+@app.route("/api/download/decompressed", methods=["GET", "POST"])
+@token_required
+def send_decompressed_data_file():
+    file_name = request.args.get("filename")
+    if not file_name:
+        return jsonify({"error": "filename parameter is required"}), 400
+
+    try:
+        file_path = _resolve_decompressed_path(file_name, must_exist=True)
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    except FileNotFoundError:
+        return jsonify({"error": "File not found"}), 404
+
+    return send_file(file_path, as_attachment=False)
+
+
+@app.route("/api/updateDecompressedDatasets", methods=["POST"])
+@token_required
+def update_decompressed_datasets():
+    try:
+        if request.form.get("deletedDatasets"):
+            deleted_datasets = json.loads(request.form["deletedDatasets"])
+            with decompressed_datasets_lock:
+                for key in deleted_datasets:
+                    if key in saved_decompressed_datasets:
+                        target_name = saved_decompressed_datasets[key].get("name", key)
+                        try:
+                            file_path = _resolve_decompressed_path(target_name, must_exist=True)
+                            if os.path.isfile(file_path):
+                                os.remove(file_path)
+                        except (ValueError, FileNotFoundError) as err:
+                            logger.warning(f"Skipping deletion for '{target_name}': {err}")
+                        except OSError as err:
+                            logger.warning(f"Could not remove file '{target_name}': {err}")
+                        saved_decompressed_datasets.pop(key, None)
+                _persist_decompressed_datasets()
+
+        with decompressed_datasets_lock:
+            datasets_copy = dict(saved_decompressed_datasets)
+        return jsonify({"datasets": datasets_copy}), 200
+    except Exception as e:
+        logger.error("Error in update_decompressed_datasets(): %s", e)
         return jsonify({"error": str(e)}), 500
 
 
@@ -2178,6 +2320,10 @@ if __name__ == '__main__':
             with open(metadata_file, 'r') as f:
                 saved_datasets = json.load(f)
     _sync_saved_datasets_with_disk()
+    if decompressed_metadata_file.exists():
+        with decompressed_datasets_lock:
+            with open(decompressed_metadata_file, 'r') as f:
+                saved_decompressed_datasets = json.load(f)
     if case_study_metadata_file.exists():
         with case_studies_lock:
             with open(case_study_metadata_file, 'r') as f:

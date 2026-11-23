@@ -93,6 +93,8 @@ export default {
       comparisonMarkerOpacity: 0.85,
       comparisonShowLegend: true,
       compressionMetricSelection: {},
+      editingSourceId: null,
+      editingSourceName: '',
     };
   },
   
@@ -109,7 +111,7 @@ export default {
       if (this.comparisonData) {
         Object.entries(this.comparisonData).forEach(([key, item]) => {
           if (!this.isAnalysisSourceUsable(item)) return;
-          sources.push({ id: key, name: key });
+          sources.push({ id: key, name: item.label || key });
         });
       }
       return sources;
@@ -255,6 +257,13 @@ export default {
   },
   
   watch: {
+    activeSubTab(newTab) {
+      if (newTab === 'compression') {
+        this.$nextTick(() => {
+          this.refreshCompressionMetrics();
+        });
+      }
+    },
     useLocalMetrics() {
       this.refreshCompressionMetrics();
     },
@@ -344,10 +353,34 @@ export default {
     if (metricsTab) {
       this._metricsTabHandler = () => {
         if (this.activeSubTab === 'compression') {
-          this.drawBarCharts();
+          this.$nextTick(() => {
+            this.refreshCompressionMetrics();
+          });
         }
       };
       metricsTab.addEventListener('shown.bs.tab', this._metricsTabHandler);
+    }
+
+    if (typeof ResizeObserver !== 'undefined' && this.$refs.compressionChartsContainer) {
+      this._compressionResizeRaf = null;
+      this._compressionResizeObserver = new ResizeObserver(() => {
+        if (this.activeSubTab !== 'compression') return;
+        const container = this.$refs.compressionChartsContainer;
+        if (!container || container.clientWidth <= 0) return;
+        if (this._compressionResizeRaf) {
+          cancelAnimationFrame(this._compressionResizeRaf);
+        }
+        this._compressionResizeRaf = requestAnimationFrame(() => {
+          container.querySelectorAll('.js-plotly-plot').forEach(plotEl => {
+            try {
+              Plotly.Plots.resize(plotEl);
+            } catch (_) {
+              // Ignore resize errors for uninitialized plots
+            }
+          });
+        });
+      });
+      this._compressionResizeObserver.observe(this.$refs.compressionChartsContainer);
     }
   },
 
@@ -356,6 +389,14 @@ export default {
     if (metricsTab && this._metricsTabHandler) {
       metricsTab.removeEventListener('shown.bs.tab', this._metricsTabHandler);
       this._metricsTabHandler = null;
+    }
+    if (this._compressionResizeRaf) {
+      cancelAnimationFrame(this._compressionResizeRaf);
+      this._compressionResizeRaf = null;
+    }
+    if (this._compressionResizeObserver) {
+      this._compressionResizeObserver.disconnect();
+      this._compressionResizeObserver = null;
     }
     
     // Purge all Plotly instances to prevent memory leaks
@@ -453,6 +494,32 @@ export default {
         type: 'info',
         message: `Refreshed data sources (${Math.max(0, availableIds.length - 1)} comparison sources available).`
       });
+    },
+
+    startEditSourceName(source) {
+      if (!source || source.id === 'original') return;
+      this.editingSourceId = source.id;
+      this.editingSourceName = source.name || source.id;
+    },
+
+    saveEditSourceName(sourceId) {
+      if (this.editingSourceId !== sourceId) return;
+      const trimmed = (this.editingSourceName || '').trim();
+      if (trimmed && this.comparisonData && this.comparisonData[sourceId]) {
+        this.$store.commit('setComparisonData', {
+          [sourceId]: {
+            ...this.comparisonData[sourceId],
+            label: trimmed,
+          },
+        });
+      }
+      this.editingSourceId = null;
+      this.editingSourceName = '';
+    },
+
+    cancelEditSourceName() {
+      this.editingSourceId = null;
+      this.editingSourceName = '';
     },
 
     clearAllMetrics() {
@@ -1757,6 +1824,9 @@ export default {
       if (subMetric === 'bit_rate' || subMetric === 'bitrate') {
         return 'bpv';
       }
+      if (category === 'size' && subMetric === 'decompressed') {
+        return 'KB';
+      }
       if (
         subMetric.endsWith('_size') ||
         subMetric.endsWith('_bytes') ||
@@ -1764,7 +1834,7 @@ export default {
       ) {
         return 'B';
       }
-      if (subMetric === 'psnr' || subMetric === 'ssnr') {
+      if (subMetric === 'ssnr') {
         return 'dB';
       }
       return '';
@@ -2137,6 +2207,7 @@ export default {
           rangemode: yExtent[0] >= 0 ? 'tozero' : 'normal',
           ...(isYErrorBound ? { tickformat: '.0e', hoverformat: '.2e', exponentformat: 'e' } : {}),
         },
+        autosize: true,
         height: this.comparisonChartHeight,
         margin: { l: dynamicMarginLeft, r: 40, t: 40, b: 60 },
         plot_bgcolor: 'white',
@@ -2162,7 +2233,8 @@ export default {
         toImageButtonOptions: {
           format: 'png',
           filename: `comparison_${comp.id}`,
-          height: this.comparisonChartHeight,
+          autosize: true,
+        height: this.comparisonChartHeight,
           width: actualWidth,
           scale: 2
         }
@@ -2315,6 +2387,7 @@ export default {
             linewidth: 2,
             gridcolor: '#e9ecef'
           },
+          autosize: true,
           barmode: 'group',
           bargap: 0.2,
           bargroupgap: 0.05,
@@ -2429,7 +2502,7 @@ export default {
     </ul>
 
     <!-- Compression Metrics Content -->
-    <div v-show="activeSubTab === 'compression'" class="flex-grow-1 overflow-auto">
+    <div v-show="activeSubTab === 'compression'" ref="compressionChartsContainer" class="flex-grow-1 overflow-auto">
       <div class="d-flex justify-content-end gap-2 mb-2">
         <button
           type="button"
@@ -2733,18 +2806,63 @@ export default {
           </div>
           <div class="card-body py-2">
             <div class="d-flex flex-wrap gap-2">
-              <button
+              <div
                 v-for="source in availableSources"
                 :key="source.id"
-                class="btn btn-sm"
-                :class="selectedSources.includes(source.id) ? 'btn-success' : 'btn-outline-secondary'"
-                :disabled="source.id === 'original'"
-                @click="toggleSource(source.id)"
-                :title="source.id === 'original' ? 'Original data is always required for comparison' : ''"
+                class="btn-group btn-group-sm"
+                role="group"
               >
-                <i class="bi" :class="selectedSources.includes(source.id) ? 'bi-check-circle-fill' : 'bi-circle'"></i>
-                <span class="ms-1">{{ source.name }}</span>
-              </button>
+                <template v-if="editingSourceId === source.id">
+                  <input
+                    type="text"
+                    class="form-control form-control-sm"
+                    style="max-width: 180px;"
+                    v-model="editingSourceName"
+                    @keyup.enter="saveEditSourceName(source.id)"
+                    @keyup.esc="cancelEditSourceName"
+                    aria-label="Edit data source name"
+                  />
+                  <button
+                    type="button"
+                    class="btn btn-sm btn-primary"
+                    @click="saveEditSourceName(source.id)"
+                    title="Save name"
+                  >
+                    <i class="bi bi-check"></i>
+                  </button>
+                  <button
+                    type="button"
+                    class="btn btn-sm btn-outline-secondary"
+                    @click="cancelEditSourceName"
+                    title="Cancel"
+                  >
+                    <i class="bi bi-x"></i>
+                  </button>
+                </template>
+                <template v-else>
+                  <button
+                    type="button"
+                    class="btn btn-sm"
+                    :class="selectedSources.includes(source.id) ? 'btn-success' : 'btn-outline-secondary'"
+                    :disabled="source.id === 'original'"
+                    @click="toggleSource(source.id)"
+                    :title="source.id === 'original' ? 'Original data is always required for comparison' : ''"
+                  >
+                    <i class="bi" :class="selectedSources.includes(source.id) ? 'bi-check-circle-fill' : 'bi-circle'"></i>
+                    <span class="ms-1">{{ source.name }}</span>
+                  </button>
+                  <button
+                    v-if="source.id !== 'original'"
+                    type="button"
+                    class="btn btn-sm"
+                    :class="selectedSources.includes(source.id) ? 'btn-success' : 'btn-outline-secondary'"
+                    @click="startEditSourceName(source)"
+                    title="Rename data source"
+                  >
+                    <i class="bi bi-pencil"></i>
+                  </button>
+                </template>
+              </div>
             </div>
           </div>
         </div>
